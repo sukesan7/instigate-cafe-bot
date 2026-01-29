@@ -1,7 +1,7 @@
 # Instigate Cafe Bot 🏰☕️
 
-A lightweight, modular Discord bot for a university friend group server (“Instigate Cafe”) with a medieval vibe.  
-Built in **Python** with **discord.py** slash commands, consistent **purple-themed embeds**, and a clean “feature module” layout.
+A lightweight, modular Discord bot.  
+Built in **Python** with **discord.py** slash commands, consistent **embeds**, and a clean “feature module” layout.
 
 > This is a fun private project, but it’s structured and documented like a “real” one for consistency with my other projects.
 
