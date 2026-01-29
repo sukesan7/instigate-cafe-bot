@@ -1,20 +1,25 @@
 from __future__ import annotations
+
+import asyncio
 import time
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional
+from typing import Dict, Optional, Tuple
 
 import discord
 from discord import app_commands
 
 from icbot.app import ic
+from icbot.embeds import game as game_embed, system as system_embed
 from icbot.games.blackjack_engine import GameState
 from icbot.permissions import is_admin_or_allowed
-from icbot.embeds import game as game_embed, system as system_embed
+
+# ---- Config (hard requirement from you) ----
+INACTIVITY_SECONDS = 5 * 60  # 5 minutes
 
 
-bj = app_commands.Group(name="bj", description="Blackjack casino (toy money)")
-ic.add_command(bj)
-
+# ==========
+# Persistence
+# ==========
 
 @dataclass
 class BJSession:
@@ -31,7 +36,10 @@ class BlackjackStore:
         self.starting_bankroll = starting_bankroll
 
     async def ensure_user(self, user_id: int) -> None:
-        row = await self.db.fetchone("SELECT user_id FROM blackjack_users WHERE user_id=?", (user_id,))
+        row = await self.db.fetchone(
+            "SELECT user_id FROM blackjack_users WHERE user_id=?",
+            (user_id,),
+        )
         if row is None:
             await self.db.execute(
                 "INSERT INTO blackjack_users (user_id, bankroll) VALUES (?, ?)",
@@ -40,18 +48,32 @@ class BlackjackStore:
 
     async def get_bankroll(self, user_id: int) -> int:
         await self.ensure_user(user_id)
-        row = await self.db.fetchone("SELECT bankroll FROM blackjack_users WHERE user_id=?", (user_id,))
+        row = await self.db.fetchone(
+            "SELECT bankroll FROM blackjack_users WHERE user_id=?",
+            (user_id,),
+        )
         return int(row[0]) if row else self.starting_bankroll
 
-    async def apply_delta_and_stats(self, user_id: int, delta: int, result_counts: dict[str, int], hands_played: int) -> int:
+    async def apply_delta_and_stats(
+        self,
+        user_id: int,
+        delta: int,
+        result_counts: dict[str, int],
+        hands_played: int,
+    ) -> int:
         await self.ensure_user(user_id)
-        row = await self.db.fetchone("SELECT bankroll, wins, losses, pushes, hands_played FROM blackjack_users WHERE user_id=?", (user_id,))
+        row = await self.db.fetchone(
+            "SELECT bankroll, wins, losses, pushes, hands_played FROM blackjack_users WHERE user_id=?",
+            (user_id,),
+        )
         bankroll, wins, losses, pushes, played = map(int, row)
+
         bankroll = bankroll + delta
         wins += result_counts.get("win", 0) + result_counts.get("blackjack", 0)
         losses += result_counts.get("loss", 0) + result_counts.get("bust", 0)
         pushes += result_counts.get("push", 0)
         played += hands_played
+
         await self.db.execute(
             "UPDATE blackjack_users SET bankroll=?, wins=?, losses=?, pushes=?, hands_played=? WHERE user_id=?",
             (bankroll, wins, losses, pushes, played, user_id),
@@ -60,18 +82,26 @@ class BlackjackStore:
 
     async def leaderboard(self, limit: int = 10) -> list[tuple[int, int]]:
         limit = max(1, min(limit, 25))
-        rows = await self.db.fetchall("SELECT user_id, bankroll FROM blackjack_users ORDER BY bankroll DESC LIMIT ?", (limit,))
+        rows = await self.db.fetchall(
+            "SELECT user_id, bankroll FROM blackjack_users ORDER BY bankroll DESC LIMIT ?",
+            (limit,),
+        )
         return [(int(uid), int(br)) for uid, br in rows]
 
     async def reset_user(self, user_id: int) -> None:
         await self.db.execute(
-            "INSERT OR REPLACE INTO blackjack_users (user_id, bankroll, hands_played, wins, losses, pushes) VALUES (?, ?, 0, 0, 0, 0)",
+            "INSERT OR REPLACE INTO blackjack_users (user_id, bankroll, hands_played, wins, losses, pushes) "
+            "VALUES (?, ?, 0, 0, 0, 0)",
             (user_id, self.starting_bankroll),
         )
 
 
+# ==========
+# Sessions
+# ==========
+
 class SessionManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self.sessions: Dict[Tuple[int, int], BJSession] = {}
 
     def get(self, guild_id: int, user_id: int) -> Optional[BJSession]:
@@ -91,6 +121,12 @@ class SessionManager:
 
 
 _sessions = SessionManager()
+
+
+def _reserved_bets(state: GameState) -> int:
+    # Bets are not deducted upfront in this toy economy, so we treat them as "reserved"
+    # to correctly gate double/split and to penalize forfeits.
+    return int(sum(state.bets))
 
 
 def render_state(state: GameState, hide_dealer: bool = True) -> tuple[str, str, str]:
@@ -114,41 +150,358 @@ def render_state(state: GameState, hide_dealer: bool = True) -> tuple[str, str, 
     return dealer, dealer_total, "\n".join(lines)
 
 
-async def _reply_or_edit(interaction: discord.Interaction, embed: discord.Embed, ephemeral: bool = False):
-    if interaction.response.is_done():
-        await interaction.edit_original_response(embed=embed)
-    else:
-        await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
-
-
-def _ttl_seconds(interaction: discord.Interaction) -> int:
+def _build_live_embed(interaction: discord.Interaction, state: GameState, title: str, summary: str) -> discord.Embed:
     settings = interaction.client.settings  # type: ignore[attr-defined]
-    return int(settings.bj_session_ttl_minutes) * 60
+    dealer, dealer_total, hands = render_state(state, hide_dealer=True)
+    return game_embed(
+        settings,
+        title=title,
+        summary=summary,
+        fields=(
+            ("Dealer", f"{dealer}  → **{dealer_total}**"),
+            ("Player", hands),
+        ),
+        footer_hint=interaction.user.display_name,
+    )
 
 
-@bj.command(name="balance", description="Show your blackjack bankroll.")
-async def balance(interaction: discord.Interaction):
+def _build_done_embed(
+    interaction: discord.Interaction,
+    state: GameState,
+    title: str,
+    summary: str,
+) -> discord.Embed:
     settings = interaction.client.settings  # type: ignore[attr-defined]
-    store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
-    br = await store.get_bankroll(interaction.user.id)
-    embed = system_embed(settings, title="💰 Blackjack Bankroll", summary=f"**${br}**", footer_hint=interaction.user.display_name)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    dealer, dealer_total, hands = render_state(state, hide_dealer=False)
+    return game_embed(
+        settings,
+        title=title,
+        summary=summary,
+        fields=(
+            ("Dealer", f"{dealer}  → **{dealer_total}**"),
+            ("Player", hands),
+        ),
+        footer_hint=interaction.user.display_name,
+    )
 
 
-@bj.command(name="start", description="Start a blackjack hand with a bet.")
-@app_commands.describe(bet="Bet amount (integer)")
-async def start(interaction: discord.Interaction, bet: int):
+# ==========
+# Interactive View
+# ==========
+
+class BlackjackView(discord.ui.View):
+    """
+    Button UI:
+      - Only the owner can press buttons
+      - Inactivity timeout (5 minutes) => auto-forfeit
+      - Each click "renews" the view to reset the 5-min timer
+    """
+
+    def __init__(self, *, guild_id: int, user_id: int, timeout_seconds: Optional[int] = INACTIVITY_SECONDS):
+        super().__init__(timeout=timeout_seconds)
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.message: Optional[discord.Message] = None
+        self._lock = asyncio.Lock()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ Not your hand.", ephemeral=True)
+            return False
+        return True
+
+    def _get_session(self) -> Optional[BJSession]:
+        return _sessions.get(self.guild_id, self.user_id)
+
+    def _disable_all(self) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+
+    def _sync_button_states(self, state: GameState) -> None:
+        # Default: enabled unless rules say otherwise
+        self.hit_btn.disabled = state.done
+        self.stand_btn.disabled = state.done
+        self.double_btn.disabled = state.done or (not state.can_double())
+        self.split_btn.disabled = state.done or (not state.can_split())
+        self.forfeit_btn.disabled = state.done
+
+    def _renew(self, interaction: discord.Interaction, state: GameState) -> "BlackjackView":
+        """
+        Creates a new view instance to reset the timeout countdown
+        (discord.py View timeout does NOT auto-reset on interaction).
+        """
+        new_view = BlackjackView(guild_id=self.guild_id, user_id=self.user_id, timeout_seconds=INACTIVITY_SECONDS)
+        new_view.message = interaction.message
+        new_view._sync_button_states(state)
+        # Stop old view so its timeout doesn't fire later.
+        self.stop()
+        return new_view
+
+    async def _settle_and_finish(
+        self,
+        interaction: discord.Interaction,
+        state: GameState,
+        store: BlackjackStore,
+    ) -> tuple[discord.Embed, "BlackjackView"]:
+        results = state.settle()
+        delta_total = sum(d for _, d in results)
+
+        counts: dict[str, int] = {}
+        for r, _ in results:
+            counts[r] = counts.get(r, 0) + 1
+
+        new_bankroll = await store.apply_delta_and_stats(
+            interaction.user.id,
+            delta_total,
+            counts,
+            hands_played=len(results),
+        )
+        _sessions.clear(self.guild_id, self.user_id)
+
+        embed = _build_done_embed(
+            interaction,
+            state,
+            title="🃏 Blackjack — Hand Complete",
+            summary=f"Net: **{delta_total:+d}** | Bankroll: **${new_bankroll}**",
+        )
+        done_view = BlackjackView(guild_id=self.guild_id, user_id=self.user_id, timeout_seconds=None)
+        done_view.message = interaction.message
+        done_view._disable_all()
+        done_view.stop()
+        return embed, done_view
+
+    async def _forfeit_now(self, *, bot: discord.Client, reason: str = "Inactivity timeout") -> None:
+        """
+        Forfeit:
+          - Lose all reserved bets (sum of current bets)
+          - Mark as losses in stats
+          - Disable buttons and edit message
+        """
+        sess = self._get_session()
+        if not sess or sess.state.done:
+            return
+
+        # Need a message to edit
+        if not self.message:
+            return
+
+        settings = bot.settings  # type: ignore[attr-defined]
+        store = BlackjackStore(bot.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
+
+        state = sess.state
+        reserved = _reserved_bets(state)
+        hands_played = max(1, len(state.bets))
+        result_counts = {"loss": hands_played}
+        new_bankroll = await store.apply_delta_and_stats(self.user_id, -reserved, result_counts, hands_played=hands_played)
+
+        _sessions.clear(self.guild_id, self.user_id)
+
+        # Show dealer revealed for closure (even though the hand didn't finish normally)
+        fake_interaction = type("X", (), {})()
+        fake_interaction.client = bot
+        fake_interaction.user = type("U", (), {"display_name": "Forfeit"})()
+
+        embed = game_embed(
+            settings,
+            title="🛑 Blackjack — Forfeit",
+            summary=f"Reason: *{reason}* | Penalty: **-{reserved}** | Bankroll: **${new_bankroll}**",
+            fields=(
+                ("Dealer", f"{state.dealer.render(hide_first=False)}  → **{state.dealer.best_total()}**"),
+                ("Player", "\n".join([f"Hand {i+1} (${b}): {h.render()} → **{h.best_total()}**" for i, (h, b) in enumerate(zip(state.hands, state.bets))])),
+            ),
+            footer_hint=settings.embed_footer_text,
+        )
+
+        self._disable_all()
+        self.stop()
+        await self.message.edit(embed=embed, view=self)
+
+    async def on_timeout(self) -> None:
+        # Auto-forfeit on inactivity
+        try:
+            if self.message:
+                bot = self.message.guild.me._state._get_client()  # internal; fallback below
+                # If above ever breaks across versions, we rely on bot injected via message.edit path not available here.
+        except Exception:
+            bot = None
+
+        # Best effort: use client via message._state (discord.py stable)
+        if self.message and bot is None:
+            try:
+                bot = self.message._state._get_client()  # type: ignore[attr-defined]
+            except Exception:
+                bot = None
+
+        if bot is None:
+            # Can't access bot client -> just disable UI to prevent dangling buttons
+            self._disable_all()
+            if self.message:
+                try:
+                    await self.message.edit(view=self)
+                except Exception:
+                    pass
+            return
+
+        await self._forfeit_now(bot=bot, reason="No action for 5 minutes")
+
+    # ---- Buttons ----
+
+    @discord.ui.button(label="Hit", style=discord.ButtonStyle.primary)
+    async def hit_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with self._lock:
+            sess = self._get_session()
+            if not sess or sess.state.done:
+                await interaction.response.send_message("No active hand. Start one with `/ic blackjack`.", ephemeral=True)
+                return
+
+            await interaction.response.defer()
+            sess.last_ts = time.time()
+            sess.state.hit()
+
+            settings = interaction.client.settings  # type: ignore[attr-defined]
+            store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
+
+            if sess.state.done:
+                embed, view = await self._settle_and_finish(interaction, sess.state, store)
+                await interaction.message.edit(embed=embed, view=view)
+                return
+
+            embed = _build_live_embed(interaction, sess.state, title="🃏 Blackjack — Hit", summary="Card drawn.")
+            new_view = self._renew(interaction, sess.state)
+            await interaction.message.edit(embed=embed, view=new_view)
+
+    @discord.ui.button(label="Stand", style=discord.ButtonStyle.secondary)
+    async def stand_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with self._lock:
+            sess = self._get_session()
+            if not sess or sess.state.done:
+                await interaction.response.send_message("No active hand. Start one with `/ic blackjack`.", ephemeral=True)
+                return
+
+            await interaction.response.defer()
+            sess.last_ts = time.time()
+            sess.state.stand()
+
+            settings = interaction.client.settings  # type: ignore[attr-defined]
+            store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
+
+            if sess.state.done:
+                embed, view = await self._settle_and_finish(interaction, sess.state, store)
+                await interaction.message.edit(embed=embed, view=view)
+                return
+
+            embed = _build_live_embed(interaction, sess.state, title="🃏 Blackjack — Stand", summary="Standing. Next hand (if split).")
+            new_view = self._renew(interaction, sess.state)
+            await interaction.message.edit(embed=embed, view=new_view)
+
+    @discord.ui.button(label="Double", style=discord.ButtonStyle.success)
+    async def double_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with self._lock:
+            sess = self._get_session()
+            if not sess or sess.state.done:
+                await interaction.response.send_message("No active hand. Start one with `/ic blackjack`.", ephemeral=True)
+                return
+
+            if not sess.state.can_double():
+                await interaction.response.send_message("❌ You can't double right now.", ephemeral=True)
+                return
+
+            settings = interaction.client.settings  # type: ignore[attr-defined]
+            store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
+
+            bankroll = await store.get_bankroll(interaction.user.id)
+            reserved = _reserved_bets(sess.state)
+            available = bankroll - reserved
+            current_bet = int(sess.state.bets[sess.state.active_index])
+            if available < current_bet:
+                await interaction.response.send_message(
+                    f"❌ Not enough bankroll available to double. Need **${current_bet}**, available **${available}**.",
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.defer()
+            sess.last_ts = time.time()
+            sess.state.double()
+
+            if sess.state.done:
+                embed, view = await self._settle_and_finish(interaction, sess.state, store)
+                await interaction.message.edit(embed=embed, view=view)
+                return
+
+            embed = _build_live_embed(interaction, sess.state, title="🃏 Blackjack — Double", summary="Double down executed.")
+            new_view = self._renew(interaction, sess.state)
+            await interaction.message.edit(embed=embed, view=new_view)
+
+    @discord.ui.button(label="Split", style=discord.ButtonStyle.success)
+    async def split_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with self._lock:
+            sess = self._get_session()
+            if not sess or sess.state.done:
+                await interaction.response.send_message("No active hand. Start one with `/ic blackjack`.", ephemeral=True)
+                return
+
+            if not sess.state.can_split():
+                await interaction.response.send_message("❌ You can't split right now.", ephemeral=True)
+                return
+
+            settings = interaction.client.settings  # type: ignore[attr-defined]
+            store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
+
+            bankroll = await store.get_bankroll(interaction.user.id)
+            reserved = _reserved_bets(sess.state)
+            available = bankroll - reserved
+            current_bet = int(sess.state.bets[sess.state.active_index])
+            if available < current_bet:
+                await interaction.response.send_message(
+                    f"❌ Not enough bankroll available to split. Need **${current_bet}**, available **${available}**.",
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.defer()
+            sess.last_ts = time.time()
+
+            ok = sess.state.split()
+            if not ok:
+                await interaction.response.send_message("❌ Split failed (pair required / split limit reached).", ephemeral=True)
+                return
+
+            embed = _build_live_embed(interaction, sess.state, title="🃏 Blackjack — Split", summary="Hand split into two.")
+            new_view = self._renew(interaction, sess.state)
+            await interaction.message.edit(embed=embed, view=new_view)
+
+    @discord.ui.button(label="Forfeit", style=discord.ButtonStyle.danger)
+    async def forfeit_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with self._lock:
+            sess = self._get_session()
+            if not sess or sess.state.done:
+                await interaction.response.send_message("No active hand.", ephemeral=True)
+                return
+
+            await interaction.response.defer()
+            self.message = interaction.message
+            await self._forfeit_now(bot=interaction.client, reason="Player forfeited")
+
+
+# ==========
+# Commands
+# ==========
+
+@ic.command(name="blackjack", description="Start an interactive blackjack hand (buttons).")
+@app_commands.describe(bet="Bet amount (integer). Default 10.")
+async def blackjack(interaction: discord.Interaction, bet: int = 10):
     if not interaction.guild:
         await interaction.response.send_message("Blackjack only works in a server (guild).", ephemeral=True)
         return
 
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
+    # cleanup stale sessions
+    _sessions.cleanup(INACTIVITY_SECONDS)
 
-    _sessions.cleanup(_ttl_seconds(interaction))
     existing = _sessions.get(interaction.guild.id, interaction.user.id)
     if existing and not existing.state.done:
-        await interaction.response.send_message("You already have an active blackjack hand. Use `/ic bj hit` or `/ic bj stand`.", ephemeral=True)
+        await interaction.response.send_message("You already have an active blackjack hand.", ephemeral=True)
         return
 
     bet = int(bet)
@@ -156,7 +509,10 @@ async def start(interaction: discord.Interaction, bet: int):
         await interaction.response.send_message("Bet must be >= 1.", ephemeral=True)
         return
 
+    settings = interaction.client.settings  # type: ignore[attr-defined]
+    store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
     bankroll = await store.get_bankroll(interaction.user.id)
+
     if bet > bankroll:
         await interaction.response.send_message(f"❌ You only have ${bankroll}. Lower your bet.", ephemeral=True)
         return
@@ -167,275 +523,64 @@ async def start(interaction: discord.Interaction, bet: int):
         max_splits=settings.bj_max_splits,
     )
 
-    sess = BJSession(state=state, user_id=interaction.user.id, guild_id=interaction.guild.id, created_ts=time.time(), last_ts=time.time())
+    sess = BJSession(
+        state=state,
+        user_id=interaction.user.id,
+        guild_id=interaction.guild.id,
+        created_ts=time.time(),
+        last_ts=time.time(),
+    )
     _sessions.set(sess)
 
-    # If immediate blackjacks settle now
+    # Immediate settlement if blackjack occurs at deal
     if state.hands[0].is_blackjack() or state.dealer.is_blackjack():
         state.done = True
         results = state.settle()
         delta_total = sum(d for _, d in results)
-        counts = {}
+        counts: dict[str, int] = {}
         for r, _ in results:
             counts[r] = counts.get(r, 0) + 1
-        new_bankroll = await store.apply_delta_and_stats(interaction.user.id, delta_total, counts, hands_played=len(results))
+        new_bankroll = await store.apply_delta_and_stats(
+            interaction.user.id, delta_total, counts, hands_played=len(results)
+        )
         _sessions.clear(interaction.guild.id, interaction.user.id)
 
-        dealer, dealer_total, hands = render_state(state, hide_dealer=False)
-        settings = interaction.client.settings  # type: ignore[attr-defined]
-        embed = game_embed(
-            settings,
+        embed = _build_done_embed(
+            interaction,
+            state,
             title="🃏 Blackjack — Hand Complete",
             summary=f"Net: **{delta_total:+d}** | Bankroll: **${new_bankroll}**",
-            fields=(
-                ("Dealer", f"{dealer}  → **{dealer_total}**"),
-                ("Player", hands),
-            ),
-            footer_hint=interaction.user.display_name,
         )
         await interaction.response.send_message(embed=embed)
         return
 
-    dealer, dealer_total, hands = render_state(state, hide_dealer=True)
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    embed = game_embed(
-        settings,
-        title="🃏 Blackjack — Started",
-        summary="Your hand is live.",
-        fields=(
-            ("Dealer", f"{dealer}  → **{dealer_total}**"),
-            ("Player", hands),
-        ),
-        footer_hint=interaction.user.display_name,
-    )
+    # Live game embed + buttons
+    embed = _build_live_embed(interaction, state, title="🃏 Blackjack — Started", summary="Your hand is live.")
+    view = BlackjackView(guild_id=interaction.guild.id, user_id=interaction.user.id, timeout_seconds=INACTIVITY_SECONDS)
+    view._sync_button_states(state)
 
-    actions = ["Use `/ic bj hit` or `/ic bj stand`"]
-    if state.can_double():
-        actions.append("`/ic bj double` available")
-    if state.can_split():
-        actions.append("`/ic bj split` available")
-    embed.set_footer(text=" | ".join(actions))
+    await interaction.response.send_message(embed=embed, view=view)
 
-    await interaction.response.send_message(embed=embed)
+    # Bind message for timeout-forfeit edits
+    msg = await interaction.original_response()
+    view.message = msg
 
 
-@bj.command(name="hit", description="Hit (draw a card).")
-async def hit(interaction: discord.Interaction):
-    if not interaction.guild:
-        await interaction.response.send_message("Blackjack only works in a server.", ephemeral=True)
-        return
+# ==========
+# Optional: bankroll & admin tools (kept under /ic bj ...)
+# ==========
 
+bj = app_commands.Group(name="bj", description="Blackjack bankroll tools (balance/leaderboard/reset)")
+ic.add_command(bj)
+
+
+@bj.command(name="balance", description="Show your blackjack bankroll.")
+async def balance(interaction: discord.Interaction):
     settings = interaction.client.settings  # type: ignore[attr-defined]
     store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
-    _sessions.cleanup(_ttl_seconds(interaction))
-
-    sess = _sessions.get(interaction.guild.id, interaction.user.id)
-    if not sess or sess.state.done:
-        await interaction.response.send_message("No active hand. Start one with `/ic bj start bet:...`", ephemeral=True)
-        return
-
-    sess.last_ts = time.time()
-    sess.state.hit()
-
-    if sess.state.done:
-        results = sess.state.settle()
-        delta_total = sum(d for _, d in results)
-        counts = {}
-        for r, _ in results:
-            counts[r] = counts.get(r, 0) + 1
-        new_bankroll = await store.apply_delta_and_stats(interaction.user.id, delta_total, counts, hands_played=len(results))
-        _sessions.clear(interaction.guild.id, interaction.user.id)
-
-        embed = discord.Embed(title="🃏 Blackjack — Hand Complete")
-        dealer, dealer_total, hands = render_state(sess.state, hide_dealer=False)
-        embed.add_field(name="Dealer", value=f"{dealer}  → **{dealer_total}**", inline=False)
-        embed.add_field(name="Player", value=hands, inline=False)
-        embed.add_field(name="Result", value=f"Net: **{delta_total:+d}** | New bankroll: **${new_bankroll}**", inline=False)
-        await _reply_or_edit(interaction, embed)
-        return
-
-    dealer, dealer_total, hands = render_state(sess.state, hide_dealer=True)
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    embed = game_embed(
-        settings,
-        title="🃏 Blackjack — Hit",
-        summary="Card drawn.",
-        fields=(
-            ("Dealer", f"{dealer}  → **{dealer_total}**"),
-            ("Player", hands),
-        ),
-        footer_hint=interaction.user.display_name,
-    )
-    actions = ["`/ic bj hit`", "`/ic bj stand`"]
-    if sess.state.can_double():
-        actions.append("`/ic bj double`")
-    if sess.state.can_split():
-        actions.append("`/ic bj split`")
-    embed.set_footer(text=" | ".join(actions))
-    await _reply_or_edit(interaction, embed)
-
-
-@bj.command(name="stand", description="Stand (end your turn for this hand).")
-async def stand(interaction: discord.Interaction):
-    if not interaction.guild:
-        await interaction.response.send_message("Blackjack only works in a server.", ephemeral=True)
-        return
-
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
-    _sessions.cleanup(_ttl_seconds(interaction))
-
-    sess = _sessions.get(interaction.guild.id, interaction.user.id)
-    if not sess or sess.state.done:
-        await interaction.response.send_message("No active hand. Start one with `/ic bj start`.", ephemeral=True)
-        return
-
-    sess.last_ts = time.time()
-    sess.state.stand()
-
-    if sess.state.done:
-        results = sess.state.settle()
-        delta_total = sum(d for _, d in results)
-        counts = {}
-        for r, _ in results:
-            counts[r] = counts.get(r, 0) + 1
-        new_bankroll = await store.apply_delta_and_stats(interaction.user.id, delta_total, counts, hands_played=len(results))
-        _sessions.clear(interaction.guild.id, interaction.user.id)
-
-        embed = discord.Embed(title="🃏 Blackjack — Hand Complete")
-        dealer, dealer_total, hands = render_state(sess.state, hide_dealer=False)
-        embed.add_field(name="Dealer", value=f"{dealer}  → **{dealer_total}**", inline=False)
-        embed.add_field(name="Player", value=hands, inline=False)
-        embed.add_field(name="Result", value=f"Net: **{delta_total:+d}** | New bankroll: **${new_bankroll}**", inline=False)
-        await _reply_or_edit(interaction, embed)
-        return
-
-    dealer, dealer_total, hands = render_state(sess.state, hide_dealer=True)
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    embed = game_embed(
-        settings,
-        title="🃏 Blackjack — Next Hand",
-        summary="Proceeding to next hand.",
-        fields=(
-            ("Dealer", f"{dealer}  → **{dealer_total}**"),
-            ("Player", hands),
-        ),
-        footer_hint=interaction.user.display_name,
-    )
-    embed.set_footer(text="Now acting on next hand (if you split).")
-    await _reply_or_edit(interaction, embed)
-
-
-@bj.command(name="double", description="Double down (double bet, draw exactly one card, then stand).")
-async def double(interaction: discord.Interaction):
-    if not interaction.guild:
-        await interaction.response.send_message("Blackjack only works in a server.", ephemeral=True)
-        return
-
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
-    _sessions.cleanup(_ttl_seconds(interaction))
-
-    sess = _sessions.get(interaction.guild.id, interaction.user.id)
-    if not sess or sess.state.done:
-        await interaction.response.send_message("No active hand. Start one with `/ic bj start`.", ephemeral=True)
-        return
-
-    bankroll = await store.get_bankroll(interaction.user.id)
-    current_bet = sess.state.bets[sess.state.active_index]
-    extra_needed = current_bet
-    if extra_needed > bankroll:
-        await interaction.response.send_message(f"❌ You need at least ${extra_needed} bankroll available to double.", ephemeral=True)
-        return
-
-    if not sess.state.can_double():
-        await interaction.response.send_message("You can't double right now.", ephemeral=True)
-        return
-
-    sess.last_ts = time.time()
-    sess.state.double()
-
-    if sess.state.done:
-        results = sess.state.settle()
-        delta_total = sum(d for _, d in results)
-        counts = {}
-        for r, _ in results:
-            counts[r] = counts.get(r, 0) + 1
-        new_bankroll = await store.apply_delta_and_stats(interaction.user.id, delta_total, counts, hands_played=len(results))
-        _sessions.clear(interaction.guild.id, interaction.user.id)
-
-        dealer, dealer_total, hands = render_state(sess.state, hide_dealer=False)
-        settings = interaction.client.settings  # type: ignore[attr-defined]
-        embed = game_embed(
-            settings,
-            title="🃏 Blackjack — Hand Complete (Double)",
-            summary=f"Net: **{delta_total:+d}** | Bankroll: **${new_bankroll}**",
-            fields=(
-                ("Dealer", f"{dealer}  → **{dealer_total}**"),
-                ("Player", hands),
-            ),
-            footer_hint=interaction.user.display_name,
-        )
-        await _reply_or_edit(interaction, embed)
-        return
-
-    dealer, dealer_total, hands = render_state(sess.state, hide_dealer=True)
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    embed = game_embed(
-        settings,
-        title="🃏 Blackjack — Doubled",
-        summary="Double down executed.",
-        fields=(
-            ("Dealer", f"{dealer}  → **{dealer_total}**"),
-            ("Player", hands),
-        ),
-        footer_hint=interaction.user.display_name,
-    )
-    embed.set_footer(text="Double completed. Continue with the next hand if split.")
-    await _reply_or_edit(interaction, embed)
-
-
-@bj.command(name="split", description="Split your hand (only if you have a pair).")
-async def split(interaction: discord.Interaction):
-    if not interaction.guild:
-        await interaction.response.send_message("Blackjack only works in a server.", ephemeral=True)
-        return
-
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
-    _sessions.cleanup(_ttl_seconds(interaction))
-
-    sess = _sessions.get(interaction.guild.id, interaction.user.id)
-    if not sess or sess.state.done:
-        await interaction.response.send_message("No active hand. Start one with `/ic bj start`.", ephemeral=True)
-        return
-
-    bankroll = await store.get_bankroll(interaction.user.id)
-    current_bet = sess.state.bets[sess.state.active_index]
-    if current_bet > bankroll:
-        await interaction.response.send_message(f"❌ You need at least ${current_bet} bankroll available to split.", ephemeral=True)
-        return
-
-    ok = sess.state.split()
-    if not ok:
-        await interaction.response.send_message("You can't split right now (need a pair and splits remaining).", ephemeral=True)
-        return
-
-    sess.last_ts = time.time()
-    dealer, dealer_total, hands = render_state(sess.state, hide_dealer=True)
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    embed = game_embed(
-        settings,
-        title="🃏 Blackjack — Split",
-        summary="Hand split into two.",
-        fields=(
-            ("Dealer", f"{dealer}  → **{dealer_total}**"),
-            ("Player", hands),
-        ),
-        footer_hint=interaction.user.display_name,
-    )
-    embed.set_footer(text="Now play Hand 1, then Hand 2. Use `/ic bj hit` or `/ic bj stand`.")
-    await _reply_or_edit(interaction, embed)
+    br = await store.get_bankroll(interaction.user.id)
+    embed = system_embed(settings, title="💰 Blackjack Bankroll", summary=f"**${br}**", footer_hint=interaction.user.display_name)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bj.command(name="leaderboard", description="Top blackjack bankrolls.")
@@ -449,7 +594,6 @@ async def leaderboard(interaction: discord.Interaction, limit: int = 10):
         return
 
     lines = [f"**{i}.** <@{uid}> — **${br}**" for i, (uid, br) in enumerate(rows, start=1)]
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     embed = system_embed(settings, title="🏆 Blackjack Leaderboard", summary="Top bankrolls", fields=(("Leaderboard", "\n".join(lines)),), footer_hint="Blackjack")
     await interaction.response.send_message(embed=embed)
 

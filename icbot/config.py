@@ -10,12 +10,10 @@ def _to_int(s: str, default: int = 0) -> int:
         return default
 
 
-
 def _to_color(s: str, default: int) -> int:
     v = (s or "").strip()
     if not v:
         return default
-    # Accept: "#A64DFF", "0xA64DFF", "A64DFF", or decimal "17170751"
     try:
         if v.startswith("#"):
             return int(v[1:], 16)
@@ -37,12 +35,37 @@ def _to_bool(s: str, default: bool = False) -> bool:
     return default
 
 
+def _to_int_list(s: str) -> list[int]:
+    out: list[int] = []
+    raw = (s or "").strip()
+    if not raw:
+        return out
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            out.append(int(tok))
+        except ValueError:
+            pass
+    return out
+
+
 @dataclass(frozen=True)
 class Settings:
     token: str
     guild_id: int
     stock_channel_id: int
+
+    # NEW: allowlist by ROLE ID
+    allowed_role_ids: list[int]
+
+    # Legacy: allowlist by role NAME (optional fallback)
     allowed_roles: list[str]
+
+    # NEW: non-admin users can only run /ic commands in this channel (0 disables)
+    user_command_channel_id: int = 0
+
     db_path: str = "ic_stock.db"
 
     # Embeds
@@ -62,8 +85,15 @@ class Settings:
         guild_id = _to_int(os.getenv("GUILD_ID", "0"), 0)
         stock_channel_id = _to_int(os.getenv("STOCK_CHANNEL_ID", "0"), 0)
 
+        # NEW: role IDs
+        allowed_role_ids = _to_int_list(os.getenv("ALLOWED_ROLE_IDS", ""))
+
+        # Legacy: role names (optional)
         allowed_raw = (os.getenv("ALLOWED_ROLES", "") or "").strip()
         allowed_roles = [r.strip() for r in allowed_raw.split(",") if r.strip()]
+
+        # NEW: channel gate
+        user_command_channel_id = _to_int(os.getenv("USER_COMMAND_CHANNEL_ID", "0"), 0)
 
         embed_logo_url = (os.getenv("EMBED_LOGO_URL", "") or "").strip()
         embed_accent_color = _to_color(os.getenv("EMBED_ACCENT_COLOR", "#A64DFF"), 0xA64DFF)
@@ -78,7 +108,9 @@ class Settings:
             token=token,
             guild_id=guild_id,
             stock_channel_id=stock_channel_id,
+            allowed_role_ids=allowed_role_ids,
             allowed_roles=allowed_roles,
+            user_command_channel_id=user_command_channel_id,
             embed_logo_url=embed_logo_url,
             embed_accent_color=embed_accent_color,
             embed_footer_text=embed_footer_text,

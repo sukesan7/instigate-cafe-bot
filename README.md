@@ -1,4 +1,4 @@
-# Instigate Cafe Bot (one-day fun bot)
+# Instigate Cafe Bot
 
 Core features:
 - `/ic stock` + `/ic stock_change` + `/ic stock_set` + `/ic stock_history`
