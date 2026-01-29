@@ -1,0 +1,89 @@
+from __future__ import annotations
+from dataclasses import dataclass
+import os
+
+
+def _to_int(s: str, default: int = 0) -> int:
+    try:
+        return int((s or "").strip() or default)
+    except ValueError:
+        return default
+
+
+
+def _to_color(s: str, default: int) -> int:
+    v = (s or "").strip()
+    if not v:
+        return default
+    # Accept: "#A64DFF", "0xA64DFF", "A64DFF", or decimal "17170751"
+    try:
+        if v.startswith("#"):
+            return int(v[1:], 16)
+        if v.lower().startswith("0x"):
+            return int(v, 16)
+        if all(c in "0123456789abcdefABCDEF" for c in v) and len(v) in (6, 8):
+            return int(v, 16)
+        return int(v)
+    except ValueError:
+        return default
+
+
+def _to_bool(s: str, default: bool = False) -> bool:
+    v = (s or "").strip().lower()
+    if v in ("1", "true", "yes", "y", "on"):
+        return True
+    if v in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
+
+@dataclass(frozen=True)
+class Settings:
+    token: str
+    guild_id: int
+    stock_channel_id: int
+    allowed_roles: list[str]
+    db_path: str = "ic_stock.db"
+
+    # Embeds
+    embed_logo_url: str = ""
+    embed_accent_color: int = 0xA64DFF
+    embed_footer_text: str = "Instigate Cafe"
+
+    # Blackjack
+    bj_starting_bankroll: int = 100
+    bj_dealer_hits_soft_17: bool = True
+    bj_max_splits: int = 1
+    bj_session_ttl_minutes: int = 20
+
+    @staticmethod
+    def from_env() -> "Settings":
+        token = (os.getenv("DISCORD_TOKEN", "") or "").strip()
+        guild_id = _to_int(os.getenv("GUILD_ID", "0"), 0)
+        stock_channel_id = _to_int(os.getenv("STOCK_CHANNEL_ID", "0"), 0)
+
+        allowed_raw = (os.getenv("ALLOWED_ROLES", "") or "").strip()
+        allowed_roles = [r.strip() for r in allowed_raw.split(",") if r.strip()]
+
+        embed_logo_url = (os.getenv("EMBED_LOGO_URL", "") or "").strip()
+        embed_accent_color = _to_color(os.getenv("EMBED_ACCENT_COLOR", "#A64DFF"), 0xA64DFF)
+        embed_footer_text = (os.getenv("EMBED_FOOTER_TEXT", "Instigate Cafe") or "Instigate Cafe").strip() or "Instigate Cafe"
+
+        bj_start = _to_int(os.getenv("BJ_STARTING_BANKROLL", "100"), 100)
+        bj_hs17 = _to_bool(os.getenv("BJ_DEALER_HITS_SOFT_17", "true"), True)
+        bj_splits = _to_int(os.getenv("BJ_MAX_SPLITS", "1"), 1)
+        bj_ttl = _to_int(os.getenv("BJ_SESSION_TTL_MINUTES", "20"), 20)
+
+        return Settings(
+            token=token,
+            guild_id=guild_id,
+            stock_channel_id=stock_channel_id,
+            allowed_roles=allowed_roles,
+            embed_logo_url=embed_logo_url,
+            embed_accent_color=embed_accent_color,
+            embed_footer_text=embed_footer_text,
+            bj_starting_bankroll=max(1, bj_start),
+            bj_dealer_hits_soft_17=bj_hs17,
+            bj_max_splits=max(0, bj_splits),
+            bj_session_ttl_minutes=max(5, bj_ttl),
+        )

@@ -1,3 +1,30 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# venv
+.venv/
+venv/
+
+# OS / editor
+.vscode/
+.DS_Store
+Thumbs.db
+
+# databases / local state
+*.db
+ic_stock.db
+
+# logs
+*.log
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
