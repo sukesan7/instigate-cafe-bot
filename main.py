@@ -88,6 +88,7 @@ async def on_ready():
     # Register the /ic root group
     if settings.guild_id:
         guild = discord.Object(id=settings.guild_id)
+        bot.tree.clear_commands(guild=guild)
         bot.tree.add_command(ic, guild=guild)
         await bot.tree.sync(guild=guild)
         print(f"Synced commands to guild {settings.guild_id}.")

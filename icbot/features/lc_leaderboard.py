@@ -381,16 +381,13 @@ async def leaderboard_root(interaction: discord.Interaction):
 # Backwards-compatible /ic lc ... commands (optional)
 # ==========
 
-lc = app_commands.Group(name="lc", description="Lightweight leaderboards (legacy)")
-ic.add_command(lc)
 
-
-@lc.command(name="leaderboard", description="(Legacy) Most active users (interactive).")
+@ic.command(name="leaderboard", description="(Legacy) Most active users (interactive).")
 async def leaderboard_legacy(interaction: discord.Interaction):
     await _send_interactive_leaderboard(interaction)
 
 
-@lc.command(name="reset", description="Reset activity counts for this server (admin/allowed roles only).")
+@ic.command(name="reset", description="Reset activity counts for this server (admin/allowed roles only).")
 async def reset(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message("This command only works in a server.", ephemeral=True)
