@@ -68,7 +68,7 @@ async def stock(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-@ic.command(name="stock_change", description="Change the IC stock by a delta (e.g., +100 or -50). Admin/allowed roles only.")
+@ic.command(name="stock_change", description="Change the $IC stock by a delta (e.g., +100 or -50). Admin/allowed roles only.")
 @app_commands.describe(change="Examples: +100, -50, 25", reason="Optional: why did it move?")
 async def stock_change(interaction: discord.Interaction, change: str, reason: str | None = None):
     settings = interaction.client.settings  # type: ignore[attr-defined]
@@ -86,7 +86,7 @@ async def stock_change(interaction: discord.Interaction, change: str, reason: st
 
     sign = "+" if delta >= 0 else ""
     reason_line = f"\n**Reason:** {reason}" if reason else ""
-    title = "📈 IC Stock Up" if delta >= 0 else "📉 IC Stock Down"
+    title = "📈 $IC Stock Up" if delta >= 0 else "📉 $IC Stock Down"
     headline = f"**{sign}{delta} → ${new_val}**"
     settings = interaction.client.settings  # type: ignore[attr-defined]
     embed = stock_embed(settings, title=title, headline=headline, reason=reason, footer_hint=f"Moved by {interaction.user.display_name}")
@@ -95,7 +95,7 @@ async def stock_change(interaction: discord.Interaction, change: str, reason: st
     await _post_optional_announcement(interaction, embed)
 
 
-@ic.command(name="stock_set", description="Set the IC stock to an exact value. Admin/allowed roles only.")
+@ic.command(name="stock_set", description="Set the $IC stock to an exact value. Admin/allowed roles only.")
 @app_commands.describe(value="New stock price (0+)", reason="Optional: why set it?")
 async def stock_set(interaction: discord.Interaction, value: int, reason: str | None = None):
     settings = interaction.client.settings  # type: ignore[attr-defined]
@@ -108,13 +108,13 @@ async def stock_set(interaction: discord.Interaction, value: int, reason: str | 
 
     reason_line = f"\n**Reason:** {reason}" if reason else ""
     settings = interaction.client.settings  # type: ignore[attr-defined]
-    embed = stock_embed(settings, title="🧾 IC Stock Set", headline=f"**${new_val}**", reason=reason, footer_hint=f"Set by {interaction.user.display_name}")
+    embed = stock_embed(settings, title="🧾 $IC Stock Set", headline=f"**${new_val}**", reason=reason, footer_hint=f"Set by {interaction.user.display_name}")
 
     await interaction.response.send_message(embed=embed)
     await _post_optional_announcement(interaction, embed)
 
 
-@ic.command(name="stock_history", description="Show recent IC stock moves.")
+@ic.command(name="stock_history", description="Show recent $IC stock moves.")
 @app_commands.describe(limit="How many entries (max 25)")
 async def stock_history(interaction: discord.Interaction, limit: int = 10):
     store = StockStore(interaction.client.db)  # type: ignore[attr-defined]
@@ -131,5 +131,5 @@ async def stock_history(interaction: discord.Interaction, limit: int = 10):
         lines.append(f"{t} • <@{user_id}>: **{sign}{delta}** → **${new_value}**{reason_part}")
 
     settings = interaction.client.settings  # type: ignore[attr-defined]
-    embed = stock_embed(settings, title="🕰️ IC Stock History", headline="Recent moves", reason="\n".join(lines[:25]))
+    embed = stock_embed(settings, title="🕰️ $IC Stock History", headline="Recent moves", reason="\n".join(lines[:25]))
     await interaction.response.send_message(embed=embed)
