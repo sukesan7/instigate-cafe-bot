@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -7,12 +8,13 @@ from icbot.config import Settings
 from icbot.db import Database
 from icbot.app import ic
 from icbot.permissions import is_admin_or_allowed
-from icbot.features import sports  # noqa: F401
+from icbot.tasks.ttc_alerts import poll_and_post_ttc
 
 # Import features (registers commands onto /ic)
 from icbot.features import stock  # noqa: F401
 from icbot.features import blackjack  # noqa: F401
 from icbot.features import lc_leaderboard  # noqa: F401
+from icbot.features import sports  # noqa: F401
 from icbot.features.lc_leaderboard import ActivityTracker
 
 
@@ -77,6 +79,17 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     raise error
 
 
+async def _ttc_loop() -> None:
+    """Background poller that posts TTC alerts into TTC_ALERTS_CHANNEL_ID."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            await poll_and_post_ttc(bot)
+        except Exception as e:
+            print(f"[TTC] loop error: {e!r}")
+        await asyncio.sleep(max(30, int(getattr(settings, "ttc_poll_seconds", 120) or 120)))
+
+
 @bot.event
 async def on_ready():
     await db.init()
@@ -89,7 +102,9 @@ async def on_ready():
     # Register the /ic root group
     if settings.guild_id:
         guild = discord.Object(id=settings.guild_id)
-        bot.tree.clear_commands(guild=guild)
+        if settings.force_guild_resync:
+            # Useful for test servers. Do NOT enable on your main server.
+            bot.tree.clear_commands(guild=guild)
         bot.tree.add_command(ic, guild=guild)
         await bot.tree.sync(guild=guild)
         print(f"Synced commands to guild {settings.guild_id}.")
@@ -97,6 +112,12 @@ async def on_ready():
         bot.tree.add_command(ic)
         await bot.tree.sync()
         print("Synced commands globally (can take a while to appear).")
+
+    # Start TTC poller once
+    if not getattr(bot, "_ttc_started", False):
+        bot._ttc_started = True
+        if getattr(settings, "ttc_alerts_channel_id", 0):
+            bot.loop.create_task(_ttc_loop())
 
     print(f"Logged in as {bot.user} (id={bot.user.id})")
 

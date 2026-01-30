@@ -9,6 +9,7 @@ from icbot.config import Settings
 EMBED_KIND_STOCK = "stock"
 EMBED_KIND_GAME = "game"
 EMBED_KIND_SYSTEM = "system"
+EMBED_KIND_ALERTS = "alerts"
 
 # Discord embed limits (hard caps)
 _MAX_TITLE = 256
@@ -35,6 +36,7 @@ def _footer_text(settings: Settings, kind: str, footer_hint: str | None) -> str:
         EMBED_KIND_STOCK: "Stock",
         EMBED_KIND_GAME: "Games",
         EMBED_KIND_SYSTEM: "System",
+        EMBED_KIND_ALERTS: "Alerts",
     }.get(kind, "Info")
 
     parts = [settings.embed_footer_text, suffix]
@@ -191,4 +193,29 @@ def system(
     )
 
     _add_fields(e, fields)
+    return e
+
+
+def ttc_alert(
+    settings: Settings,
+    *,
+    headline: str,
+    details: str | None = None,
+    url: str | None = None,
+    level: str = "MAJOR",
+) -> discord.Embed:
+    """TTC alert embed used for auto-posted service alerts."""
+    title = f"🚇 TTC Service Alert • {level}"
+    e = _base_embed(
+        settings,
+        title=title,
+        kind=EMBED_KIND_ALERTS,
+        description=f"**{_truncate(headline, 220) or ''}**",
+        footer_hint="TTC",
+    )
+
+    if details:
+        _add_fields(e, [("Details", details, False)])
+    if url:
+        _add_fields(e, [("Link", url, False)])
     return e
