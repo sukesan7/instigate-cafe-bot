@@ -1,13 +1,11 @@
 # Instigate Cafe Bot 🏰☕️
 
-A lightweight, modular Discord bot.  
-Built in **Python** with **discord.py** slash commands, consistent **embeds**, and a clean “feature module” layout.
+A lightweight, modular Discord bot for a university friend group server (“Instigate Cafe”).  
+Built in **Python** with **discord.py** slash commands, consistent **purple-themed embeds**, and a clean “feature module” layout.
 
-> This is a fun private project, but it’s structured and documented like a “real” one for consistency with my other projects.
+> This is a private/fun bot, but it’s structured and documented like a “real” project for consistency with my other repos.
 
 ---
-
-## Badges
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![discord.py](https://img.shields.io/badge/discord.py-app__commands-5865F2)
@@ -22,11 +20,11 @@ Built in **Python** with **discord.py** slash commands, consistent **embeds**, a
 A running server joke turned into a persistent “index” you can adjust and track.
 
 - View current stock value
-- Change stock with +/- deltas (admin/allowed roles)
-- Set stock directly (admin/allowed roles)
+- Change stock with +/- deltas (**admin/allowed roles**)
+- Set stock directly (**admin/allowed roles**)
 - Stock history (who/when/reason)
 
-All outputs are presented in **clean embeds** with optional logo and consistent accent color.
+All outputs are presented in consistent, clean embeds.
 
 ---
 
@@ -52,6 +50,16 @@ Ranks most active users by **message count**.
 
 ---
 
+### 🚇 TTC Alerts (Auto-Posted)
+No slash command required. The bot automatically polls TTC notices and posts **serious alerts** into a dedicated channel.
+
+- Posts into `TTC_ALERTS_CHANNEL_ID`
+- Filters for **major** incidents (service suspended, no service, police/emergency, injuries/fatalities, etc.)
+- Avoids spam: first run sets a checkpoint; posts only *new* alerts after that
+- Can be configured to post **major-only** or **all** alerts
+
+---
+
 ## Commands (User-Facing)
 
 ### Stock
@@ -71,7 +79,7 @@ Ranks most active users by **message count**.
 ## Permissions & Server Cleanliness
 
 ### ✅ Role-ID Based Admin Actions
-Admin-style actions (stock changes / resets) are gated by:
+Admin-style actions (stock changes / sets / resets) are gated by:
 
 - Discord **Administrator** permission, OR
 - Membership in one of the role IDs listed in `ALLOWED_ROLE_IDS`
@@ -101,7 +109,7 @@ instigate-cafe-bot/
     config.py              # Settings + .env parsing
     db.py                  # SQLite wrapper (async)
     permissions.py         # role-ID permission checks
-    embeds.py              # consistent embed styling
+    embeds.py              # consistent embed styling (incl. TTC alerts)
 
     features/
       stock.py             # stock commands + history
@@ -110,6 +118,12 @@ instigate-cafe-bot/
 
     games/
       blackjack_engine.py  # blackjack rules/state engine (pure logic)
+
+    services/
+      ttc_client.py        # TTC RSS fetch + parse
+
+    tasks/
+      ttc_alerts.py        # background poller that posts TTC alerts
 ```
 
 ---
@@ -125,7 +139,7 @@ instigate-cafe-bot/
 4. Recommended bot permissions:
    - Send Messages
    - Embed Links
-   - Attach Files (optional, if you later add PDFs)
+   - Attach Files (optional)
    - Read Message History (optional)
 
 **Leaderboard intent note:**
@@ -141,7 +155,7 @@ Copy `.env.example` → `.env`, then fill values:
 DISCORD_TOKEN=YOUR_TOKEN
 GUILD_ID=YOUR_TEST_GUILD_ID
 
-# Optional: stock updates also get posted here
+# Optional: if set, stock updates also get posted here
 STOCK_CHANNEL_ID=1234567890
 
 # Role IDs allowed to run admin-style actions (comma-separated)
@@ -154,11 +168,22 @@ USER_COMMAND_CHANNEL_ID=333333333333333333
 BJ_STARTING_BANKROLL=100
 BJ_DEALER_HITS_SOFT_17=true
 BJ_MAX_SPLITS=1
+BJ_SESSION_TTL_MINUTES=20
+
+# TTC Alerts (auto-posting)
+TTC_ALERTS_CHANNEL_ID=444444444444444444
+TTC_FEED_URL=https://mstdn.ca/@ttcnotices.rss
+TTC_POLL_SECONDS=120
+# "major" = serious incidents only, "all" = post every notice
+TTC_ALERT_LEVEL=major
 
 # Embeds (optional)
 EMBED_LOGO_URL=
 EMBED_ACCENT_COLOR=#A64DFF
 EMBED_FOOTER_TEXT=Instigate Cafe
+
+# Useful for test servers only. Do NOT enable on your main server.
+FORCE_GUILD_RESYNC=false
 ```
 
 ---
@@ -185,11 +210,19 @@ py main.py
 2. Register commands under `/ic` (importing the module in `main.py` is enough)
 3. Use `icbot/embeds.py` helpers to keep output consistent
 
-### Data persistence
+### Background indicators (like TTC)
+Background “indicator” features live under:
+- `icbot/services/` for data fetching/parsing
+- `icbot/tasks/` for scheduled polling + posting
+
+---
+
+## Data Persistence
 Uses **SQLite** for:
 - Stock value + stock history
 - Blackjack bankroll/stats (if enabled)
 - Message counts (monthly + all-time)
+- TTC alert checkpoint (prevents reposting old alerts)
 
 ---
 
@@ -197,10 +230,12 @@ Uses **SQLite** for:
 - Admin-gated actions are **role-ID based**
 - Leaderboard stores counts only (no message content)
 - Blackjack sessions timeout after inactivity to prevent stuck games
+- TTC alerts are filtered + checkpointed to prevent spam
 
 ---
 
-## Roadmap Ideas
+## Roadmap Ideas (Later)
+- Daily Toronto forecast reports
+- TMU facilities / outage alerts
 - `/ic fetch` document vault (course PDFs) with admin-only upload + indexed retrieval
-- `/ic nba` or `/ic nfl` schedule summaries
 - More mini-games (dice, trivia, etc.) under the same embed style + UI patterns
