@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 import os
 
@@ -66,15 +67,25 @@ class Settings:
     # Non-admin users can only run /ic commands in this channel (0 disables)
     user_command_channel_id: int = 0
 
-    # === Auto-alerts: TTC ===
+    # === Auto-alerts: TTC (Mastodon API) ===
     # Channel where TTC alerts are auto-posted (0 disables TTC alerts)
     ttc_alerts_channel_id: int = 0
-    # RSS feed URL for TTC notices
-    ttc_feed_url: str = "https://mstdn.ca/@ttcnotices.rss"
+
+    # Mastodon instance to query (the one where you can view the remote profile page)
+    # Example: https://mastodon.social
+    ttc_mastodon_base: str = "https://mastodon.social"
+
+    # Account handle (remote or local). Example: ttcnotices@mstdn.ca
+    ttc_mastodon_acct: str = "ttcnotices@mstdn.ca"
+
     # Poll interval (seconds)
     ttc_poll_seconds: int = 120
+
     # "major" to only post serious alerts; "all" to post everything
     ttc_alert_level: str = "major"
+
+    # TEST ONLY: on first run (no checkpoint yet) post latest matching status once
+    ttc_bootstrap_post_latest: bool = False
 
     # If True, clear+resync guild commands on startup (useful for test servers)
     force_guild_resync: bool = False
@@ -108,14 +119,18 @@ class Settings:
         # Channel gate
         user_command_channel_id = _to_int(os.getenv("USER_COMMAND_CHANNEL_ID", "0"), 0)
 
-        # TTC alerts
+        # TTC alerts (Mastodon API)
         ttc_alerts_channel_id = _to_int(os.getenv("TTC_ALERTS_CHANNEL_ID", "0"), 0)
-        ttc_feed_url = (os.getenv("TTC_FEED_URL", "") or "https://mstdn.ca/@ttcnotices.rss").strip()
+        ttc_mastodon_base = (os.getenv("TTC_MASTODON_BASE", "https://mastodon.social") or "https://mastodon.social").strip()
+        ttc_mastodon_acct = (os.getenv("TTC_MASTODON_ACCT", "ttcnotices@mstdn.ca") or "ttcnotices@mstdn.ca").strip()
+
         ttc_poll_seconds = max(30, _to_int(os.getenv("TTC_POLL_SECONDS", "120"), 120))
 
         ttc_alert_level = (os.getenv("TTC_ALERT_LEVEL", "major") or "major").strip().lower()
         if ttc_alert_level not in ("major", "all"):
             ttc_alert_level = "major"
+
+        ttc_bootstrap_post_latest = _to_bool(os.getenv("TTC_BOOTSTRAP_POST_LATEST", "false"), False)
 
         force_guild_resync = _to_bool(os.getenv("FORCE_GUILD_RESYNC", "false"), False)
 
@@ -136,9 +151,11 @@ class Settings:
             allowed_roles=allowed_roles,
             user_command_channel_id=user_command_channel_id,
             ttc_alerts_channel_id=ttc_alerts_channel_id,
-            ttc_feed_url=ttc_feed_url,
+            ttc_mastodon_base=ttc_mastodon_base,
+            ttc_mastodon_acct=ttc_mastodon_acct,
             ttc_poll_seconds=ttc_poll_seconds,
             ttc_alert_level=ttc_alert_level,
+            ttc_bootstrap_post_latest=ttc_bootstrap_post_latest,
             force_guild_resync=force_guild_resync,
             embed_logo_url=embed_logo_url,
             embed_accent_color=embed_accent_color,
