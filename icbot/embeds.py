@@ -220,7 +220,7 @@ def job_alert(
         title=header,
         kind=EMBED_KIND_JOBS,
         description=f"**{_truncate(headline, 250) or ''}**",
-        footer_hint=footer_hint or (src if src else "ATS"),
+        footer_hint=footer_hint or ("Job Tracking Software"),
     )
 
     # Make the embed clickable to the posting
