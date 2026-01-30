@@ -7,6 +7,7 @@ from icbot.config import Settings
 from icbot.db import Database
 from icbot.app import ic
 from icbot.permissions import is_admin_or_allowed
+from icbot.features import sports  # noqa: F401
 
 # Import features (registers commands onto /ic)
 from icbot.features import stock  # noqa: F401
