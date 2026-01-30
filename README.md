@@ -3,7 +3,7 @@
 A lightweight, modular Discord bot for a university friend group server (“Instigate Cafe”).  
 Built in **Python** with **discord.py** slash commands, consistent **purple-themed embeds**, and a clean “feature module” layout.
 
-> This is a private/fun bot, but it’s structured and documented like a “real” project for consistency with my other repos.
+> Private/fun bot — but structured like a “real” repo for consistency with my other projects.
 
 ---
 
@@ -14,15 +14,16 @@ Built in **Python** with **discord.py** slash commands, consistent **purple-them
 
 ---
 
-## Core Capabilities
+## Features
 
 ### 📈 Instigate Cafe “Stock”
-A running server joke turned into a persistent “index” you can adjust and track.
+A running server joke turned into a persistent index you can adjust and track.
 
 - View current stock value
 - Change stock with +/- deltas (**admin/allowed roles**)
 - Set stock directly (**admin/allowed roles**)
 - Stock history (who/when/reason)
+- Optional: broadcast stock changes to a dedicated channel (`STOCK_CHANNEL_ID`)
 
 All outputs are presented in consistent, clean embeds.
 
@@ -33,9 +34,9 @@ Start a blackjack hand and play using **buttons** (no spammy `/hit` commands).
 
 - Button controls: **Hit / Stand / Double / Split / Forfeit**
 - **Only the player who started the hand** can interact (others can view)
-- **5-minute inactivity timeout** → automatic forfeit (server-safety)
+- **5-minute inactivity timeout** → automatic forfeit (safety)
 
-Includes a basic “toy bankroll” (starting bankroll configurable).
+Includes a “toy bankroll” system (starting bankroll configurable).
 
 ---
 
@@ -51,12 +52,29 @@ Ranks most active users by **message count**.
 ---
 
 ### 🚇 TTC Alerts (Auto-Posted)
-No slash command required. The bot automatically polls TTC notices and posts **serious alerts** into a dedicated channel.
+No slash command required. The bot automatically polls TTC notices and posts alerts into a dedicated channel.
 
 - Posts into `TTC_ALERTS_CHANNEL_ID`
-- Filters for **major** incidents (service suspended, no service, police/emergency, injuries/fatalities, etc.)
-- Avoids spam: first run sets a checkpoint; posts only *new* alerts after that
-- Can be configured to post **major-only** or **all** alerts
+- Configurable alert level:
+  - `major` = serious incidents only (service suspended, no service, police/emergency, injuries/fatalities, etc.)
+  - `all` = post every notice
+- Uses a checkpoint to avoid reposting old alerts
+- Optional “bootstrap” mode (test servers) to post the latest matching status once on startup
+
+---
+
+### 💼 Job Alerts (Auto-Posted from Public ATS Boards)
+Automatically polls public job boards and posts matching roles into a `#job-alerts` channel.
+
+- Posts into `JOB_ALERTS_CHANNEL_ID`
+- Sources supported:
+  - **Greenhouse** (board tokens)
+  - **Lever** (site slugs)
+- Filtered by location + keywords (configurable)
+- Anti-spam safeguards:
+  - Per-cycle posting cap (prevents flooding)
+  - Checkpointing so old postings aren’t re-posted
+- Optional “bootstrap” mode (test servers) to post a small sample on first run
 
 ---
 
@@ -79,12 +97,12 @@ No slash command required. The bot automatically polls TTC notices and posts **s
 ## Permissions & Server Cleanliness
 
 ### ✅ Role-ID Based Admin Actions
-Admin-style actions (stock changes / sets / resets) are gated by:
+Admin-style actions (stock changes / sets) are gated by:
 
 - Discord **Administrator** permission, OR
 - Membership in one of the role IDs listed in `ALLOWED_ROLE_IDS`
 
-This avoids fragile “role name” matching.
+This avoids fragile role-name matching.
 
 ### 🧼 Single Channel Mode (Optional)
 To keep the server clean and organized:
@@ -109,7 +127,7 @@ instigate-cafe-bot/
     config.py              # Settings + .env parsing
     db.py                  # SQLite wrapper (async)
     permissions.py         # role-ID permission checks
-    embeds.py              # consistent embed styling (incl. TTC alerts)
+    embeds.py              # consistent embed styling (stock/games/alerts/jobs)
 
     features/
       stock.py             # stock commands + history
@@ -121,9 +139,11 @@ instigate-cafe-bot/
 
     services/
       ttc_client.py        # TTC RSS fetch + parse
+      jobs_ats_client.py   # Greenhouse + Lever fetch + normalize
 
     tasks/
       ttc_alerts.py        # background poller that posts TTC alerts
+      job_alerts.py        # background poller that posts job alerts
 ```
 
 ---
@@ -139,8 +159,8 @@ instigate-cafe-bot/
 4. Recommended bot permissions:
    - Send Messages
    - Embed Links
-   - Attach Files (optional)
    - Read Message History (optional)
+   - Attach Files (optional; useful later if you add a document vault)
 
 **Leaderboard intent note:**
 - Requires **Guild Messages** intent (non-privileged).
@@ -176,6 +196,22 @@ TTC_FEED_URL=https://mstdn.ca/@ttcnotices.rss
 TTC_POLL_SECONDS=120
 # "major" = serious incidents only, "all" = post every notice
 TTC_ALERT_LEVEL=major
+# Test servers only: post latest matching alert once on startup
+TTC_BOOTSTRAP_POST_LATEST=false
+
+# Job Alerts (auto-posting)
+JOB_ALERTS_CHANNEL_ID=555555555555555555
+JOBS_POLL_SECONDS=600
+# Greenhouse: tokens after boards.greenhouse.io/<token>
+GREENHOUSE_BOARDS=stripe,robinhood,coinbase
+# Lever: slugs after jobs.lever.co/<slug>
+LEVER_SITES=palantir,waabi,policyme
+# Optional: cut noise
+JOBS_LOCATION_ALLOWLIST=Toronto,Remote,Canada
+JOBS_KEYWORDS_ALLOWLIST=Intern,Internship,Co-op,Coop,New Grad,Graduate,Junior,Entry
+JOBS_KEYWORDS_DENYLIST=Senior,Staff,Principal,Lead,Manager
+# Test servers only: post a small sample on first run for each new source
+JOBS_BOOTSTRAP_POST=false
 
 # Embeds (optional)
 EMBED_LOGO_URL=
@@ -185,6 +221,8 @@ EMBED_FOOTER_TEXT=Instigate Cafe
 # Useful for test servers only. Do NOT enable on your main server.
 FORCE_GUILD_RESYNC=false
 ```
+
+> **Prod tip:** use a separate `DB_PATH` per server (dev vs main) so test data doesn’t carry over.
 
 ---
 
@@ -205,12 +243,12 @@ py main.py
 
 ## Development Notes
 
-### Adding a new feature
+### Adding a new slash-command feature
 1. Create a module in `icbot/features/`
 2. Register commands under `/ic` (importing the module in `main.py` is enough)
 3. Use `icbot/embeds.py` helpers to keep output consistent
 
-### Background indicators (like TTC)
+### Adding a background indicator (like TTC or Jobs)
 Background “indicator” features live under:
 - `icbot/services/` for data fetching/parsing
 - `icbot/tasks/` for scheduled polling + posting
@@ -223,6 +261,7 @@ Uses **SQLite** for:
 - Blackjack bankroll/stats (if enabled)
 - Message counts (monthly + all-time)
 - TTC alert checkpoint (prevents reposting old alerts)
+- Job alert checkpoint (prevents reposting old postings)
 
 ---
 
@@ -231,11 +270,12 @@ Uses **SQLite** for:
 - Leaderboard stores counts only (no message content)
 - Blackjack sessions timeout after inactivity to prevent stuck games
 - TTC alerts are filtered + checkpointed to prevent spam
+- Job alerts are capped per cycle + checkpointed to prevent flooding
 
 ---
 
 ## Roadmap Ideas (Later)
-- Daily Toronto forecast reports
+- Daily Toronto forecast reports (auto-posted)
 - TMU facilities / outage alerts
 - `/ic fetch` document vault (course PDFs) with admin-only upload + indexed retrieval
-- More mini-games (dice, trivia, etc.) under the same embed style + UI patterns
+- More mini-games (roulette, dice, trivia, etc.) under the same embed + UI patterns
