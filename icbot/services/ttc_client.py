@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from email.utils import parsedate_to_datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 import html
 import re
-import xml.etree.ElementTree as ET
 
 import aiohttp
 
@@ -21,61 +19,147 @@ def _strip_html(s: str) -> str:
 
 @dataclass(frozen=True)
 class TTCItem:
-    guid: str
+    guid: str  # Mastodon status id
     title: str
     link: str
     summary: str
     published_iso: Optional[str]
 
 
-async def fetch_rss_items(
+class TTCFetchError(RuntimeError):
+    pass
+
+
+def _norm_base(api_base: str) -> str:
+    return (api_base or "").strip().rstrip("/")
+
+
+async def resolve_account_id(
     session: aiohttp.ClientSession,
-    feed_url: str,
+    api_base: str,
+    acct: str,
     *,
-    limit: int = 20,
     timeout_seconds: int = 12,
+) -> str:
+    """
+    Resolve a Mastodon account's numeric ID via the public search endpoint.
+    Works for remote accounts too *if the instance already knows about them*
+    (which is true if you can view the profile on that instance).
+    """
+    api_base = _norm_base(api_base)
+    acct_norm = (acct or "").strip().lstrip("@").lower()
+    if not api_base or not acct_norm:
+        raise TTCFetchError("Missing TTC_MASTODON_BASE or TTC_MASTODON_ACCT")
+
+    url = f"{api_base}/api/v2/search"
+    params = {"q": acct_norm, "type": "accounts", "limit": "5"}
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+
+    headers = {
+        "User-Agent": "InstigateCafeBot/0.1 (+discord bot; personal project)",
+        "Accept": "application/json",
+    }
+
+    async with session.get(url, params=params, timeout=timeout, headers=headers) as resp:
+        if resp.status == 429:
+            raise TTCFetchError("Rate limited resolving account id (429). Increase TTC_POLL_SECONDS.")
+        resp.raise_for_status()
+        data = await resp.json(content_type=None)
+
+    accounts = data.get("accounts") or []
+    if not accounts:
+        raise TTCFetchError(f"No accounts returned for search q={acct_norm!r} on {api_base!r}")
+
+    # Try exact match first: remote acct strings usually look like "user@domain"
+    for a in accounts:
+        a_acct = str(a.get("acct", "")).strip().lower()
+        if a_acct == acct_norm:
+            aid = str(a.get("id", "")).strip()
+            if aid:
+                return aid
+
+    # Otherwise take the first reasonable result
+    aid = str(accounts[0].get("id", "")).strip()
+    if not aid:
+        raise TTCFetchError("Search returned account without id.")
+    return aid
+
+
+async def fetch_account_status_items(
+    session: aiohttp.ClientSession,
+    api_base: str,
+    account_id: str,
+    *,
+    since_id: Optional[str] = None,
+    limit: int = 20,
+    timeout_seconds: int = 14,
 ) -> List[TTCItem]:
-    """Fetch and parse an RSS feed into TTCItem objects."""
+    """
+    Fetch new statuses for an account. Returns newest-first (Mastodon default).
+    Use since_id to only retrieve newer items.
+    """
+    api_base = _norm_base(api_base)
+    if not api_base or not account_id:
+        raise TTCFetchError("Missing api_base or account_id")
+
+    url = f"{api_base}/api/v1/accounts/{account_id}/statuses"
+    params: Dict[str, str] = {
+        "limit": str(max(1, min(int(limit), 40))),
+        "exclude_replies": "true",
+        "exclude_reblogs": "true",
+    }
+    if since_id:
+        params["since_id"] = str(since_id)
+
     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
     headers = {
         "User-Agent": "InstigateCafeBot/0.1 (+discord bot; personal project)",
-        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+        "Accept": "application/json",
     }
-    async with session.get(feed_url, timeout=timeout, headers=headers) as resp:
+
+    async with session.get(url, params=params, timeout=timeout, headers=headers) as resp:
+        if resp.status == 401 or resp.status == 403:
+            raise TTCFetchError(f"Instance forbids statuses API ({resp.status}). Try another base instance.")
+        if resp.status == 404:
+            raise TTCFetchError("Account statuses not found (404). Account id may be wrong.")
+        if resp.status == 429:
+            raise TTCFetchError("Rate limited fetching statuses (429). Increase TTC_POLL_SECONDS.")
         resp.raise_for_status()
-        xml_text = await resp.text()
+        data = await resp.json(content_type=None)
 
-    root = ET.fromstring(xml_text)
-    items: List[TTCItem] = []
+    if not isinstance(data, list):
+        return []
 
-    for item in root.findall(".//item"):
-        title = (item.findtext("title") or "").strip()
-        link = (item.findtext("link") or "").strip()
-        guid = (item.findtext("guid") or link or title).strip() or title
+    out: List[TTCItem] = []
+    for st in data:
+        if not isinstance(st, dict):
+            continue
 
-        desc = (item.findtext("description") or "").strip()
-        summary = _strip_html(desc)
+        sid = str(st.get("id") or "").strip()
+        created_at = st.get("created_at")
+        link = str(st.get("url") or st.get("uri") or "").strip()
 
-        pub_raw = (item.findtext("pubDate") or "").strip()
-        published_iso = None
-        if pub_raw:
-            try:
-                published_iso = parsedate_to_datetime(pub_raw).isoformat()
-            except Exception:
-                published_iso = pub_raw
+        content_html = str(st.get("content") or "")
+        spoiler_html = str(st.get("spoiler_text") or "")
 
-        if title or summary:
-            items.append(
+        summary = _strip_html(content_html)
+        spoiler = _strip_html(spoiler_html)
+
+        # Title = spoiler_text if present, otherwise first bit of content
+        headline = spoiler or summary or "TTC Notice"
+        headline = headline.strip()
+        if len(headline) > 140:
+            headline = headline[:137].rstrip() + "..."
+
+        if sid:
+            out.append(
                 TTCItem(
-                    guid=guid,
-                    title=title,
+                    guid=sid,
+                    title=headline,
                     link=link,
                     summary=summary,
-                    published_iso=published_iso,
+                    published_iso=str(created_at) if created_at else None,
                 )
             )
 
-        if len(items) >= limit:
-            break
-
-    return items
+    return out
