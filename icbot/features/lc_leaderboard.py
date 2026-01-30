@@ -263,7 +263,7 @@ class LeaderboardView(discord.ui.View):
             summary=summary,
             subtitle=subtitle,
             fields=(("Leaderboard", "\n".join(lines)), ("Page", f"**{self.state.page + 1} / {pages}**")),
-            footer_hint="Use buttons to browse",
+            footer_hint="Message Leaderboard",
         )
         return embed
 
