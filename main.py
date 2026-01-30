@@ -8,7 +8,9 @@ from icbot.config import Settings
 from icbot.db import Database
 from icbot.app import ic
 from icbot.permissions import is_admin_or_allowed
+
 from icbot.tasks.ttc_alerts import poll_and_post_ttc
+from icbot.tasks.job_alerts import poll_and_post_jobs  # <-- make sure this path matches your file
 
 # Import features (registers commands onto /ic)
 from icbot.features import stock  # noqa: F401
@@ -52,7 +54,6 @@ async def ic_channel_gate(interaction: discord.Interaction) -> bool:
 
     allowed_ch = int(getattr(settings, "user_command_channel_id", 0) or 0)
     if allowed_ch and interaction.channel_id != allowed_ch:
-        # Tell user where to go (ephemeral to avoid spam)
         if not interaction.response.is_done():
             await interaction.response.send_message(
                 f"Use bot commands in <#{allowed_ch}> to keep the server clean.",
@@ -67,7 +68,6 @@ async def ic_channel_gate(interaction: discord.Interaction) -> bool:
 if hasattr(bot.tree, "add_check"):
     bot.tree.add_check(ic_channel_gate)
 else:
-    # Fallback for older forks
     bot.tree.interaction_check = ic_channel_gate  # type: ignore[attr-defined]
 
 
@@ -90,6 +90,17 @@ async def _ttc_loop() -> None:
         await asyncio.sleep(max(30, int(getattr(settings, "ttc_poll_seconds", 120) or 120)))
 
 
+async def _jobs_loop() -> None:
+    """Background poller that posts job alerts into JOB_ALERTS_CHANNEL_ID."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            await poll_and_post_jobs(bot)
+        except Exception as e:
+            print(f"[JOBS] loop error: {e!r}")
+        await asyncio.sleep(max(60, int(getattr(settings, "jobs_poll_seconds", 600) or 600)))
+
+
 @bot.event
 async def on_ready():
     await db.init()
@@ -103,7 +114,6 @@ async def on_ready():
     if settings.guild_id:
         guild = discord.Object(id=settings.guild_id)
         if settings.force_guild_resync:
-            # Useful for test servers. Do NOT enable on your main server.
             bot.tree.clear_commands(guild=guild)
         bot.tree.add_command(ic, guild=guild)
         await bot.tree.sync(guild=guild)
@@ -118,6 +128,12 @@ async def on_ready():
         bot._ttc_started = True
         if getattr(settings, "ttc_alerts_channel_id", 0):
             bot.loop.create_task(_ttc_loop())
+
+    # Start Jobs poller once
+    if not getattr(bot, "_jobs_started", False):
+        bot._jobs_started = True
+        if getattr(settings, "job_alerts_channel_id", 0):
+            bot.loop.create_task(_jobs_loop())
 
     print(f"Logged in as {bot.user} (id={bot.user.id})")
 

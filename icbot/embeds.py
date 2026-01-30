@@ -5,20 +5,19 @@ import discord
 
 from icbot.config import Settings
 
-# Category tags (so stock embeds are consistent, games embeds consistent, etc.)
+# Category tags
 EMBED_KIND_STOCK = "stock"
 EMBED_KIND_GAME = "game"
 EMBED_KIND_SYSTEM = "system"
 EMBED_KIND_ALERTS = "alerts"
+EMBED_KIND_JOBS = "jobs"
 
-# Discord embed limits (hard caps)
+# Discord embed limits
 _MAX_TITLE = 256
 _MAX_DESC = 4096
 _MAX_FIELD_NAME = 256
 _MAX_FIELD_VALUE = 1024
 
-
-# Field can be ("Name", "Value") or ("Name", "Value", inline_bool)
 Field = Union[Tuple[str, str], Tuple[str, str, bool]]
 
 
@@ -37,6 +36,7 @@ def _footer_text(settings: Settings, kind: str, footer_hint: str | None) -> str:
         EMBED_KIND_GAME: "Games",
         EMBED_KIND_SYSTEM: "System",
         EMBED_KIND_ALERTS: "Alerts",
+        EMBED_KIND_JOBS: "Jobs",
     }.get(kind, "Info")
 
     parts = [settings.embed_footer_text, suffix]
@@ -54,19 +54,10 @@ def _base_embed(
     subtitle: str | None = None,
     footer_hint: str | None = None,
 ) -> discord.Embed:
-    """
-    One place to enforce a consistent embed look:
-    - Bright purple accent (border)
-    - Optional logo thumbnail (top-right)
-    - Brand author line (top-left)
-    - Consistent footer + timestamp
-    - Safe truncation for Discord limits
-    """
     title = _truncate(title, _MAX_TITLE) or " "
     description = _truncate(description, _MAX_DESC)
     subtitle = (subtitle or "").strip()
 
-    # Small aesthetic touch: if subtitle exists, prepend it in *small italics* above description
     if subtitle:
         if description:
             description = f"*{subtitle}*\n\n{description}"
@@ -79,10 +70,10 @@ def _base_embed(
         color=settings.embed_accent_color,
     )
 
-    # Brand header (top-left)
+    # Brand header
     e.set_author(name=_truncate(settings.embed_footer_text, _MAX_TITLE) or "Instigate Cafe")
 
-    # Logo in corner (top-right)
+    # Logo thumbnail
     if getattr(settings, "embed_logo_url", ""):
         e.set_thumbnail(url=settings.embed_logo_url)
 
@@ -97,7 +88,6 @@ def _add_fields(e: discord.Embed, fields: Iterable[Field]) -> None:
         if not item:
             continue
 
-        # Support both (name, value) and (name, value, inline)
         inline = False
         if len(item) == 2:
             name, value = item  # type: ignore[misc]
@@ -120,12 +110,6 @@ def stock(
     reason: str | None = None,
     footer_hint: str | None = None,
 ) -> discord.Embed:
-    """
-    Stock-format embed:
-      Title: command-specific
-      Description: headline (big, bold)
-      Fields: optional reason (kept smaller)
-    """
     e = _base_embed(
         settings,
         title=title,
@@ -133,10 +117,8 @@ def stock(
         description=headline,
         footer_hint=footer_hint,
     )
-
     if reason:
         _add_fields(e, [("Reason", reason, False)])
-
     return e
 
 
@@ -150,12 +132,6 @@ def game(
     controls: str | None = None,
     subtitle: str | None = None,
 ) -> discord.Embed:
-    """
-    Game-format embed:
-      Title + optional summary
-      Fields for dealer/player/state/result (smaller text)
-      Optional Controls line (great for button-based interactions)
-    """
     e = _base_embed(
         settings,
         title=title,
@@ -164,13 +140,9 @@ def game(
         subtitle=subtitle,
         footer_hint=footer_hint,
     )
-
     _add_fields(e, fields)
-
     if controls:
-        # Put controls last so it reads naturally
         _add_fields(e, [("Controls", controls, False)])
-
     return e
 
 
@@ -191,7 +163,6 @@ def system(
         subtitle=subtitle,
         footer_hint=footer_hint,
     )
-
     _add_fields(e, fields)
     return e
 
@@ -204,7 +175,6 @@ def ttc_alert(
     url: str | None = None,
     level: str = "MAJOR",
 ) -> discord.Embed:
-    """TTC alert embed used for auto-posted service alerts."""
     title = f"🚇 TTC Service Alert • {level}"
     e = _base_embed(
         settings,
@@ -213,9 +183,62 @@ def ttc_alert(
         description=f"**{_truncate(headline, 220) or ''}**",
         footer_hint="TTC",
     )
-
     if details:
         _add_fields(e, [("Details", details, False)])
     if url:
         _add_fields(e, [("Link", url, False)])
+    return e
+
+
+def job_alert(
+    settings: Settings,
+    *,
+    # Backwards compatible inputs:
+    title_text: str | None = None,
+    title: str | None = None,                 # some callers use title=
+    company: str | None = None,
+    location: str | None = None,
+    source: str | None = None,
+    url: str | None = None,
+    tags: list[str] | None = None,            # preferred name
+    categories: list[str] | None = None,      # alias for tags (some callers use categories=)
+    footer_hint: str | None = None,
+) -> discord.Embed:
+    """
+    Jobs-format embed for auto-posted ATS alerts.
+
+    Compatibility:
+      - Accepts either `title_text=` or `title=`
+      - Accepts either `tags=` or `categories=` (alias)
+    """
+    headline = (title_text or title or "").strip() or "New job posting"
+    src = (source or "").strip()
+
+    header = "💼 Job Alert" + (f" • {src}" if src else "")
+    e = _base_embed(
+        settings,
+        title=header,
+        kind=EMBED_KIND_JOBS,
+        description=f"**{_truncate(headline, 250) or ''}**",
+        footer_hint=footer_hint or (src if src else "ATS"),
+    )
+
+    # Make the embed clickable to the posting
+    if url:
+        e.url = url
+
+    # Normalize tags/categories
+    label_list = tags if tags is not None else categories
+
+    fields: list[Field] = []
+    if company:
+        fields.append(("Company", company, True))
+    if location:
+        fields.append(("Location", location, True))
+    if label_list:
+        fields.append(("Tags", ", ".join(label_list[:12]), False))
+    if url:
+        fields.append(("Apply", url, False))
+
+    _add_fields(e, fields)
     return e

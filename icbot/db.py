@@ -53,11 +53,33 @@ class Database:
                 )
                 """
             )
+
+            # Job alerts (dedupe + bootstrap checkpoints)
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS job_seen (
+                    source TEXT NOT NULL,
+                    external_id TEXT NOT NULL,
+                    first_seen_unix INTEGER NOT NULL,
+                    title TEXT,
+                    url TEXT,
+                    PRIMARY KEY (source, external_id)
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_job_seen_first_seen
+                ON job_seen(first_seen_unix)
+                """
+            )
+
             # Initialize stock value if missing
             cur = await db.execute("SELECT value FROM meta WHERE key='stock_value'")
             row = await cur.fetchone()
             if row is None:
                 await db.execute("INSERT INTO meta (key, value) VALUES ('stock_value', ?)", ("0",))
+
             await db.commit()
 
     async def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
