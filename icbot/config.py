@@ -11,6 +11,13 @@ def _to_int(s: str, default: int = 0) -> int:
         return default
 
 
+def _to_float(s: str, default: float = 0.0) -> float:
+    try:
+        return float((s or "").strip() or default)
+    except ValueError:
+        return default
+
+
 def _to_color(s: str, default: int) -> int:
     v = (s or "").strip()
     if not v:
@@ -71,6 +78,17 @@ class Settings:
     ttc_alerts_channel_id: int = 0
     job_alerts_channel_id: int = 0
 
+    # Market watch (real markets) — posts into stock channel when thresholds hit
+    market_watch_enabled: bool = False
+    market_watch_channel_id: int = 0  # defaults to STOCK_CHANNEL_ID if 0
+    market_watch_poll_seconds: int = 60
+    market_watch_debug: bool = False  # if true, prints one-line snapshots to terminal
+    market_watch_tickers: list[str] | None = None  # comma list in env
+    market_watch_vix_level: float = 20.0
+    market_watch_index_move_pct: float = 2.5
+    market_watch_stock_move_pct: float = 10.0
+    market_watch_cooldown_minutes: int = 30
+
     # Role IDs allowed to do admin-style actions
     allowed_role_ids: list[int] = None  # type: ignore[assignment]
     # Legacy (optional)
@@ -126,6 +144,27 @@ class Settings:
         ttc_alerts_channel_id = _to_int(os.getenv("TTC_ALERTS_CHANNEL_ID", "0"), 0)
         job_alerts_channel_id = _to_int(os.getenv("JOB_ALERTS_CHANNEL_ID", "0"), 0)
 
+        # Market watch
+        market_watch_enabled = _to_bool(os.getenv("MARKET_WATCH_ENABLED", "false"), False)
+        market_watch_channel_id = _to_int(os.getenv("MARKET_WATCH_CHANNEL_ID", "0"), 0)
+        # Allow faster polling for test environments (min 10s). Use 60s for typical usage.
+        market_watch_poll_seconds = max(10, _to_int(os.getenv("MARKET_WATCH_POLL_SECONDS", "60"), 60))
+        market_watch_debug = _to_bool(os.getenv("MARKET_WATCH_DEBUG", "false"), False)
+        market_watch_tickers = _to_str_list(os.getenv("MARKET_WATCH_TICKERS", ""))
+
+        # VIX threshold: level (not %). Back-compat: if MARKET_WATCH_VIX_LEVEL is absent,
+        # treat MARKET_WATCH_VIX_CHANGE_PCT as the level (older config name).
+        raw_vix_level = (os.getenv("MARKET_WATCH_VIX_LEVEL", "") or "").strip()
+        if raw_vix_level:
+            market_watch_vix_level = max(0.0, _to_float(raw_vix_level, 20.0))
+        else:
+            market_watch_vix_level = max(0.0, _to_float(os.getenv("MARKET_WATCH_VIX_CHANGE_PCT", "20"), 20.0))
+
+        market_watch_index_move_pct = max(0.0, _to_float(os.getenv("MARKET_WATCH_INDEX_MOVE_PCT", "2.5"), 2.5))
+        market_watch_stock_move_pct = max(0.0, _to_float(os.getenv("MARKET_WATCH_STOCK_MOVE_PCT", "10"), 10.0))
+        # Allow 1 minute cooldown for testing (min 1). Default is 30.
+        market_watch_cooldown_minutes = max(1, _to_int(os.getenv("MARKET_WATCH_COOLDOWN_MINUTES", "30"), 30))
+
         allowed_role_ids = _to_int_list(os.getenv("ALLOWED_ROLE_IDS", ""))
         allowed_roles = _to_str_list(os.getenv("ALLOWED_ROLES", ""))
 
@@ -161,12 +200,12 @@ class Settings:
         jobs_poll_seconds = max(60, _to_int(os.getenv("JOBS_POLL_SECONDS", "600"), 600))
         jobs_bootstrap_post = _to_bool(os.getenv("JOBS_BOOTSTRAP_POST", "false"), False)
 
-        greenhouse_boards = _to_str_list(os.getenv("GREENHOUSE_BOARDS", "")) or None
-        lever_sites = _to_str_list(os.getenv("LEVER_SITES", "")) or None
+        greenhouse_boards = _to_str_list(os.getenv("GREENHOUSE_BOARDS", ""))
+        lever_sites = _to_str_list(os.getenv("LEVER_SITES", ""))
 
-        jobs_location_allowlist = _to_str_list(os.getenv("JOBS_LOCATION_ALLOWLIST", "")) or None
-        jobs_keywords_allowlist = _to_str_list(os.getenv("JOBS_KEYWORDS_ALLOWLIST", "")) or None
-        jobs_keywords_denylist = _to_str_list(os.getenv("JOBS_KEYWORDS_DENYLIST", "")) or None
+        jobs_location_allowlist = _to_str_list(os.getenv("JOBS_LOCATION_ALLOWLIST", ""))
+        jobs_keywords_allowlist = _to_str_list(os.getenv("JOBS_KEYWORDS_ALLOWLIST", ""))
+        jobs_keywords_denylist = _to_str_list(os.getenv("JOBS_KEYWORDS_DENYLIST", ""))
 
         force_guild_resync = _to_bool(os.getenv("FORCE_GUILD_RESYNC", "false"), False)
 
@@ -177,6 +216,15 @@ class Settings:
             user_command_channel_id=user_command_channel_id,
             ttc_alerts_channel_id=ttc_alerts_channel_id,
             job_alerts_channel_id=job_alerts_channel_id,
+            market_watch_enabled=market_watch_enabled,
+            market_watch_channel_id=market_watch_channel_id,
+            market_watch_poll_seconds=market_watch_poll_seconds,
+            market_watch_debug=market_watch_debug,
+            market_watch_tickers=market_watch_tickers,
+            market_watch_vix_level=market_watch_vix_level,
+            market_watch_index_move_pct=market_watch_index_move_pct,
+            market_watch_stock_move_pct=market_watch_stock_move_pct,
+            market_watch_cooldown_minutes=market_watch_cooldown_minutes,
             allowed_role_ids=allowed_role_ids,
             allowed_roles=allowed_roles,
             db_path=db_path,

@@ -11,6 +11,7 @@ from icbot.permissions import is_admin_or_allowed
 
 from icbot.tasks.ttc_alerts import poll_and_post_ttc
 from icbot.tasks.job_alerts import poll_and_post_jobs  # <-- make sure this path matches your file
+from icbot.tasks.market_watch import poll_and_post_market_watch
 
 # Import features (registers commands onto /ic)
 from icbot.features import stock  # noqa: F401
@@ -30,6 +31,16 @@ intents.messages = True  # needed for message-count leaderboard tracking
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 activity_tracker = ActivityTracker(db)
+
+
+def _fmt_csv(items: list[str], *, limit: int = 12) -> str:
+    items = [str(x).strip() for x in (items or []) if str(x).strip()]
+    if not items:
+        return "(default)"
+    if len(items) <= limit:
+        return ",".join(items)
+    head = ",".join(items[:limit])
+    return f"{head},...(+{len(items) - limit})"
 
 
 async def ic_channel_gate(interaction: discord.Interaction) -> bool:
@@ -101,6 +112,18 @@ async def _jobs_loop() -> None:
         await asyncio.sleep(max(60, int(getattr(settings, "jobs_poll_seconds", 600) or 600)))
 
 
+async def _market_loop() -> None:
+    """Background poller that posts real-market volatility alerts into STOCK_CHANNEL_ID (or MARKET_WATCH_CHANNEL_ID)."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            await poll_and_post_market_watch(bot)
+        except Exception as e:
+            print(f"[MARKET] loop error: {e!r}")
+        await asyncio.sleep(max(10, int(getattr(settings, "market_watch_poll_seconds", 300) or 300)))
+
+
+
 @bot.event
 async def on_ready():
     await db.init()
@@ -109,6 +132,35 @@ async def on_ready():
     bot.settings = settings  # type: ignore[attr-defined]
     bot.db = db  # type: ignore[attr-defined]
     bot.activity_tracker = activity_tracker  # type: ignore[attr-defined]
+
+    # ---- Startup config logs (helps debug .env issues) ----
+    try:
+        mw_enabled = bool(getattr(settings, "market_watch_enabled", False))
+        mw_poll = int(getattr(settings, "market_watch_poll_seconds", 0) or 0)
+        mw_channel = int(getattr(settings, "market_watch_channel_id", 0) or 0) or int(
+            getattr(settings, "stock_channel_id", 0) or 0
+        )
+        mw_vix_level = float(getattr(settings, "market_watch_vix_level", 0.0) or 0.0)
+        mw_index_thr = float(getattr(settings, "market_watch_index_move_pct", 0.0) or 0.0)
+        mw_stock_thr = float(getattr(settings, "market_watch_stock_move_pct", 0.0) or 0.0)
+        mw_cooldown = int(getattr(settings, "market_watch_cooldown_minutes", 0) or 0)
+        mw_tickers = getattr(settings, "market_watch_tickers", None) or []
+        print(
+            "[MARKET] config: "
+            f"enabled={mw_enabled} "
+            f"channel_id={mw_channel} "
+            f"poll={mw_poll}s "
+            f"vix_level>={mw_vix_level:g} "
+            f"idx_move>={mw_index_thr:g}% "
+            f"stk_move>={mw_stock_thr:g}% "
+            f"cooldown={mw_cooldown}m "
+            f"tickers={_fmt_csv(list(mw_tickers))} "
+            f"db={settings.db_path}"
+        )
+        if mw_enabled and not mw_channel:
+            print("[MARKET] WARNING: enabled but no channel id set (MARKET_WATCH_CHANNEL_ID or STOCK_CHANNEL_ID).")
+    except Exception as e:
+        print(f"[MARKET] config log error: {e!r}")
 
     # Register the /ic root group
     if settings.guild_id:
@@ -134,6 +186,17 @@ async def on_ready():
         bot._jobs_started = True
         if getattr(settings, "job_alerts_channel_id", 0):
             bot.loop.create_task(_jobs_loop())
+
+    # Start Market watch poller once
+    if not getattr(bot, "_market_started", False):
+        bot._market_started = True
+        mw_enabled = bool(getattr(settings, "market_watch_enabled", False))
+        mw_channel = int(getattr(settings, "market_watch_channel_id", 0) or 0) or int(getattr(settings, "stock_channel_id", 0) or 0)
+
+        if mw_enabled and mw_channel:
+            bot.loop.create_task(_market_loop())
+        elif mw_enabled and not mw_channel:
+            print("[MARKET] enabled=true but no channel_id configured (set MARKET_WATCH_CHANNEL_ID or STOCK_CHANNEL_ID)")
 
     print(f"Logged in as {bot.user} (id={bot.user.id})")
 
