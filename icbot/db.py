@@ -39,10 +39,20 @@ class Database:
                     hands_played INTEGER NOT NULL DEFAULT 0,
                     wins INTEGER NOT NULL DEFAULT 0,
                     losses INTEGER NOT NULL DEFAULT 0,
-                    pushes INTEGER NOT NULL DEFAULT 0
+                    pushes INTEGER NOT NULL DEFAULT 0,
+                    reset_count INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+
+            # ---- Lightweight migrations (safe on existing DBs) ----
+            # v0.2.1: add blackjack reset counter
+            cur = await db.execute("PRAGMA table_info(blackjack_users)")
+            cols = [str(r[1]) for r in (await cur.fetchall() or [])]
+            if "reset_count" not in cols:
+                await db.execute(
+                    "ALTER TABLE blackjack_users ADD COLUMN reset_count INTEGER NOT NULL DEFAULT 0"
+                )
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS activity_counts (
