@@ -10,7 +10,7 @@ from icbot.app import ic
 from icbot.permissions import is_admin_or_allowed
 
 from icbot.tasks.ttc_alerts import poll_and_post_ttc
-from icbot.tasks.job_alerts import poll_and_post_jobs  # <-- make sure this path matches your file
+from icbot.tasks.job_alerts import poll_and_post_jobs
 from icbot.tasks.market_watch import poll_and_post_market_watch
 
 # Import features (registers commands onto /ic)
