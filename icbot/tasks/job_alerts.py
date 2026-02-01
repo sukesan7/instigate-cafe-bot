@@ -96,6 +96,133 @@ def _location_passes(location: str, allowlist: list[str] | None) -> bool:
     return any(tok.lower() in loc for tok in allowlist if tok)
 
 
+# ---- Workday-specific filtering helpers ----
+# Why these exist:
+# Workday bootstrap (proof-of-life) must NOT ignore filters, otherwise you post Audit/Senior/etc.
+# Workday also sometimes has blank location → don't auto-fail.
+
+_SENIORITY_RX = re.compile(
+    r"\b(senior|sr\.?|staff|principal|lead|manager|director|head|vp|architect|distinguished)\b",
+    re.IGNORECASE,
+)
+
+# Strong SWE/CS signal. Note: intentionally does NOT include plain "engineer"/"engineering" by itself.
+_WORKDAY_SWE_SIGNAL_RX = re.compile(
+    r"\b("
+    r"software|developer|programmer|backend|front\s*end|frontend|full\s*stack|platform|infrastructure|"
+    r"site\s+reliability|sre|devops|cloud|distributed|microservices?|api\b|services\b|"
+    r"data\s+engineer|data\s+scientist|machine\s+learning|ml\b|artificial\s+intelligence|ai\b|"
+    r"security\s+engineer|cyber|embedded|firmware|fpga|verilog|vhdl|"
+    r"c\+\+|python|java|golang|go\b|rust|kotlin|scala"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_EARLY_CAREER_HINT_RX = re.compile(
+    r"\b(intern(ship)?|co[- ]?op|new\s*grad(uate)?|graduate|student|summer|entry[- ]?level|junior)\b",
+    re.IGNORECASE,
+)
+
+
+def _location_passes_lenient(location: str, allowlist: list[str] | None) -> bool:
+    """If Workday doesn't provide a location, don't fail location filtering."""
+    if not allowlist:
+        return True
+    loc = (location or "").strip().lower()
+    if not loc:
+        return True
+    return any(tok.lower() in loc for tok in allowlist if tok)
+
+
+def _workday_passes_filters(
+    *,
+    text_blob: str,
+    location: str,
+    loc_allow: list[str] | None,
+    kw_allow: list[str] | None,
+    kw_deny: list[str] | None,
+) -> bool:
+    """
+    Workday eligibility gate:
+      - always reject seniority terms (even if denylist is loosened)
+      - apply global denylist
+      - require a SWE/CS signal so we don't post Audit/Analyst/etc
+      - apply location allowlist leniently (blank loc => pass)
+      - still respects keyword allow/deny if provided (but SWE signal is the real core gate)
+    """
+    t = (text_blob or "").lower()
+
+    if _SENIORITY_RX.search(t):
+        return False
+
+    # denylist (kept for things like recruiter/hr/etc)
+    if kw_deny and any(d.lower() in t for d in kw_deny if d):
+        return False
+
+    if not _location_passes_lenient(location, loc_allow):
+        return False
+
+    if not _WORKDAY_SWE_SIGNAL_RX.search(t):
+        return False
+
+    # If you provided an allowlist, keep it as an extra gate — but don't let it be the *only* gate.
+    # This keeps behavior closer to GH/Lever while still preventing non-SWE spam.
+    if kw_allow and not any(a.lower() in t for a in kw_allow if a):
+        # allowlist didn't match; still allow if it looks clearly early-career SWE/CS
+        if not _EARLY_CAREER_HINT_RX.search(t):
+            return False
+
+    return True
+
+
+def _pick_bootstrap_sample_workday(
+    jobs: list[JobPosting],
+    *,
+    loc_allow: list[str] | None,
+    kw_allow: list[str] | None,
+    kw_deny: list[str] | None,
+    max_items: int = 5,
+) -> list[tuple[JobPosting, list[str]]]:
+    """
+    Workday bootstrap differs from GH/Lever:
+      - NO "ignore filters" absolute fallback
+      - strongly prefers early-career hints
+      - requires SWE/CS signal
+    """
+    picked: list[tuple[JobPosting, list[str]]] = []
+
+    def ok(j: JobPosting) -> bool:
+        return _workday_passes_filters(
+            text_blob=j.text_blob,
+            location=j.location,
+            loc_allow=loc_allow,
+            kw_allow=kw_allow,
+            kw_deny=kw_deny,
+        )
+
+    # Pass 1: early-career + eligible
+    for j in jobs:
+        if not ok(j):
+            continue
+        if not _EARLY_CAREER_HINT_RX.search(j.text_blob or ""):
+            continue
+        cats = _classify(j.text_blob) or ["General"]
+        picked.append((j, cats))
+        if len(picked) >= max_items:
+            return picked
+
+    # Pass 2: eligible (no early-career requirement)
+    for j in jobs:
+        if not ok(j):
+            continue
+        cats = _classify(j.text_blob) or ["General"]
+        picked.append((j, cats))
+        if len(picked) >= max_items:
+            return picked
+
+    return picked
+
+
 def _looks_like_not_found(err: Exception) -> bool:
     s = repr(err)
     # your client wraps HTTP errors like: "Greenhouse HTTP 404: ..." / "Lever HTTP 404: ..."
@@ -192,8 +319,10 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
         except Exception:
             return
 
-    gh = list(getattr(settings, "greenhouse_board_tokens", None) or [])
-    lv = list(getattr(settings, "lever_sites", None) or [])
+    gh = list(getattr(settings, "greenhouse_boards", None) or getattr(settings, "greenhouse_board_tokens", None) or [])
+    gh = [t for t in gh if isinstance(t, str) and t.strip() and t.strip() not in ("\\", "\\\\")]
+    lv = list(getattr(settings, "lever_sites", None) or getattr(settings, "lever_site_tokens", None) or [])
+    lv = [t for t in lv if isinstance(t, str) and t.strip() and t.strip() not in ("\\", "\\\\")]
     if not gh and not lv:
         return
 
@@ -263,7 +392,6 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 continue
 
             # Bootstrap post mode:
-            # Pick a sample first, post it, THEN checkpoint everything as seen.
             sample = _pick_bootstrap_sample(
                 jobs,
                 loc_allow=loc_allow,
@@ -272,7 +400,6 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 max_items=5,
             )
 
-            # Post sample
             for j, cats in sample:
                 if posts_left <= 0:
                     break
@@ -290,7 +417,6 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 posts_left -= 1
                 posted_total += 1
 
-            # Checkpoint everything so you don't spam old postings later
             await _mark_seen(db, jobs)
             print(f"[JOBS] bootstrap posted {len(sample)} and checkpointed {len(jobs)} for {source}.")
             continue
@@ -303,12 +429,8 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
             if await _has_seen(db, j.source, j.external_id):
                 continue
 
-            # Decide eligibility FIRST
             cats = _classify(j.text_blob) or []
-            if cats:
-                pass  # categorized
-            else:
-                # If it doesn't match any bucket, skip it (but still mark seen so we don't reprocess forever)
+            if not cats:
                 await _mark_seen(db, [j])
                 continue
 
@@ -320,7 +442,6 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 await _mark_seen(db, [j])
                 continue
 
-            # Post, then mark seen
             await channel.send(
                 embed=job_alert_embed(
                     settings,

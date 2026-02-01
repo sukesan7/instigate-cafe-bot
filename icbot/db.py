@@ -84,6 +84,19 @@ class Database:
                 """
             )
 
+            # Workday CXS discovery cache (additive; safe on existing DBs)
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS workday_cxs_cache (
+                    careers_url TEXT PRIMARY KEY,
+                    api_url TEXT NOT NULL,
+                    tenant TEXT,
+                    site TEXT,
+                    last_updated_unix INTEGER NOT NULL
+                )
+                """
+            )
+
             # Initialize stock value if missing
             cur = await db.execute("SELECT value FROM meta WHERE key='stock_value'")
             row = await cur.fetchone()

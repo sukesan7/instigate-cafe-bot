@@ -211,16 +211,32 @@ def job_alert(
       - Accepts either `title_text=` or `title=`
       - Accepts either `tags=` or `categories=` (alias)
     """
-    headline = (title_text or title or "").strip() or "New job posting"
-    src = (source or "").strip()
+    def _display_label(raw: str) -> str:
+        raw = (raw or "").strip()
+        if not raw:
+            return ""
+        # strip internal prefixes like "workday:RBC", "lever:palantir", "greenhouse:stripe"
+        if ":" in raw:
+            raw = raw.split(":", 1)[1].strip()
 
-    header = "💼 Job Alert" + (f" • {src}" if src else "")
+        # prettify slugs: "wintermute-trading" -> "Wintermute Trading"
+        raw = raw.replace("-", " ").strip()
+        if not raw:
+            return ""
+        return " ".join(w.capitalize() for w in raw.split())
+
+    headline = (title_text or title or "").strip() or "New job posting"
+
+    # Prefer company in the header (human-friendly), else derive from source
+    header_label = _display_label(company or "") or _display_label(source or "")
+    header = "💼 Job Alert" + (f" • {header_label}" if header_label else "")
+
     e = _base_embed(
         settings,
         title=header,
         kind=EMBED_KIND_JOBS,
         description=f"**{_truncate(headline, 250) or ''}**",
-        footer_hint=footer_hint or ("Job Tracking Software"),
+        footer_hint=footer_hint or ("Tracking System"),
     )
 
     # Make the embed clickable to the posting
@@ -242,3 +258,4 @@ def job_alert(
 
     _add_fields(e, fields)
     return e
+

@@ -4,13 +4,14 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from icbot.config import Settings
+from icbot.config import Settings, MAX_SNOWFLAKE
 from icbot.db import Database
 from icbot.app import ic
 from icbot.permissions import is_admin_or_allowed
 
 from icbot.tasks.ttc_alerts import poll_and_post_ttc
 from icbot.tasks.job_alerts import poll_and_post_jobs
+from icbot.tasks.jobs_workday_alerts import poll_and_post_workday_jobs
 from icbot.tasks.market_watch import poll_and_post_market_watch
 
 # Import features (registers commands onto /ic)
@@ -21,7 +22,7 @@ from icbot.features import sports  # noqa: F401
 from icbot.features.lc_leaderboard import ActivityTracker
 
 
-load_dotenv()
+load_dotenv(override=True)
 settings = Settings.from_env()
 db = Database(settings.db_path)
 
@@ -75,11 +76,9 @@ async def ic_channel_gate(interaction: discord.Interaction) -> bool:
     return True
 
 
-# Register the check in a version-friendly way
-if hasattr(bot.tree, "add_check"):
-    bot.tree.add_check(ic_channel_gate)
-else:
-    bot.tree.interaction_check = ic_channel_gate  # type: ignore[attr-defined]
+@bot.tree.interaction_check
+async def _ic_tree_interaction_check(interaction: discord.Interaction) -> bool:
+    return await ic_channel_gate(interaction)
 
 
 @bot.tree.error
@@ -112,6 +111,22 @@ async def _jobs_loop() -> None:
         await asyncio.sleep(max(60, int(getattr(settings, "jobs_poll_seconds", 600) or 600)))
 
 
+async def _workday_loop() -> None:
+    """Background poller for Workday sites (posts into the same jobs channel)."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            await poll_and_post_workday_jobs(bot)
+        except Exception as e:
+            print(f"[WORKDAY] loop error: {e!r}")
+        await asyncio.sleep(
+            max(
+                60,
+                int(getattr(settings, "workday_poll_seconds", 0) or getattr(settings, "jobs_poll_seconds", 600) or 600),
+            )
+        )
+
+
 async def _market_loop() -> None:
     """Background poller that posts real-market volatility alerts into STOCK_CHANNEL_ID (or MARKET_WATCH_CHANNEL_ID)."""
     await bot.wait_until_ready()
@@ -121,7 +136,6 @@ async def _market_loop() -> None:
         except Exception as e:
             print(f"[MARKET] loop error: {e!r}")
         await asyncio.sleep(max(10, int(getattr(settings, "market_watch_poll_seconds", 300) or 300)))
-
 
 
 @bot.event
@@ -162,8 +176,47 @@ async def on_ready():
     except Exception as e:
         print(f"[MARKET] config log error: {e!r}")
 
+    # Jobs config log (Greenhouse/Lever/Workday)
+    try:
+        j_poll = int(getattr(settings, "jobs_poll_seconds", 0) or 0)
+        gh = list(getattr(settings, "greenhouse_boards", None) or getattr(settings, "greenhouse_board_tokens", None) or [])
+        lv = list(getattr(settings, "lever_sites", None) or getattr(settings, "lever_site_tokens", None) or [])
+        wd = list(getattr(settings, "workday_sites", None) or [])
+
+        def _preview(items: list[str], max_n: int = 12) -> str:
+            items = [str(x) for x in items if str(x).strip() and str(x).strip() not in ("\\", "\\\\")]
+            if not items:
+                return "(none)"
+            head = ",".join(items[:max_n])
+            extra = len(items) - max_n
+            return f"{head},...(+{extra})" if extra > 0 else head
+
+        print(
+            "[JOBS] config: "
+            f"channel_id={int(getattr(settings, 'job_alerts_channel_id', 0) or 0)} "
+            f"poll={j_poll}s "
+            f"greenhouse={_preview(gh)} "
+            f"lever={_preview(lv)} "
+            f"workday={_preview(wd)}"
+        )
+    except Exception as e:
+        print(f"[JOBS] config log error: {e!r}")
+
     # Register the /ic root group
-    if settings.guild_id:
+    if getattr(settings, "guild_id_invalid", False):
+        raw = getattr(settings, "guild_id_raw", "")
+        raw_val = None
+        try:
+            raw_val = int(raw)
+        except Exception:
+            raw_val = raw
+        print(
+            f"[BOOT] ERROR: GUILD_ID parsed as {raw_val} (> {MAX_SNOWFLAKE}). "
+            f"This usually means your .env isn't being used (system env overrides) or the value is corrupted. "
+            f"Raw env GUILD_ID='{raw}'. Falling back to GLOBAL command sync."
+        )
+
+    if settings.guild_id and not getattr(settings, "guild_id_invalid", False):
         guild = discord.Object(id=settings.guild_id)
         if settings.force_guild_resync:
             bot.tree.clear_commands(guild=guild)
@@ -187,11 +240,19 @@ async def on_ready():
         if getattr(settings, "job_alerts_channel_id", 0):
             bot.loop.create_task(_jobs_loop())
 
+    # Start Workday poller once (separate task; posts into same jobs channel)
+    if not getattr(bot, "_workday_started", False):
+        bot._workday_started = True
+        if getattr(settings, "job_alerts_channel_id", 0) and (getattr(settings, "workday_sites", None) or []):
+            bot.loop.create_task(_workday_loop())
+
     # Start Market watch poller once
     if not getattr(bot, "_market_started", False):
         bot._market_started = True
         mw_enabled = bool(getattr(settings, "market_watch_enabled", False))
-        mw_channel = int(getattr(settings, "market_watch_channel_id", 0) or 0) or int(getattr(settings, "stock_channel_id", 0) or 0)
+        mw_channel = int(getattr(settings, "market_watch_channel_id", 0) or 0) or int(
+            getattr(settings, "stock_channel_id", 0) or 0
+        )
 
         if mw_enabled and mw_channel:
             bot.loop.create_task(_market_loop())
