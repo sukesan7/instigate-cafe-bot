@@ -12,29 +12,45 @@ from icbot.services.ttc_client import TTCFetchError, TTCItem, fetch_account_stat
 
 
 _MAJOR_PATTERNS = [
-    r"\bmajor delay\b",
-    r"\bmajor delays\b",
+    # "Hard" major-disruption signals
     r"\bno service\b",
     r"\bservice suspended\b",
     r"\bsuspended\b",
+    r"\bshutdown\b",
+    r"\bclosed\b",
+    r"\bclosure\b",
     r"\bnot running\b",
     r"\bno trains\b",
-    r"\btrack level\b",
     r"\btracks? blocked\b",
-    r"\bpower\b",
+    r"\btrack level\b",
+    r"\bderail\b",
+    r"\bcollision\b",
+    r"\bemergency\b",
     r"\bfire\b",
-    r"\bfatal\b",
-    r"\bdeath\b",
-    r"\binjury\b",
     r"\bpolice\b",
     r"\bsecurity\b",
     r"\binvestigation\b",
+    r"\bfatal\b",
+    r"\bdeath\b",
+    r"\binjury\b",
+    r"\bmedical\b",
+    r"\btrespass\b",
+    r"\bpower\b",
+    r"\bsignal\s+problem\b",
     r"\bshuttle\b",
     r"\bbypass\b",
-    r"\bemergency\b",
-    r"\bderail\b",
-    r"\bcollision\b",
-    r"\bsignal\s+problem\b",
+
+    # "Soft" major-disruption signals (these show up a lot in the live feed)
+    r"\bdelay\b",
+    r"\bdelays\b",
+    r"\bstoppage\b",
+    r"\bstopped\b",
+    r"\bholding\b",
+    r"\bheld\b",
+    r"\bdivert(?:ed|ing)\b",
+    r"\bdetour\b",
+    r"\bturning back\b",
+    r"\bshort turn\b",
 ]
 _MAJOR_RE = re.compile("|".join(_MAJOR_PATTERNS), re.IGNORECASE)
 
@@ -92,6 +108,11 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
 
     bootstrap_post_latest = bool(getattr(settings, "ttc_bootstrap_post_latest", False))
 
+    # Include reply statuses by default (TTC often posts live updates as replies).
+    include_replies = bool(getattr(settings, "ttc_include_replies", True))
+    include_reblogs = bool(getattr(settings, "ttc_include_reblogs", False))
+    debug = bool(getattr(settings, "ttc_debug", False))
+
     channel = await _resolve_channel(bot, channel_id)
     if channel is None:
         print("[TTC] cannot resolve TTC_ALERTS_CHANNEL_ID")
@@ -123,6 +144,8 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
                     since_id=last_id or None,
                     limit=20,
                     timeout_seconds=14,
+                    include_replies=include_replies,
+                    include_reblogs=include_reblogs,
                 )
                 last_err = None
                 break
@@ -137,6 +160,16 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
         if last_err is not None:
             print(f"[TTC] fetch failed: {last_err!r}")
             return
+
+        if debug:
+            major_ct = sum(1 for it in items if _is_major(it))
+            since_preview = (last_id[-8:] if last_id else 'none')
+            print(
+                f"[TTC] poll: fetched={len(items)} major={major_ct} "
+                f"level={poll_level} include_replies={include_replies} since_id={since_preview}"
+            )
+            if len(items) > 0 and poll_level == 'major' and major_ct == 0:
+                print("[TTC] NOTE: items fetched but none matched MAJOR patterns; set TTC_ALERT_LEVEL=all to see them.")
 
         if not items:
             return
@@ -174,6 +207,10 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
 
             # Checkpoint to the newest status id we saw
             await _set_meta(db, "ttc_last_status_id", items[0].guid)
+            if debug:
+                print(
+                    f"[TTC] bootstrap: checkpoint={items[0].guid[-8:]} posted_latest={bootstrap_post_latest} level={poll_level}"
+                )
             return
 
         # Normal operation: post each new status (oldest -> newest)

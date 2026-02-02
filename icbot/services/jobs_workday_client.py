@@ -163,6 +163,29 @@ def _heuristic_cxs_from_careers_url(careers_url: str, locale: str) -> WorkdayCxs
     return WorkdayCxsInfo(api_url=api, tenant=tenant, site=site, locale=locale)
 
 
+
+
+def _careers_prefix_from_careers_url(careers_url: str, locale: str) -> str:
+    """
+    Derive the web path prefix from a Workday careers URL.
+
+    Examples:
+      careers_url = https://cppib.wd10.myworkdayjobs.com/en-US/cppinvestments
+      -> prefix "/en-US/cppinvestments"
+
+    Some payloads return externalPath like "/job/..." (missing the locale/site prefix).
+    We use this prefix to construct a valid application URL.
+    """
+    u = urlparse(careers_url)
+    parts = [p for p in (u.path or "").split("/") if p]
+    if locale in parts:
+        i = parts.index(locale)
+        if i + 1 < len(parts):
+            return f"/{locale}/{parts[i+1]}"
+    # Fallback: if the path already ends with a site slug, keep last segment
+    if parts:
+        return "/" + "/".join(parts[:2]) if len(parts) >= 2 else "/" + parts[0]
+    return ""
 def _extract_jobs_from_payload(payload: dict[str, Any], site: WorkdaySite) -> list[JobItem]:
     jobs: list[JobItem] = []
     postings = payload.get("jobPostings") or payload.get("jobs") or []
@@ -181,7 +204,28 @@ def _extract_jobs_from_payload(payload: dict[str, Any], site: WorkdaySite) -> li
         else:
             u = urlparse(site.careers_url)
             host = f"{u.scheme}://{u.netloc}"
-            url = host + str(external_path) if external_path else site.careers_url
+            prefix = _careers_prefix_from_careers_url(site.careers_url, site.locale)
+
+            if not external_path:
+                url = site.careers_url
+            else:
+                ep = str(external_path).strip()
+
+                # Ensure leading slash for relative paths
+                if not ep.startswith("/"):
+                    ep = "/" + ep
+
+                # Common case: some tenants return "/job/..." (missing "/<locale>/<site>/")
+                # Example (broken): https://cppib.wd10.myworkdayjobs.com/job/...
+                # Fixed:          https://cppib.wd10.myworkdayjobs.com/en-US/cppinvestments/job/...
+                if ep.startswith("/job/") or ep == "/job" or ep.startswith("/job?"):
+                    if prefix and not prefix.endswith("/"):
+                        url = host + prefix + ep
+                    else:
+                        url = host + prefix + ep
+                else:
+                    # If the path already includes locale/site ("/en-US/<site>/..."), keep it.
+                    url = host + ep
 
         location = p.get("locationsText") or p.get("location") or ""
         if isinstance(location, list):

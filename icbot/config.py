@@ -139,6 +139,9 @@ class Settings:
     ttc_poll_seconds: int = 120
     ttc_alert_level: str = "major"
     ttc_bootstrap_post_latest: bool = False
+    ttc_include_replies: bool = True
+    ttc_include_reblogs: bool = False
+    ttc_debug: bool = False
 
     # Jobs alerts (Greenhouse/Lever)
     jobs_poll_seconds: int = 600
@@ -233,6 +236,9 @@ class Settings:
         ttc_poll_seconds = _to_int(os.getenv("TTC_POLL_SECONDS", "120"), 120)
         ttc_alert_level = os.getenv("TTC_ALERT_LEVEL", "major").strip().lower() or "major"
         ttc_bootstrap_post_latest = _to_bool(os.getenv("TTC_BOOTSTRAP_POST_LATEST", "false"), False)
+        ttc_include_replies = _to_bool(os.getenv("TTC_INCLUDE_REPLIES", "true"), True)
+        ttc_include_reblogs = _to_bool(os.getenv("TTC_INCLUDE_REBLOGS", "false"), False)
+        ttc_debug = _to_bool(os.getenv("TTC_DEBUG", "false"), False)
 
         jobs_poll_seconds = _to_int(os.getenv("JOBS_POLL_SECONDS", "600"), 600)
         greenhouse_boards = _to_str_list(os.getenv("GREENHOUSE_BOARDS", ""))
@@ -305,6 +311,9 @@ class Settings:
             ttc_poll_seconds=ttc_poll_seconds,
             ttc_alert_level=ttc_alert_level,
             ttc_bootstrap_post_latest=ttc_bootstrap_post_latest,
+            ttc_include_replies=ttc_include_replies,
+            ttc_include_reblogs=ttc_include_reblogs,
+            ttc_debug=ttc_debug,
             jobs_poll_seconds=jobs_poll_seconds,
             greenhouse_boards=greenhouse_boards,
             lever_sites=lever_sites,

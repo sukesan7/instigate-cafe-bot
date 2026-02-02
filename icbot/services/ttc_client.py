@@ -93,6 +93,8 @@ async def fetch_account_status_items(
     since_id: Optional[str] = None,
     limit: int = 20,
     timeout_seconds: int = 14,
+    include_replies: bool = True,
+    include_reblogs: bool = False,
 ) -> List[TTCItem]:
     """
     Fetch new statuses for an account. Returns newest-first (Mastodon default).
@@ -105,9 +107,13 @@ async def fetch_account_status_items(
     url = f"{api_base}/api/v1/accounts/{account_id}/statuses"
     params: Dict[str, str] = {
         "limit": str(max(1, min(int(limit), 40))),
-        "exclude_replies": "true",
-        "exclude_reblogs": "true",
     }
+    # Many TTC updates are posted as replies to earlier advisories.
+    # If you exclude replies, you can miss most of the live feed.
+    if not include_replies:
+        params["exclude_replies"] = "true"
+    if not include_reblogs:
+        params["exclude_reblogs"] = "true"
     if since_id:
         params["since_id"] = str(since_id)
 

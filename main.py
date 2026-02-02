@@ -315,6 +315,30 @@ async def on_ready():
     except Exception as e:
         print(f"[JOBS] config log error: {e!r}")
 
+    # TTC config log
+    try:
+        ttc_channel = int(getattr(settings, "ttc_alerts_channel_id", 0) or 0)
+        ttc_poll = int(getattr(settings, "ttc_poll_seconds", 0) or 0)
+        ttc_level = str(getattr(settings, "ttc_alert_level", "major") or "major").strip().lower()
+        ttc_base = str(getattr(settings, "ttc_mastodon_base", "") or "").strip()
+        ttc_acct = str(getattr(settings, "ttc_mastodon_acct", "") or "").strip()
+        ttc_replies = bool(getattr(settings, "ttc_include_replies", True))
+        print(
+            "[TTC] config: "
+            f"channel_id={ttc_channel} "
+            f"poll={ttc_poll}s "
+            f"level={ttc_level} "
+            f"include_replies={ttc_replies} "
+            f"base={ttc_base or '(none)'} "
+            f"acct={ttc_acct or '(none)'}"
+        )
+        if not ttc_channel:
+            print("[TTC] WARNING: no TTC channel id set (TTC_ALERTS_CHANNEL_ID).")
+        if not ttc_base or not ttc_acct:
+            print("[TTC] WARNING: missing TTC_MASTODON_BASE or TTC_MASTODON_ACCT.")
+    except Exception as e:
+        print(f"[TTC] config log error: {e!r}")
+
     # Register the /ic root group
     if getattr(settings, "guild_id_invalid", False):
         raw = getattr(settings, "guild_id_raw", "")
