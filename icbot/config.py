@@ -173,6 +173,23 @@ class Settings:
     market_watch_tickers: list[str] | None = None
     market_watch_cooldown_minutes: int = 30
 
+    # Daily market summary (posts at a scheduled local time)
+    market_daily_report_enabled: bool = False
+    market_daily_report_channel_id: int = 0
+    market_daily_report_time: str = "16:30"  # HH:MM in market_daily_report_tz
+    market_daily_report_tz: str = "America/Toronto"
+    market_daily_report_top_n: int = 8
+    market_daily_report_tickers: list[str] | None = None
+
+    # Bitcoin address watch (e.g., "Satoshi-era" / known whale addresses)
+    btc_watch_enabled: bool = False
+    btc_watch_poll_seconds: int = 300
+    btc_watch_channel_id: int = 0
+    btc_watch_label: str = "BTC Watch"
+    btc_watch_addresses: list[str] | None = None
+    btc_esplora_base_url: str = ""  # defaults to blockstream.info/api
+    btc_watch_cooldown_minutes: int = 30
+
     # DB
     db_path: str = "ic_stock.db"
 
@@ -246,6 +263,23 @@ class Settings:
         market_watch_tickers = _to_str_list(os.getenv("MARKET_WATCH_TICKERS", ""))
         market_watch_cooldown_minutes = _to_int(os.getenv("MARKET_WATCH_COOLDOWN_MINUTES", "30"), 30)
 
+        # Daily market summary
+        market_daily_report_enabled = _to_bool(os.getenv("MARKET_DAILY_REPORT_ENABLED", "false"), False)
+        market_daily_report_channel_id = _to_int(os.getenv("MARKET_DAILY_REPORT_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
+        market_daily_report_time = os.getenv("MARKET_DAILY_REPORT_TIME", "16:30").strip() or "16:30"
+        market_daily_report_tz = os.getenv("MARKET_DAILY_REPORT_TZ", "America/Toronto").strip() or "America/Toronto"
+        market_daily_report_top_n = _to_int(os.getenv("MARKET_DAILY_REPORT_TOP_N", "8"), 8)
+        market_daily_report_tickers = _to_str_list(os.getenv("MARKET_DAILY_REPORT_TICKERS", ""))
+
+        # Bitcoin address watch
+        btc_watch_enabled = _to_bool(os.getenv("BTC_WATCH_ENABLED", "false"), False)
+        btc_watch_poll_seconds = _to_int(os.getenv("BTC_WATCH_POLL_SECONDS", "300"), 300)
+        btc_watch_channel_id = _to_int(os.getenv("BTC_WATCH_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
+        btc_watch_label = os.getenv("BTC_WATCH_LABEL", "BTC Watch").strip() or "BTC Watch"
+        btc_watch_addresses = _to_str_list(os.getenv("BTC_WATCH_ADDRESSES", ""))
+        btc_esplora_base_url = os.getenv("BTC_ESPLORA_BASE_URL", "").strip()
+        btc_watch_cooldown_minutes = _to_int(os.getenv("BTC_WATCH_COOLDOWN_MINUTES", "30"), 30)
+
         db_path = os.getenv("DB_PATH", "ic_stock.db").strip() or "ic_stock.db"
 
         # Default workday poll seconds to jobs poll seconds if unset
@@ -294,5 +328,18 @@ class Settings:
             market_watch_stock_move_pct=market_watch_stock_move_pct,
             market_watch_tickers=market_watch_tickers,
             market_watch_cooldown_minutes=market_watch_cooldown_minutes,
+            market_daily_report_enabled=market_daily_report_enabled,
+            market_daily_report_channel_id=market_daily_report_channel_id,
+            market_daily_report_time=market_daily_report_time,
+            market_daily_report_tz=market_daily_report_tz,
+            market_daily_report_top_n=market_daily_report_top_n,
+            market_daily_report_tickers=market_daily_report_tickers,
+            btc_watch_enabled=btc_watch_enabled,
+            btc_watch_poll_seconds=btc_watch_poll_seconds,
+            btc_watch_channel_id=btc_watch_channel_id,
+            btc_watch_label=btc_watch_label,
+            btc_watch_addresses=btc_watch_addresses,
+            btc_esplora_base_url=btc_esplora_base_url,
+            btc_watch_cooldown_minutes=btc_watch_cooldown_minutes,
             db_path=db_path,
         )
