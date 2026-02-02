@@ -10,7 +10,6 @@ from icbot.db import Database
 from icbot.embeds import job_alert as job_alert_embed
 from icbot.services.jobs_workday_client import WorkdaySite, fetch_workday_jobs, parse_workday_sites
 
-# Reuse the same filtering + job_seen DB helpers used by Greenhouse/Lever
 from icbot.tasks.job_alerts import (
     _classify,
     _has_seen,
@@ -19,6 +18,19 @@ from icbot.tasks.job_alerts import (
     _source_has_any,
     _workday_passes_filters,
 )
+
+def _jobs_channel_id(settings) -> int:
+    """
+    Back-compat: accept either JOB_ALERTS_CHANNEL_ID (preferred) or JOBS_CHANNEL_ID.
+    """
+    for attr in ("job_alerts_channel_id", "jobs_channel_id", "jobs_channel", "jobs_channelid"):
+        try:
+            v = int(getattr(settings, attr, 0) or 0)
+            if v:
+                return v
+        except Exception:
+            continue
+    return 0
 
 _CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 
@@ -68,7 +80,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
     if settings is None or db is None:
         return
 
-    channel_id = int(getattr(settings, "job_alerts_channel_id", 0) or 0)
+    channel_id = _jobs_channel_id(settings)
     if not channel_id:
         return
 

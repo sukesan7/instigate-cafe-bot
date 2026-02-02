@@ -21,8 +21,8 @@ from icbot.features import stock  # noqa: F401
 from icbot.features import blackjack  # noqa: F401
 from icbot.features import lc_leaderboard  # noqa: F401
 from icbot.features import sports  # noqa: F401
-from icbot.features import jobs  # noqa: F401
 from icbot.features import report  # noqa: F401
+from icbot.features import jobs  # noqa: F401
 from icbot.features.lc_leaderboard import ActivityTracker
 
 
@@ -105,30 +105,62 @@ async def _ttc_loop() -> None:
 
 
 async def _jobs_loop() -> None:
-    """Background poller that posts job alerts into JOB_ALERTS_CHANNEL_ID."""
+    """Background poller that posts job alerts into the configured jobs channel."""
+    import time
+    import traceback
+
     await bot.wait_until_ready()
+
+    # Run immediately once, then sleep between cycles.
+    print(f"[JOBS] loop started (poll={int(getattr(settings, 'jobs_poll_seconds', 600) or 600)}s)")
+
     while not bot.is_closed():
+        cycle_start = time.time()
         try:
+            print("[JOBS] cycle begin")
             await poll_and_post_jobs(bot)
+            elapsed = time.time() - cycle_start
+            print(f"[JOBS] cycle end (elapsed={elapsed:.1f}s)")
+        except asyncio.CancelledError:
+            print("[JOBS] loop cancelled")
+            raise
         except Exception as e:
-            print(f"[JOBS] loop error: {e!r}")
-        await asyncio.sleep(max(60, int(getattr(settings, "jobs_poll_seconds", 600) or 600)))
+            print(f"[JOBS] loop error: {type(e).__name__}: {e!r}")
+            traceback.print_exc()
+
+        poll_s = int(getattr(settings, "jobs_poll_seconds", 600) or 600)
+        poll_s = max(60, poll_s)
+        await asyncio.sleep(poll_s)
 
 
 async def _workday_loop() -> None:
     """Background poller for Workday sites (posts into the same jobs channel)."""
+    import time
+    import traceback
+
     await bot.wait_until_ready()
+
+    poll_s0 = int(getattr(settings, "workday_poll_seconds", 0) or getattr(settings, "jobs_poll_seconds", 600) or 600)
+    print(f"[WORKDAY] loop started (poll={poll_s0}s)")
+
     while not bot.is_closed():
+        cycle_start = time.time()
         try:
+            print("[WORKDAY] cycle begin")
             await poll_and_post_workday_jobs(bot)
+            elapsed = time.time() - cycle_start
+            print(f"[WORKDAY] cycle end (elapsed={elapsed:.1f}s)")
+        except asyncio.CancelledError:
+            print("[WORKDAY] loop cancelled")
+            raise
         except Exception as e:
-            print(f"[WORKDAY] loop error: {e!r}")
-        await asyncio.sleep(
-            max(
-                60,
-                int(getattr(settings, "workday_poll_seconds", 0) or getattr(settings, "jobs_poll_seconds", 600) or 600),
-            )
-        )
+            print(f"[WORKDAY] loop error: {type(e).__name__}: {e!r}")
+            traceback.print_exc()
+
+        poll_s = int(getattr(settings, "workday_poll_seconds", 0) or getattr(settings, "jobs_poll_seconds", 600) or 600)
+        poll_s = max(60, poll_s)
+        await asyncio.sleep(poll_s)
+
 
 
 async def _market_loop() -> None:
@@ -274,7 +306,7 @@ async def on_ready():
 
         print(
             "[JOBS] config: "
-            f"channel_id={int(getattr(settings, 'job_alerts_channel_id', 0) or 0)} "
+            f"channel_id={int(getattr(settings, 'job_alerts_channel_id', 0) or getattr(settings, 'jobs_channel_id', 0) or 0)} "
             f"poll={j_poll}s "
             f"greenhouse={_preview(gh)} "
             f"lever={_preview(lv)} "
@@ -318,14 +350,30 @@ async def on_ready():
     # Start Jobs poller once
     if not getattr(bot, "_jobs_started", False):
         bot._jobs_started = True
-        if getattr(settings, "job_alerts_channel_id", 0):
+        jobs_channel_id = int(
+            getattr(settings, "job_alerts_channel_id", 0)
+            or getattr(settings, "jobs_channel_id", 0)
+            or 0
+        )
+        if jobs_channel_id:
             bot.loop.create_task(_jobs_loop())
+            print(f"[JOBS] loop scheduled (channel_id={jobs_channel_id})")
+        else:
+            print("[JOBS] WARNING: no jobs channel id set (JOB_ALERTS_CHANNEL_ID or JOBS_CHANNEL_ID).")
 
     # Start Workday poller once (separate task; posts into same jobs channel)
     if not getattr(bot, "_workday_started", False):
         bot._workday_started = True
-        if getattr(settings, "job_alerts_channel_id", 0) and (getattr(settings, "workday_sites", None) or []):
+        jobs_channel_id = int(
+            getattr(settings, "job_alerts_channel_id", 0)
+            or getattr(settings, "jobs_channel_id", 0)
+            or 0
+        )
+        if jobs_channel_id and (getattr(settings, "workday_sites", None) or []):
             bot.loop.create_task(_workday_loop())
+            print(f"[WORKDAY] loop scheduled (channel_id={jobs_channel_id})")
+        elif getattr(settings, "workday_sites", None) or []:
+            print("[WORKDAY] WARNING: workday_sites set but no jobs channel id configured.")
 
     # Start Market watch poller once
     if not getattr(bot, "_market_started", False):

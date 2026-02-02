@@ -9,12 +9,27 @@ import discord
 from icbot.embeds import job_alert as job_alert_embed
 from icbot.services.jobs_ats_client import JobPosting, fetch_greenhouse_jobs, fetch_lever_jobs
 
+def _jobs_channel_id(settings) -> int:
+    """
+    Back-compat: accept either JOB_ALERTS_CHANNEL_ID (preferred) or JOBS_CHANNEL_ID.
+    The settings object may expose either `job_alerts_channel_id` or `jobs_channel_id`.
+    """
+    for attr in ("job_alerts_channel_id", "jobs_channel_id", "jobs_channel", "jobs_channelid"):
+        try:
+            v = int(getattr(settings, attr, 0) or 0)
+            if v:
+                return v
+        except Exception:
+            continue
+    return 0
+
+
 
 def _now_unix() -> int:
     return int(datetime.now(tz=timezone.utc).timestamp())
 
 
-# ---- Classification / filtering ----
+# ---- Classification (labels only; NOT a filter gate) ----
 
 _CAT = {
     "Software Engineering Roles": [
@@ -44,6 +59,7 @@ _CAT = {
         r"\bmachine\s+learning\b|\bml\b",
         r"\bdata\s+scientist\b|\bdata\s+science\b",
         r"\bsecurity\b|\bcyber\b",
+        r"\bquant\b|\btrading\b",
     ],
     "Electrical Engineering Roles": [
         r"\belectrical\b|\bee\b",
@@ -80,6 +96,8 @@ def _classify(text_blob: str) -> list[str]:
     return [name for name, rx in _CAT_RE.items() if rx.search(t)]
 
 
+# ---- Shared allow/deny filters (driven by .env via settings) ----
+
 def _keyword_passes(text: str, allowlist: list[str] | None, denylist: list[str] | None) -> bool:
     t = (text or "").lower()
     if allowlist and not any(a.lower() in t for a in allowlist if a):
@@ -96,9 +114,53 @@ def _location_passes(location: str, allowlist: list[str] | None) -> bool:
     return any(tok.lower() in loc for tok in allowlist if tok)
 
 
+def _location_passes_smart(location: str, text_blob: str, allowlist: list[str] | None) -> bool:
+    """
+    For ATS providers, location can be missing or generic. This checks:
+      - explicit location field
+      - and falls back to scanning the blob (to catch "remote" mentions)
+    """
+    if not allowlist:
+        return True
+
+    loc = (location or "").strip().lower()
+    blob = (text_blob or "").lower()
+
+    # Normalize "not listed" to empty
+    if not loc or "not listed" in loc:
+        # If allowlist contains "remote", allow when blob contains remote.
+        if any(a.strip().lower() == "remote" for a in allowlist if a) and "remote" in blob:
+            return True
+        return any(tok.lower() in blob for tok in allowlist if tok)
+
+    if any(tok.lower() in loc for tok in allowlist if tok):
+        return True
+
+    # Fallback: sometimes "Remote" is in the description/title
+    if any(a.strip().lower() == "remote" for a in allowlist if a) and "remote" in blob:
+        return True
+
+    return any(tok.lower() in blob for tok in allowlist if tok)
+
+
+def job_matches_env_filters(
+    *,
+    text_blob: str,
+    location: str,
+    loc_allow: list[str] | None,
+    kw_allow: list[str] | None,
+    kw_deny: list[str] | None,
+) -> bool:
+    """Single source of truth for GH/Lever filtering based on .env lists."""
+    if not _keyword_passes(text_blob, kw_allow, kw_deny):
+        return False
+    if not _location_passes_smart(location, text_blob, loc_allow):
+        return False
+    return True
+
+
 # ---- Workday-specific filtering helpers ----
-# Why these exist:
-# Workday bootstrap (proof-of-life) must NOT ignore filters, otherwise you post Audit/Senior/etc.
+# Workday bootstrap must NOT ignore filters (otherwise you post Audit/etc).
 # Workday also sometimes has blank location → don't auto-fail.
 
 _SENIORITY_RX = re.compile(
@@ -155,7 +217,6 @@ def _workday_passes_filters(
     if _SENIORITY_RX.search(t):
         return False
 
-    # denylist (kept for things like recruiter/hr/etc)
     if kw_deny and any(d.lower() in t for d in kw_deny if d):
         return False
 
@@ -165,10 +226,7 @@ def _workday_passes_filters(
     if not _WORKDAY_SWE_SIGNAL_RX.search(t):
         return False
 
-    # If you provided an allowlist, keep it as an extra gate — but don't let it be the *only* gate.
-    # This keeps behavior closer to GH/Lever while still preventing non-SWE spam.
     if kw_allow and not any(a.lower() in t for a in kw_allow if a):
-        # allowlist didn't match; still allow if it looks clearly early-career SWE/CS
         if not _EARLY_CAREER_HINT_RX.search(t):
             return False
 
@@ -183,12 +241,7 @@ def _pick_bootstrap_sample_workday(
     kw_deny: list[str] | None,
     max_items: int = 5,
 ) -> list[tuple[JobPosting, list[str]]]:
-    """
-    Workday bootstrap differs from GH/Lever:
-      - NO "ignore filters" absolute fallback
-      - strongly prefers early-career hints
-      - requires SWE/CS signal
-    """
+    """Workday bootstrap is STRICT: never ignores filters."""
     picked: list[tuple[JobPosting, list[str]]] = []
 
     def ok(j: JobPosting) -> bool:
@@ -211,7 +264,7 @@ def _pick_bootstrap_sample_workday(
         if len(picked) >= max_items:
             return picked
 
-    # Pass 2: eligible (no early-career requirement)
+    # Pass 2: eligible
     for j in jobs:
         if not ok(j):
             continue
@@ -225,7 +278,6 @@ def _pick_bootstrap_sample_workday(
 
 def _looks_like_not_found(err: Exception) -> bool:
     s = repr(err)
-    # your client wraps HTTP errors like: "Greenhouse HTTP 404: ..." / "Lever HTTP 404: ..."
     return "HTTP 404" in s or " 404" in s or "Job not found" in s or "Document not found" in s
 
 
@@ -244,8 +296,46 @@ async def _has_seen(db, source: str, external_id: str) -> bool:
     return row is not None
 
 
+# Schema-adaptive insert. We try to store richer columns if the table supports them.
+_MARK_SEEN_MODE: str | None = None  # "extended" | "basic"
+
+
 async def _mark_seen(db, jobs: list[JobPosting]) -> None:
+    global _MARK_SEEN_MODE
     now = _now_unix()
+
+    if not jobs:
+        return
+
+    # Try extended once; if it fails (missing columns), fall back to basic permanently.
+    if _MARK_SEEN_MODE in (None, "extended"):
+        try:
+            stmts_ext = [
+                (
+                    "INSERT OR IGNORE INTO job_seen("
+                    "source, external_id, first_seen_unix, posted_unix, company, location, title, url, text_blob"
+                    ") VALUES(?,?,?,?,?,?,?,?,?)",
+                    (
+                        j.source,
+                        j.external_id,
+                        now,
+                        int(getattr(j, "posted_unix", 0) or 0),
+                        j.company,
+                        j.location,
+                        j.title,
+                        j.url,
+                        j.text_blob,
+                    ),
+                )
+                for j in jobs
+            ]
+            await db.execute_many(stmts_ext)
+            _MARK_SEEN_MODE = "extended"
+            return
+        except Exception:
+            _MARK_SEEN_MODE = "basic"
+
+    # Basic insert (compatible with older schema)
     stmts = [
         (
             "INSERT OR IGNORE INTO job_seen(source, external_id, first_seen_unix, title, url) VALUES(?,?,?,?,?)",
@@ -253,8 +343,7 @@ async def _mark_seen(db, jobs: list[JobPosting]) -> None:
         )
         for j in jobs
     ]
-    if stmts:
-        await db.execute_many(stmts)
+    await db.execute_many(stmts)
 
 
 def _pick_bootstrap_sample(
@@ -266,39 +355,26 @@ def _pick_bootstrap_sample(
     max_items: int = 5,
 ) -> list[tuple[JobPosting, list[str]]]:
     """
-    Try to pick a filtered sample first; if nothing matches, fall back to newest
-    jobs and label them as "General" so you still get a proof-of-life post.
+    STRICT bootstrap:
+      - Never ignores filters
+      - If nothing matches, returns [] (caller will just checkpoint silently)
     """
     picked: list[tuple[JobPosting, list[str]]] = []
 
-    # Pass 1: strict filtering + category classification
     for j in jobs:
-        cats = _classify(j.text_blob)
-        if not cats:
-            continue
-        if not _location_passes(j.location, loc_allow):
-            continue
-        if not _keyword_passes(j.text_blob, kw_allow, kw_deny):
-            continue
-        picked.append((j, cats))
-        if len(picked) >= max_items:
-            return picked
-
-    # Pass 2: relaxed fallback (still respects location/keyword filters), allow uncategorized
-    for j in jobs:
-        if not _location_passes(j.location, loc_allow):
-            continue
-        if not _keyword_passes(j.text_blob, kw_allow, kw_deny):
+        if not job_matches_env_filters(
+            text_blob=j.text_blob,
+            location=j.location,
+            loc_allow=loc_allow,
+            kw_allow=kw_allow,
+            kw_deny=kw_deny,
+        ):
             continue
         cats = _classify(j.text_blob) or ["General"]
         picked.append((j, cats))
         if len(picked) >= max_items:
             return picked
 
-    # Pass 3: absolute fallback: newest few, ignore filters, label uncategorized
-    for j in jobs[:max_items]:
-        cats = _classify(j.text_blob) or ["General"]
-        picked.append((j, cats))
     return picked
 
 
@@ -308,7 +384,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
     if settings is None or db is None:
         return
 
-    channel_id = int(getattr(settings, "job_alerts_channel_id", 0) or 0)
+    channel_id = _jobs_channel_id(settings)
     if not channel_id:
         return
 
@@ -326,13 +402,12 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
     if not gh and not lv:
         return
 
-    # Optional filters
+    # Optional filters (shared env vars)
     loc_allow = list(getattr(settings, "jobs_location_allowlist", None) or []) or None
     kw_allow = list(getattr(settings, "jobs_keywords_allowlist", None) or []) or None
     kw_deny = list(getattr(settings, "jobs_keywords_denylist", None) or []) or None
     bootstrap_post = bool(getattr(settings, "jobs_bootstrap_post", False))
 
-    # Track bad ATS sources during runtime to avoid repeated 404 spam
     bad_sources: set[str] = getattr(bot, "_jobs_bad_sources", set())
     setattr(bot, "_jobs_bad_sources", bad_sources)
 
@@ -368,7 +443,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 print(f"[JOBS] lever fetch failed: {e!r}")
 
     if not all_jobs:
-        print("[JOBS] fetched 0 postings (all sources empty or filtered/invalid).")
+        print("[JOBS] fetched 0 postings (all sources empty or invalid).")
         return
 
     by_source: dict[str, list[JobPosting]] = {}
@@ -386,12 +461,11 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
         # ---- First time we ever see this source ----
         if not has_any:
             if not bootstrap_post:
-                # Silent baseline: mark everything as seen and do NOT post.
                 await _mark_seen(db, jobs)
                 print(f"[JOBS] baseline checkpointed {len(jobs)} jobs for {source} (no bootstrap post).")
                 continue
 
-            # Bootstrap post mode:
+            # STRICT bootstrap: only post matches
             sample = _pick_bootstrap_sample(
                 jobs,
                 loc_allow=loc_allow,
@@ -418,7 +492,10 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 posted_total += 1
 
             await _mark_seen(db, jobs)
-            print(f"[JOBS] bootstrap posted {len(sample)} and checkpointed {len(jobs)} for {source}.")
+            if sample:
+                print(f"[JOBS] bootstrap posted {len(sample)} and checkpointed {len(jobs)} for {source}.")
+            else:
+                print(f"[JOBS] bootstrap posted 0 (no matches) and checkpointed {len(jobs)} for {source}.")
             continue
 
         # ---- Normal operation: only new unseen jobs ----
@@ -429,18 +506,18 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
             if await _has_seen(db, j.source, j.external_id):
                 continue
 
-            cats = _classify(j.text_blob) or []
-            if not cats:
+            # Shared env filters drive whether we POST.
+            if not job_matches_env_filters(
+                text_blob=j.text_blob,
+                location=j.location,
+                loc_allow=loc_allow,
+                kw_allow=kw_allow,
+                kw_deny=kw_deny,
+            ):
                 await _mark_seen(db, [j])
                 continue
 
-            if not _location_passes(j.location, loc_allow):
-                await _mark_seen(db, [j])
-                continue
-
-            if not _keyword_passes(j.text_blob, kw_allow, kw_deny):
-                await _mark_seen(db, [j])
-                continue
+            cats = _classify(j.text_blob) or ["General"]
 
             await channel.send(
                 embed=job_alert_embed(
