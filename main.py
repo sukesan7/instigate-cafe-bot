@@ -13,6 +13,8 @@ from icbot.tasks.ttc_alerts import poll_and_post_ttc
 from icbot.tasks.job_alerts import poll_and_post_jobs
 from icbot.tasks.jobs_workday_alerts import poll_and_post_workday_jobs
 from icbot.tasks.market_watch import poll_and_post_market_watch
+from icbot.tasks.market_daily_report import post_daily_market_report
+from icbot.tasks.btc_watch import poll_and_post_btc_watch
 
 # Import features (registers commands onto /ic)
 from icbot.features import stock  # noqa: F401
@@ -138,6 +140,83 @@ async def _market_loop() -> None:
         await asyncio.sleep(max(10, int(getattr(settings, "market_watch_poll_seconds", 300) or 300)))
 
 
+def _parse_hhmm(raw: str, default_h: int = 16, default_m: int = 30) -> tuple[int, int]:
+    raw = (raw or "").strip()
+    if not raw:
+        return default_h, default_m
+    try:
+        if ":" in raw:
+            h, m = raw.split(":", 1)
+            return int(h), int(m)
+        # allow "1630"
+        if len(raw) == 4 and raw.isdigit():
+            return int(raw[:2]), int(raw[2:])
+    except Exception:
+        pass
+    return default_h, default_m
+
+
+def _seconds_until_next(hh: int, mm: int, tz_name: str) -> float:
+    """Seconds until next (hh:mm) in the given timezone."""
+    from datetime import datetime, timedelta
+
+    try:
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(tz_name)
+        now = datetime.now(tz)
+    except Exception:
+        now = datetime.utcnow()
+        tz = None
+
+    if tz is not None:
+        target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    else:
+        target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+
+    if now >= target:
+        target = target + timedelta(days=1)
+
+    return max(1.0, (target - now).total_seconds())
+
+
+async def _daily_market_report_loop() -> None:
+    """Posts a daily market recap at a scheduled time (e.g. 16:30 America/Toronto)."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            enabled = bool(getattr(settings, "market_daily_report_enabled", False))
+            if not enabled:
+                await asyncio.sleep(300)
+                continue
+
+            hh, mm = _parse_hhmm(str(getattr(settings, "market_daily_report_time", "16:30") or "16:30"))
+            tz_name = str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto")
+
+            # Sleep until the next scheduled time
+            await asyncio.sleep(_seconds_until_next(hh, mm, tz_name))
+
+            # Post (task internally dedupes per local date)
+            await post_daily_market_report(bot)
+
+            # Small backoff to avoid immediate re-run on edge cases
+            await asyncio.sleep(60)
+        except Exception as e:
+            print(f"[DAILY] loop error: {e!r}")
+            await asyncio.sleep(120)
+
+
+async def _btc_watch_loop() -> None:
+    """Polls watched BTC addresses and posts alerts on movement."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            await poll_and_post_btc_watch(bot)
+        except Exception as e:
+            print(f"[BTC] loop error: {e!r}")
+        await asyncio.sleep(max(30, int(getattr(settings, "btc_watch_poll_seconds", 300) or 300)))
+
+
 @bot.event
 async def on_ready():
     await db.init()
@@ -258,6 +337,20 @@ async def on_ready():
             bot.loop.create_task(_market_loop())
         elif mw_enabled and not mw_channel:
             print("[MARKET] enabled=true but no channel_id configured (set MARKET_WATCH_CHANNEL_ID or STOCK_CHANNEL_ID)")
+
+    # Start Daily market report loop once
+    if not getattr(bot, "_daily_report_started", False):
+        bot._daily_report_started = True
+        dr_enabled = bool(getattr(settings, "market_daily_report_enabled", False))
+        if dr_enabled:
+            bot.loop.create_task(_daily_market_report_loop())
+
+    # Start BTC address watch loop once
+    if not getattr(bot, "_btc_watch_started", False):
+        bot._btc_watch_started = True
+        bw_enabled = bool(getattr(settings, "btc_watch_enabled", False))
+        if bw_enabled:
+            bot.loop.create_task(_btc_watch_loop())
 
     print(f"Logged in as {bot.user} (id={bot.user.id})")
 
