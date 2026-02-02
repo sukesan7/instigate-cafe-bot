@@ -70,11 +70,46 @@ Automatically polls public job boards and posts matching roles into a `#job-aler
 - Sources supported:
   - **Greenhouse** (board tokens)
   - **Lever** (site slugs)
+  - **Workday** (company career sites)
 - Filtered by location + keywords (configurable)
 - Anti-spam safeguards:
   - Per-cycle posting cap (prevents flooding)
   - Checkpointing so old postings aren’t re-posted
 - Optional “bootstrap” mode (test servers) to post a small sample on first run
+
+---
+
+### 📉 Market Watch (Volatility Alerts)
+Automatically polls a lightweight quotes endpoint and posts alerts for:
+
+- **Fear / volatility index** spikes (VIX)
+- Big index moves (SPY/QQQ)
+- Big moves in a configurable watchlist (defaults include FAANG+, PLTR, select biotech)
+
+Configure with `MARKET_WATCH_*` environment variables.
+
+---
+
+### 📊 Daily Market Report (Scheduled Recap)
+Posts a daily recap at a scheduled time (default **16:30 America/Toronto**) including:
+
+- Indices snapshot
+- Volatility snapshot (VIX / VIX9D / VVIX when available)
+- Top gainers/losers from your watchlist
+- Crypto Fear & Greed (alternative.me)
+- The fictitious **Instigate Cafe Stock** close ($IC)
+
+Configure with `MARKET_DAILY_REPORT_*`.
+
+---
+
+### ₿ Bitcoin Address Watch ("Satoshi" / whales)
+Optional on-chain watcher that posts an alert when any watched BTC address shows new activity.
+
+- Uses an Esplora-compatible API (defaults to Blockstream)
+- You provide the addresses via `BTC_WATCH_ADDRESSES`
+
+Configure with `BTC_WATCH_*`.
 
 ---
 
@@ -140,10 +175,16 @@ instigate-cafe-bot/
     services/
       ttc_client.py        # TTC RSS fetch + parse
       jobs_ats_client.py   # Greenhouse + Lever fetch + normalize
+      yahoo_quotes.py      # quote fetcher (used by market watch + daily report)
+      crypto_fng.py        # crypto fear & greed (alternative.me)
+      btc_esplora.py       # BTC address watcher (Esplora API)
 
     tasks/
       ttc_alerts.py        # background poller that posts TTC alerts
       job_alerts.py        # background poller that posts job alerts
+      market_watch.py      # background poller that posts volatility alerts
+      market_daily_report.py  # scheduled daily recap
+      btc_watch.py         # BTC address movement alerts
 ```
 
 ---
