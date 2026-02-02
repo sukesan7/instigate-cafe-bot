@@ -17,7 +17,7 @@ class JobPosting:
     location: str
     url: str
     posted_unix: int
-    text_blob: str        # title + dept + description (for filtering)
+    text_blob: str        # title + team/dept + location (for filtering)
 
 
 def _now_unix() -> int:
@@ -92,7 +92,7 @@ async def fetch_greenhouse_jobs(
 
             content = str(j.get("content") or "")
             posted_unix = _parse_iso8601_to_unix(j.get("updated_at") or j.get("created_at"))
-            blob = " ".join([title, dept_s, loc, content]).strip()
+            blob = " ".join([title, dept_s, loc]).strip()
 
             if not job_id or not url_job:
                 continue
@@ -167,7 +167,7 @@ async def fetch_lever_jobs(
                 content = str(j.get("description") or "")
 
             posted_unix = _parse_iso8601_to_unix(j.get("createdAt"))
-            blob = " ".join([title, team, dept, commitment, loc, content]).strip()
+            blob = " ".join([title, team, dept, commitment, loc]).strip()
 
             if not job_id or not url_job:
                 continue

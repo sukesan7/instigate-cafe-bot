@@ -116,7 +116,7 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
             continue
 
         # If DB doesn't have blob/location, build a fallback blob from what we have.
-        blob2 = " ".join([title, company, location, source, str(blob)]).strip()
+        blob2 = " ".join([title, company, location, source]).strip()
 
         if not job_matches_env_filters(
             text_blob=blob2,
