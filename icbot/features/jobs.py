@@ -152,11 +152,11 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
     pages = _chunk(body, limit=3800)
 
     embed = discord.Embed(title=f"🧰 SWE/CS Job Postings (latest {matched})", description=pages[0])
-    embed.set_footer(text="Instigate Jobs Watcher • filtered by .env")
+    embed.set_footer(text="Instigate Jobs Watcher • Jobs • Manual Request ")
 
     await interaction.followup.send(embed=embed)
 
     for p in pages[1:]:
         e2 = discord.Embed(title="🧰 SWE/CS Job Postings (cont.)", description=p)
-        e2.set_footer(text="Instigate Jobs Watcher • filtered by .env")
+        e2.set_footer(text="Instigate Jobs Watcher • Jobs • Manual Request")
         await interaction.followup.send(embed=e2)
