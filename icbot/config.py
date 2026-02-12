@@ -143,6 +143,17 @@ class Settings:
     ttc_include_reblogs: bool = False
     ttc_debug: bool = False
 
+
+    # GO Transit alerts (official GO Open Data API)
+    go_api_base: str = "https://api.openmetrolinx.com/OpenDataAPI/api/V1"
+    go_api_key: str = ""
+    go_alerts_channel_id: int = 0
+    go_poll_seconds: int = 180
+    go_alert_level: str = "major"
+    go_bootstrap_post_latest: bool = True
+    go_include_buses: bool = False
+    go_debug: bool = False
+
     # Jobs alerts (Greenhouse/Lever)
     jobs_poll_seconds: int = 600
     greenhouse_boards: list[str] | None = None
@@ -240,6 +251,15 @@ class Settings:
         ttc_include_reblogs = _to_bool(os.getenv("TTC_INCLUDE_REBLOGS", "false"), False)
         ttc_debug = _to_bool(os.getenv("TTC_DEBUG", "false"), False)
 
+        go_api_base = os.getenv("GO_API_BASE", "https://api.openmetrolinx.com/OpenDataAPI/api/V1").strip() or "https://api.openmetrolinx.com/OpenDataAPI/api/V1"
+        go_api_key = os.getenv("GO_API_KEY", "").strip()
+        go_alerts_channel_id = _to_int(os.getenv("GO_ALERTS_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
+        go_poll_seconds = _to_int(os.getenv("GO_POLL_SECONDS", "180"), 180)
+        go_alert_level = os.getenv("GO_ALERT_LEVEL", "major").strip().lower() or "major"
+        go_bootstrap_post_latest = _to_bool(os.getenv("GO_BOOTSTRAP_POST_LATEST", "true"), True)
+        go_include_buses = _to_bool(os.getenv("GO_INCLUDE_BUSES", "false"), False)
+        go_debug = _to_bool(os.getenv("GO_DEBUG", "false"), False)
+
         jobs_poll_seconds = _to_int(os.getenv("JOBS_POLL_SECONDS", "600"), 600)
         greenhouse_boards = _to_str_list(os.getenv("GREENHOUSE_BOARDS", ""))
         lever_sites = _to_str_list(os.getenv("LEVER_SITES", ""))
@@ -314,6 +334,14 @@ class Settings:
             ttc_include_replies=ttc_include_replies,
             ttc_include_reblogs=ttc_include_reblogs,
             ttc_debug=ttc_debug,
+            go_api_base=go_api_base,
+            go_api_key=go_api_key,
+            go_alerts_channel_id=go_alerts_channel_id,
+            go_poll_seconds=go_poll_seconds,
+            go_alert_level=go_alert_level,
+            go_bootstrap_post_latest=go_bootstrap_post_latest,
+            go_include_buses=go_include_buses,
+            go_debug=go_debug,
             jobs_poll_seconds=jobs_poll_seconds,
             greenhouse_boards=greenhouse_boards,
             lever_sites=lever_sites,

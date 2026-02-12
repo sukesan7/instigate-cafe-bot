@@ -190,6 +190,40 @@ def ttc_alert(
     return e
 
 
+
+
+def go_alert(
+    settings: Settings,
+    *,
+    headline: str,
+    details: str | None = None,
+    level: str = "MAJOR",
+    meta: str | None = None,
+    posted_dt: str | None = None,
+    lines: list[str] | None = None,
+) -> discord.Embed:
+    title = f"🚆 GO Transit Service Alert • {level}"
+    subtitle = None
+    if posted_dt:
+        subtitle = posted_dt
+    e = _base_embed(
+        settings,
+        title=title,
+        kind=EMBED_KIND_ALERTS,
+        description=f"**{_truncate(headline, 220) or ''}**",
+        footer_hint="GO Transit",
+        subtitle=subtitle,
+    )
+    fields: list[Field] = []
+    if meta:
+        fields.append(("Category", meta, False))
+    if lines:
+        fields.append(("Lines", ", ".join(lines[:10]), False))
+    if details:
+        fields.append(("Details", details, False))
+    _add_fields(e, fields)
+    return e
+
 def job_alert(
     settings: Settings,
     *,

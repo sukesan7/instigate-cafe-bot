@@ -10,6 +10,7 @@ from icbot.app import ic
 from icbot.permissions import is_admin_or_allowed
 
 from icbot.tasks.ttc_alerts import poll_and_post_ttc
+from icbot.tasks.go_alerts import poll_and_post_go_alerts
 from icbot.tasks.job_alerts import poll_and_post_jobs
 from icbot.tasks.jobs_workday_alerts import poll_and_post_workday_jobs
 from icbot.tasks.market_watch import poll_and_post_market_watch
@@ -103,6 +104,18 @@ async def _ttc_loop() -> None:
             print(f"[TTC] loop error: {e!r}")
         await asyncio.sleep(max(30, int(getattr(settings, "ttc_poll_seconds", 120) or 120)))
 
+
+
+
+async def _go_loop() -> None:
+    """Background poller for GO Transit Service Alerts."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            await poll_and_post_go_alerts(bot)
+        except Exception as e:
+            print(f"[GO] loop error: {e!r}")
+        await asyncio.sleep(max(60, int(getattr(settings, "go_poll_seconds", 180) or 180)))
 
 async def _jobs_loop() -> None:
     """Background poller that posts job alerts into the configured jobs channel."""
@@ -371,7 +384,18 @@ async def on_ready():
         if getattr(settings, "ttc_alerts_channel_id", 0):
             bot.loop.create_task(_ttc_loop())
 
-    # Start Jobs poller once
+    
+    # Start GO Transit poller once
+    if not getattr(bot, "_go_started", False):
+        bot._go_started = True
+        go_channel = int(getattr(settings, "go_alerts_channel_id", 0) or getattr(settings, "ttc_alerts_channel_id", 0) or 0)
+        go_key = str(getattr(settings, "go_api_key", "") or "").strip()
+        if go_channel and go_key:
+            bot.loop.create_task(_go_loop())
+        elif go_channel and not go_key:
+            print("[GO] enabled via channel but missing GO_API_KEY (register for a GO API access key).")
+            
+# Start Jobs poller once
     if not getattr(bot, "_jobs_started", False):
         bot._jobs_started = True
         jobs_channel_id = int(
