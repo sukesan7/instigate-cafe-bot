@@ -1,153 +1,80 @@
-# Instigate Cafe Bot 🏰☕️
-
-A lightweight, modular Discord bot for a university friend group server (“Instigate Cafe”).  
-Built in **Python** with **discord.py** slash commands, consistent **purple-themed embeds**, and a clean “feature module” layout.
-
-> Private/fun bot — but structured like a “real” repo for consistency with my other projects.
-
----
+# Modular Discord Bot (v0.2.12)
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![discord.py](https://img.shields.io/badge/discord.py-app__commands-5865F2)
 ![SQLite](https://img.shields.io/badge/Storage-SQLite-lightgrey)
 ![Status](https://img.shields.io/badge/Project-Active-success)
 
----
+A modular Discord bot built with Python and `discord.py`. The bot combines slash-command utilities with background pollers for alerts, reporting, and tracking. The codebase is organized into feature modules (commands), service clients (API integrations), and tasks (scheduled loops).
 
 ## Features
 
-### 📈 Instigate Cafe “Stock”
-A running server joke turned into a persistent index you can adjust and track.
+### Slash Commands
+- **Jobs**
+  - `/ic jobs`: Show the latest matching job posts.
+- **Market report**
+  - `/ic report`: Generate a real-time market snapshot and report.
+- **Additional utilities**
+  - Feature modules are designed to be added/removed cleanly without affecting unrelated components.
 
-- View current stock value
-- Change stock with +/- deltas (**admin/allowed roles**)
-- Set stock directly (**admin/allowed roles**)
-- Stock history (who/when/reason)
-- Optional: broadcast stock changes to a dedicated channel (`STOCK_CHANNEL_ID`)
+### Background Pollers
+- **Job alerts**
+  - Polls and posts matching roles from:
+    - Workday career sites
+    - Greenhouse boards
+    - Lever sites
+  - Uses allow/deny keyword filters and location allowlists.
+  - Checkpointing prevents reposting the same job repeatedly.
+- **TTC alerts**
+  - Polls the configured TTC feed and posts new incidents to a designated channel.
+  - Supports severity filtering and checkpointing.
+- **GO Transit alerts (Metrolinx Open Data API)**
+  - Polls GO service alerts and posts new items to a designated channel.
+  - Supports line allowlisting (e.g., Lakeshore West, Lakeshore East, Stouffville).
+  - Checkpointing prevents reposting.
+- **Market watch and daily market report**
+  - Periodic volatility monitoring and watchlist movement alerts.
+  - Scheduled daily report in a configurable timezone.
+- **Optional BTC address watch**
+  - Polls an Esplora-compatible API for activity on configured addresses.
 
-All outputs are presented in consistent, clean embeds.
+### Mention Assistant (Gemini)
+When a user mentions the bot in any channel (e.g., `@botname <question>`), the bot:
+- collects up to `LLM_MAX_MESSAGES` prior messages (default: 25)
+- caps context to `LLM_MAX_CHARS` (default: 12,000)
+- calls Gemini to generate a response
+- replies in the same channel
 
----
+Notes:
+- The assistant does not browse the internet.
+- Context is kept in-memory only; no persistent storage of message content is required for this mode.
 
-### 🃏 Blackjack (Interactive Buttons)
-Start a blackjack hand and play using **buttons** (no spammy `/hit` commands).
+### Games and Activities
+- The bot also consists of an ingame leaderboard system dependant on message count by user. To access this the user must type `/ic leaderboard`. 
 
-- Button controls: **Hit / Stand / Double / Split / Forfeit**
-- **Only the player who started the hand** can interact (others can view)
-- **5-minute inactivity timeout** → automatic forfeit (safety)
+- The bot includes a fun casino game of blackjack as well, that keeps track of bankroll per user as well as reset count. `/ic blackjack` to play and `/ic bj leaderboard` to see the leaderboard of users.
 
-Includes a “toy bankroll” system (starting bankroll configurable).
+- There is a fictional stock system as well, where the user can set the stock, change the stock, and add reasoning as to why as well.
 
----
+## Architecture
 
-### 📊 Activity Leaderboard (Interactive)
-Ranks most active users by **message count**.
+The project follows a layered structure:
 
-- **This Month** and **All Time**
-- **Prev / Next** paging
-- Only the command author can click buttons; everyone can view output
+- **Features**: slash command handlers (Discord-facing)
+- **Services**: API clients and data fetch/parse utilities
+- **Tasks**: scheduled pollers that run continuously in the background
+- **DB**: SQLite persistence for checkpoints, histories, and lightweight state
 
-> Counts messages the bot can see. No message content storage required.
+A typical workflow:
+1. A task poller fetches data via a service client.
+2. Data is filtered, deduplicated (checkpointed), and formatted.
+3. The bot posts to a configured channel and updates the checkpoint.
 
----
-
-### 🚇 TTC Alerts (Auto-Posted)
-No slash command required. The bot automatically polls TTC notices and posts alerts into a dedicated channel.
-
-- Posts into `TTC_ALERTS_CHANNEL_ID`
-- Configurable alert level:
-  - `major` = serious incidents only (service suspended, no service, police/emergency, injuries/fatalities, etc.)
-  - `all` = post every notice
-- Uses a checkpoint to avoid reposting old alerts
-- Optional “bootstrap” mode (test servers) to post the latest matching status once on startup
-
----
-
-### 💼 Job Alerts (Auto-Posted from Public ATS Boards)
-Automatically polls public job boards and posts matching roles into a `#job-alerts` channel.
-
-- Posts into `JOB_ALERTS_CHANNEL_ID`
-- Sources supported:
-  - **Greenhouse** (board tokens)
-  - **Lever** (site slugs)
-  - **Workday** (company career sites)
-- Filtered by location + keywords (configurable)
-- Anti-spam safeguards:
-  - Per-cycle posting cap (prevents flooding)
-  - Checkpointing so old postings aren’t re-posted
-- Optional “bootstrap” mode (test servers) to post a small sample on first run
-
----
-
-### 📉 Market Watch (Volatility Alerts)
-Automatically polls a lightweight quotes endpoint and posts alerts for:
-
-- **Fear / volatility index** spikes (VIX)
-- Big index moves (SPY/QQQ)
-- Big moves in a configurable watchlist (defaults include FAANG+, PLTR, select biotech)
-
-Configure with `MARKET_WATCH_*` environment variables.
-
----
-
-### 📊 Daily Market Report (Scheduled Recap)
-Posts a daily recap at a scheduled time (default **16:30 America/Toronto**) including:
-
-- Indices snapshot
-- Volatility snapshot (VIX / VIX9D / VVIX when available)
-- Top gainers/losers from your watchlist
-- Crypto Fear & Greed (alternative.me)
-- The fictitious **Instigate Cafe Stock** close ($IC)
-
-Configure with `MARKET_DAILY_REPORT_*`.
-
----
-
-### ₿ Bitcoin Address Watch ("Satoshi" / whales)
-Optional on-chain watcher that posts an alert when any watched BTC address shows new activity.
-
-- Uses an Esplora-compatible API (defaults to Blockstream)
-- You provide the addresses via `BTC_WATCH_ADDRESSES`
-
-Configure with `BTC_WATCH_*`.
-
----
-
-## Commands (User-Facing)
-
-### Stock
-- `/ic stock`
-- `/ic stock_change change:+100 reason:"Midterm win"`
-- `/ic stock_set value:500 reason:"Job offer"`
-- `/ic stock_history`
-
-### Games
-- `/ic blackjack bet:10`
-
-### Leaderboard
-- `/ic leaderboard`
-
----
-
-## Permissions & Server Cleanliness
-
-### ✅ Role-ID Based Admin Actions
-Admin-style actions (stock changes / sets) are gated by:
-
-- Discord **Administrator** permission, OR
-- Membership in one of the role IDs listed in `ALLOWED_ROLE_IDS`
-
-This avoids fragile role-name matching.
-
-### 🧼 Single Channel Mode (Optional)
-To keep the server clean and organized:
-
-- Regular users can be restricted to using `/ic ...` in **one channel**
-- Admin/allowed roles can run `/ic` anywhere
-
-Enable with `USER_COMMAND_CHANNEL_ID`.
-
----
+## Requirements
+- Python 3.11+ recommended
+- `discord.py` 2.x
+- A Discord bot token
+- API keys for optional integrations (Gemini, Metrolinx GO, etc.)
 
 ## Repo Layout
 
@@ -187,96 +114,22 @@ instigate-cafe-bot/
       btc_watch.py         # BTC address movement alerts
 ```
 
----
-
 ## Setup
 
-### 1) Discord Developer Portal
-1. Create a Discord Application
-2. Add a Bot
-3. Invite it with scopes:
-   - `bot`
-   - `applications.commands`
-4. Recommended bot permissions:
-   - Send Messages
-   - Embed Links
-   - Read Message History (optional)
-   - Attach Files (optional; useful later if you add a document vault)
+### 1) Discord Developer Portal Configuration
+Create a Discord application and bot, then invite it to your server with:
+- `bot`
+- `applications.commands`
 
-**Intents note:**
-- The Activity Leaderboard requires **Guild Messages** intent (non-privileged).
-- The LLM mention assistant (Gemini) requires **Message Content Intent**.
+Required intents depend on enabled features:
+- The mention assistant requires **Message Content Intent** to read message text for context.
 
----
+### 2) Environment Configuration
+Copy `.env.example` to `.env`, then fill in values for the features you enable.
 
-### 2) Create `.env`
-Copy `.env.example` → `.env`, then fill values:
+### 3) Install and Run
 
-```env
-DISCORD_TOKEN=YOUR_TOKEN
-GUILD_ID=YOUR_TEST_GUILD_ID
-
-# Channels
-STOCK_CHANNEL_ID=1234567890
-TTC_ALERTS_CHANNEL_ID=444444444444444444
-JOB_ALERTS_CHANNEL_ID=555555555555555555
-GO_ALERTS_CHANNEL_ID=666666666666666666
-MARKET_WATCH_CHANNEL_ID=777777777777777777
-MARKET_DAILY_REPORT_CHANNEL_ID=888888888888888888
-BTC_WATCH_CHANNEL_ID=999999999999999999
-
-# Role IDs allowed to run admin-style actions (comma-separated)
-ALLOWED_ROLE_IDS=111111111111111111,222222222222222222
-
-# Optional: restrict regular users to using /ic in one channel (admins bypass)
-USER_COMMAND_CHANNEL_ID=333333333333333333
-
-# TTC Alerts (polls TTC Notices on Mastodon)
-TTC_MASTODON_BASE=https://mstdn.ca
-TTC_MASTODON_ACCT=ttcnotices
-TTC_POLL_SECONDS=120
-TTC_ALERT_LEVEL=major
-TTC_BOOTSTRAP_POST_LATEST=false
-
-# GO Transit Alerts (official Metrolinx Open Data)
-GO_API_KEY=
-GO_POLL_SECONDS=180
-GO_ALERT_LEVEL=major
-GO_LINES_ALLOWLIST=Lakeshore West, Lakeshore East, Stouffville
-
-# Job Alerts
-JOBS_POLL_SECONDS=600
-GREENHOUSE_BOARDS=stripe,robinhood,coinbase
-LEVER_SITES=palantir,wealthsimple
-WORKDAY_SITES=RBC|https://rbc.wd3.myworkdayjobs.com/en-US/RBC
-JOBS_LOCATION_ALLOWLIST=toronto,canada,united states,remote,hybrid
-JOBS_KEYWORDS_ALLOWLIST=software,engineer,developer,c++,python,new grad,intern
-JOBS_KEYWORDS_DENYLIST=sales,marketing,recruiter,hr,product manager
-JOBS_BOOTSTRAP_POST=false
-
-# LLM Mention Assistant (Gemini)
-LLM_ENABLED=false
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.0-flash
-LLM_COOLDOWN_SECONDS=3
-LLM_MAX_MESSAGES=25
-LLM_MAX_CHARS=12000
-
-# Embeds (optional)
-EMBED_LOGO_URL=
-EMBED_ACCENT_COLOR=#A64DFF
-EMBED_FOOTER_TEXT=Instigate Cafe
-
-# Useful for test servers only. Do NOT enable on your main server.
-FORCE_GUILD_RESYNC=false
-```
-
-> **Prod tip:** use a separate `DB_PATH` per server (dev vs main) so test data doesn’t carry over.
-
----
-
-### 3) Install & Run (Windows / VSCode)
-
+#### Windows (PowerShell)
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -285,46 +138,54 @@ pip install -r requirements.txt
 py main.py
 ```
 
-> Windows timezone note: if your leaderboard uses `zoneinfo`, ensure `tzdata` is installed.  
-> If it’s not already in `requirements.txt`, install it via `pip install tzdata`.
+#### macOS/Linux
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python main.py
+```
 
----
+## Commands
+Commands are grouped under `/ic`. Exact availability depends on which feature modules are included and synced.
 
-## Development Notes
+Example:
+- `/ic jobs`
+- `/ic report`
 
-### Adding a new slash-command feature
-1. Create a module in `icbot/features/`
-2. Register commands under `/ic` (importing the module in `main.py` is enough)
-3. Use `icbot/embeds.py` helpers to keep output consistent
+## Configuration Overview
 
-### Adding a background indicator (like TTC or Jobs)
-Background “indicator” features live under:
-- `icbot/services/` for data fetching/parsing
-- `icbot/tasks/` for scheduled polling + posting
+### Channels
+Most background services require a channel ID. If a channel ID is `0` or unset, that service should be considered disabled (unless your code falls back to a default channel).
 
----
+### Poll Intervals
+- Jobs and alerts run on configurable intervals.
+- Use conservative polling intervals in public servers to reduce spam and API usage.
+
+### GO Line Allowlisting
+Limit GO alerts to specific corridors by listing either codes or names.
+
+Examples:
+- `GO_LINES_ALLOWLIST=LW,LE,ST`
+- `GO_LINES_ALLOWLIST=Lakeshore West,Lakeshore East,Stouffville`
+
+## Operational Safety (Public Server Guidance)
+
+If deploying to a large public server:
+- Add per-user and per-server rate limits for the mention assistant.
+- Add concurrency caps for LLM calls.
+- Enforce provider-side budgets and billing protections.
+- Restrict API keys where possible.
 
 ## Data Persistence
-Uses **SQLite** for:
-- Stock value + stock history
-- Blackjack bankroll/stats (if enabled)
-- Message counts (monthly + all-time)
-- TTC alert checkpoint (prevents reposting old alerts)
-- Job alert checkpoint (prevents reposting old postings)
+SQLite is used for:
+- job checkpoints and posting state
+- alert checkpoints (TTC, GO)
+- market report state (if enabled)
+- other lightweight bot state
 
----
+## License
+Refer to the MIT License. 
 
-## Safety / Rules
-- Admin-gated actions are **role-ID based**
-- Leaderboard stores counts only (no message content)
-- Blackjack sessions timeout after inactivity to prevent stuck games
-- TTC alerts are filtered + checkpointed to prevent spam
-- Job alerts are capped per cycle + checkpointed to prevent flooding
-
----
-
-## Roadmap Ideas (Later)
-- Daily Toronto forecast reports (auto-posted)
-- TMU facilities / outage alerts
-- `/ic fetch` document vault (course PDFs) with admin-only upload + indexed retrieval
-- More mini-games (roulette, dice, trivia, etc.) under the same embed + UI patterns
+> All data provided by this bot does not constitute any financial advice.
