@@ -22,6 +22,87 @@ def _strip_bot_mentions(text: str, bot_id: int) -> str:
     return pat.sub("", text).strip()
 
 
+def _embed_to_text(embed: discord.Embed, *, max_chars: int = 3000) -> str:
+    """Convert a Discord embed into plain text suitable for LLM context."""
+    parts: list[str] = []
+    title = (getattr(embed, "title", None) or "").strip()
+    if title:
+        parts.append(f"Title: {title}")
+
+    desc = (getattr(embed, "description", None) or "").strip()
+    if desc:
+        parts.append(desc)
+
+    for f in (getattr(embed, "fields", None) or []):
+        name = (getattr(f, "name", None) or "").strip()
+        value = (getattr(f, "value", None) or "").strip()
+        if not (name or value):
+            continue
+        if name and value:
+            parts.append(f"{name}:\n{value}")
+        elif name:
+            parts.append(name)
+        else:
+            parts.append(value)
+
+    footer_obj = getattr(embed, "footer", None)
+    footer_text = (getattr(footer_obj, "text", None) or "").strip() if footer_obj else ""
+    if footer_text:
+        parts.append(f"Footer: {footer_text}")
+
+    out = "\n\n".join([p for p in parts if p]).strip()
+    if max_chars > 0 and len(out) > max_chars:
+        out = out[:max_chars] + " …"
+    return out
+
+
+def _message_to_text(msg: discord.Message, *, max_chars: int = 3500) -> str:
+    """Convert a Discord message (content + embeds) into plain text."""
+    parts: list[str] = []
+    content = (msg.content or "").strip()
+    if content:
+        parts.append(content)
+
+    embeds = getattr(msg, "embeds", None) or []
+    for e in embeds:
+        try:
+            et = _embed_to_text(e, max_chars=max_chars)
+        except Exception:
+            et = ""
+        if et:
+            parts.append(et)
+
+    out = "\n\n".join([p for p in parts if p]).strip()
+    if max_chars > 0 and len(out) > max_chars:
+        out = out[:max_chars] + " …"
+    return out
+
+
+async def _get_referenced_message(message: discord.Message) -> discord.Message | None:
+    """Fetch the message that `message` is replying to, if any."""
+    ref = getattr(message, "reference", None)
+    if not ref:
+        return None
+
+    resolved = getattr(ref, "resolved", None)
+    if isinstance(resolved, discord.Message):
+        return resolved
+
+    msg_id = getattr(ref, "message_id", None)
+    if not msg_id:
+        return None
+
+    fetch = getattr(message.channel, "fetch_message", None)
+    if not fetch:
+        return None
+
+    try:
+        got = await fetch(msg_id)
+        return got if isinstance(got, discord.Message) else None
+    except Exception:
+        return None
+
+
 def _format_context_lines(msgs: Iterable[discord.Message]) -> list[str]:
     lines: list[str] = []
     for m in msgs:
@@ -45,6 +126,7 @@ def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: in
         "Be concise, correct, and practical. If there is missing context, ask 1 short clarifying question.\n"
         "You do NOT browse the internet\n."
         "For time-sensitive questions (latest/so far/today), say you cannot verify live updates and offer a general explanation or ask for a source link.\n"
+        "Explain reports and metrics; do not provide personalized financial advice.\n"
         "Do NOT invent details that aren't in the chat.\n"
     )
 
@@ -144,7 +226,21 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
     if max_msgs > 1 and len(collected) > (max_msgs - 1):
         collected = collected[-(max_msgs - 1) :]
 
+    # If the user is replying to a message (e.g., an /ic report embed), include that referenced
+    # message in the LLM context so the bot can explain it when explicitly mentioned.
+    ref_line = ""
+    try:
+        ref_msg = await _get_referenced_message(message)
+        if ref_msg is not None:
+            ref_text = _message_to_text(ref_msg, max_chars=3500)
+            if ref_text:
+                ref_line = f"Referenced message (user replied to):\n{ref_text}"
+    except Exception:
+        ref_line = ""
+
     context_lines = _format_context_lines(collected)
+    if ref_line:
+        context_lines = [ref_line] + context_lines
     prompt = _build_prompt(context_lines=context_lines, user_question=question, max_chars=max_chars)
 
     # Generate and reply
