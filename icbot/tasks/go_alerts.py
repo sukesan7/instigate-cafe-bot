@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import ssl
 from datetime import datetime
 from typing import Optional
 
@@ -36,6 +37,110 @@ _MAJOR_RE = re.compile("|".join(_MAJOR_PATTERNS), re.IGNORECASE)
 
 # GO rail corridor codes are usually short alpha codes (e.g., LW, LE, MI).
 _TRAIN_LINE_RE = re.compile(r"^[A-Z]{2,4}$")
+
+
+def _canon_line_token(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[_-]+", " ", s)
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+_LINE_ALIASES: dict[str, str] = {
+    # Lakeshore
+    "lw": "LW",
+    "lakeshore west": "LW",
+    "lakeshore w": "LW",
+    "le": "LE",
+    "lakeshore east": "LE",
+    "lakeshore e": "LE",
+    # Stouffville
+    "st": "ST",
+    "stouffville": "ST",
+    # Others
+    "rh": "RH",
+    "richmond hill": "RH",
+    "br": "BR",
+    "barrie": "BR",
+    "ki": "KI",
+    "kitchener": "KI",
+    "mi": "MI",
+    "milton": "MI",
+    "ni": "NI",
+    "niagara": "NI",
+    "up": "UP",
+    "up express": "UP",
+    "upx": "UP",
+}
+
+
+def _normalize_allowlist(raw: list[str]) -> set[str]:
+    """Return a set of canonical line codes (and/or literal tokens) from env input."""
+    out: set[str] = set()
+    for tok in raw or []:
+        t = _canon_line_token(str(tok))
+        if not t:
+            continue
+        code = _LINE_ALIASES.get(t)
+        if code:
+            out.add(code)
+            continue
+        # If user already provided a code like LW/LE/ST
+        up = t.upper()
+        if _TRAIN_LINE_RE.match(up):
+            out.add(up)
+            continue
+        # Otherwise keep literal (used as a text substring match)
+        out.add(t)
+    return out
+
+
+def _matches_allowlist(m: GOMessage, allow: set[str]) -> bool:
+    if not allow:
+        return True
+    line_codes = {str(x).strip().upper() for x in (m.lines or []) if str(x).strip()}
+    blob = _text_blob(m).lower()
+    for a in allow:
+        if not a:
+            continue
+        # Canonical codes
+        if a.isupper() and a in line_codes:
+            return True
+        # Text token (names, etc.)
+        if a.islower() and a in blob:
+            return True
+        # Also allow matching codes in text if Lines[] is missing
+        if a.isupper() and re.search(rf"\b{re.escape(a)}\b", blob, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def _make_go_connector(settings) -> aiohttp.TCPConnector:
+    """Build an aiohttp connector with a CA bundle that works on Windows venvs.
+
+    If GO_SSL_VERIFY=false, verification is disabled (not recommended).
+    If GO_CA_BUNDLE_PATH is set, that PEM file is used.
+    Otherwise we try certifi (added to requirements.txt).
+    """
+    verify = bool(getattr(settings, "go_ssl_verify", True))
+    if not verify:
+        return aiohttp.TCPConnector(ssl=False)
+
+    cafile = str(getattr(settings, "go_ca_bundle_path", "") or "").strip()
+    try:
+        if cafile:
+            ssl_ctx = ssl.create_default_context(cafile=cafile)
+        else:
+            try:
+                import certifi  # type: ignore
+
+                ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            except Exception:
+                ssl_ctx = ssl.create_default_context()
+    except Exception:
+        ssl_ctx = ssl.create_default_context()
+
+    return aiohttp.TCPConnector(ssl=ssl_ctx)
 
 
 def _text_blob(m: GOMessage) -> str:
@@ -130,6 +235,8 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
 
     bootstrap_post_latest = bool(getattr(settings, "go_bootstrap_post_latest", True))
     include_buses = bool(getattr(settings, "go_include_buses", False))
+    allow_raw = list(getattr(settings, "go_lines_allowlist", None) or [])
+    allow = _normalize_allowlist(allow_raw)
     debug = bool(getattr(settings, "go_debug", False))
 
     channel = await _resolve_channel(bot, channel_id)
@@ -140,7 +247,7 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
     # Fetch with small retry on transient issues
     msgs: list[GOMessage] = []
     last_err: Optional[BaseException] = None
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(connector=_make_go_connector(settings)) as session:
         for attempt in range(3):
             try:
                 msgs = await fetch_service_alerts(session, api_base, access_key, timeout_seconds=18)
@@ -163,6 +270,15 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
     if not include_buses:
         msgs = [m for m in msgs if _is_train_related(m)]
 
+    # Filter to allowlisted lines (if configured)
+    if allow:
+        msgs = [m for m in msgs if _matches_allowlist(m, allow)]
+
+    if not msgs:
+        if debug:
+            print("[GO] poll: fetched items but 0 remained after filters (include_buses/allowlist).")
+        return
+
     # Sort (oldest -> newest) by PostedDateTime where possible.
     msgs_sorted = sorted(
         msgs,
@@ -177,7 +293,8 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
         major_ct = sum(1 for m in msgs_sorted if _is_major(m))
         print(
             f"[GO] poll: fetched={len(msgs_sorted)} major={major_ct} level={poll_level} "
-            f"include_buses={include_buses} last_code={'set' if bool(last_code) else 'none'}"
+            f"include_buses={include_buses} allowlist={'on' if bool(allow) else 'off'} "
+            f"last_code={'set' if bool(last_code) else 'none'}"
         )
         if len(msgs_sorted) > 0 and poll_level == 'major' and major_ct == 0:
             print("[GO] NOTE: items fetched but none matched MAJOR patterns; set GO_ALERT_LEVEL=all to see them.")

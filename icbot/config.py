@@ -152,6 +152,13 @@ class Settings:
     go_alert_level: str = "major"
     go_bootstrap_post_latest: bool = True
     go_include_buses: bool = False
+    # If set, only alerts mentioning these line codes/names will post.
+    # Example: ["LW", "LE", "ST"] or ["lakeshore west", "stouffville"]
+    go_lines_allowlist: list[str] | None = None
+    # TLS options (Windows sometimes lacks a usable CA store for Python/aiohttp)
+    go_ssl_verify: bool = True
+    # Optional path to a CA bundle (PEM). If empty, uses certifi if available.
+    go_ca_bundle_path: str = ""
     go_debug: bool = False
 
     # Jobs alerts (Greenhouse/Lever)
@@ -258,6 +265,9 @@ class Settings:
         go_alert_level = os.getenv("GO_ALERT_LEVEL", "major").strip().lower() or "major"
         go_bootstrap_post_latest = _to_bool(os.getenv("GO_BOOTSTRAP_POST_LATEST", "true"), True)
         go_include_buses = _to_bool(os.getenv("GO_INCLUDE_BUSES", "false"), False)
+        go_lines_allowlist = _to_str_list(os.getenv("GO_LINES_ALLOWLIST", ""))
+        go_ssl_verify = _to_bool(os.getenv("GO_SSL_VERIFY", "true"), True)
+        go_ca_bundle_path = os.getenv("GO_CA_BUNDLE_PATH", "").strip()
         go_debug = _to_bool(os.getenv("GO_DEBUG", "false"), False)
 
         jobs_poll_seconds = _to_int(os.getenv("JOBS_POLL_SECONDS", "600"), 600)
@@ -341,6 +351,9 @@ class Settings:
             go_alert_level=go_alert_level,
             go_bootstrap_post_latest=go_bootstrap_post_latest,
             go_include_buses=go_include_buses,
+            go_lines_allowlist=go_lines_allowlist,
+            go_ssl_verify=go_ssl_verify,
+            go_ca_bundle_path=go_ca_bundle_path,
             go_debug=go_debug,
             jobs_poll_seconds=jobs_poll_seconds,
             greenhouse_boards=greenhouse_boards,
