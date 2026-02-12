@@ -145,6 +145,14 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
     market_state = str(market_state).upper()
 
     async def should_alert(key: str, triggered: bool) -> bool:
+        """Edge-triggered alert gate with cooldown.
+
+        Fires ONLY on a rising edge (False -> True). While the condition remains True,
+        it will NOT re-post, regardless of cooldown. After the condition clears (True -> False),
+        it can fire again on the next rising edge, but not more often than the cooldown window
+        (to avoid flapping spam).
+        """
+
         state_key = f"mw_state:{key}"
         last_key = f"mw_last_alert:{key}"
 
@@ -152,21 +160,29 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
         last_alert = _to_int(await _get_meta(db, last_key), 0)
         now = int(discord.utils.utcnow().timestamp())
 
-        if triggered and ((not prev_state) or (now - last_alert) >= cooldown_s):
-            await _set_meta(db, state_key, "1")
-            await _set_meta(db, last_key, str(now))
-            return True
+        if not triggered:
+            if prev_state:
+                await _set_meta(db, state_key, "0")
+            return False
 
-        if not triggered and prev_state:
-            await _set_meta(db, state_key, "0")
-        return False
+        # Already active -> do not repeat while the condition remains true.
+        if prev_state:
+            return False
+
+        # Rising edge: respect cooldown to avoid rapid flapping.
+        if (now - last_alert) < cooldown_s:
+            return False
+
+        await _set_meta(db, state_key, "1")
+        await _set_meta(db, last_key, str(now))
+        return True
 
     alerts: list[str] = []
 
     vix_level = q_vix.regular_price if q_vix else None
     vix_high = bool(vix_level is not None and vix_level >= vix_level_thr)
     if await should_alert("vix_level", vix_high):
-        alerts.append(f"😱 **VIX elevated**: **{_fmt_price(vix_level)}** (thr ≥ {vix_level_thr:g})")
+        alerts.append(f"**VIX elevated**: **{_fmt_price(vix_level)}** (thr ≥ {vix_level_thr:g})")
 
     def _idx_line(q: Quote, label: str) -> str:
         sess, price, pct, _chg = q.best_session()
