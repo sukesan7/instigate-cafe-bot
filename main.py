@@ -16,6 +16,7 @@ from icbot.tasks.jobs_workday_alerts import poll_and_post_workday_jobs
 from icbot.tasks.market_watch import poll_and_post_market_watch
 from icbot.tasks.market_daily_report import post_daily_market_report
 from icbot.tasks.btc_watch import poll_and_post_btc_watch
+from icbot.tasks.llm_assistant import maybe_handle_llm_mention
 
 # Import features (registers commands onto /ic)
 from icbot.features import stock  # noqa: F401
@@ -34,6 +35,7 @@ db = Database(settings.db_path)
 intents = discord.Intents.default()
 intents.guilds = True
 intents.messages = True  # needed for message-count leaderboard tracking
+intents.message_content = True  # required for @bot mentions + reading chat context
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 activity_tracker = ActivityTracker(db)
@@ -352,6 +354,28 @@ async def on_ready():
     except Exception as e:
         print(f"[TTC] config log error: {e!r}")
 
+    # LLM mention assistant config log
+    try:
+        llm_enabled = bool(getattr(settings, "llm_enabled", False))
+        llm_model = str(getattr(settings, "gemini_model", "gemini-2.0-flash") or "gemini-2.0-flash").strip()
+        llm_msgs = int(getattr(settings, "llm_max_messages", 25) or 25)
+        llm_chars = int(getattr(settings, "llm_max_chars", 12000) or 12000)
+        llm_cd = float(getattr(settings, "llm_cooldown_seconds", 3) or 3)
+        has_key = bool(str(getattr(settings, "gemini_api_key", "") or "").strip())
+        print(
+            "[LLM] config: "
+            f"enabled={llm_enabled} "
+            f"provider=gemini "
+            f"model={llm_model} "
+            f"max_messages={llm_msgs} "
+            f"max_chars={llm_chars} "
+            f"cooldown={llm_cd:g}s"
+        )
+        if llm_enabled and not has_key:
+            print("[LLM] WARNING: enabled but no GEMINI_API_KEY set.")
+    except Exception as e:
+        print(f"[LLM] config log error: {e!r}")
+
     # Register the /ic root group
     if getattr(settings, "guild_id_invalid", False):
         raw = getattr(settings, "guild_id_raw", "")
@@ -455,6 +479,13 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
+    # LLM mention assistant: @Instigator ... (responds in the same channel)
+    try:
+        await maybe_handle_llm_mention(bot, message)
+    except Exception as e:
+        if bool(getattr(settings, "llm_debug", False)):
+            print(f"[LLM] on_message handler error: {e!r}")
+
     # Track activity for leaderboard
     try:
         await activity_tracker.on_message(message)

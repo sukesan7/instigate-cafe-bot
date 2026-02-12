@@ -161,6 +161,15 @@ class Settings:
     go_ca_bundle_path: str = ""
     go_debug: bool = False
 
+    # LLM mention assistant (Gemini)
+    llm_enabled: bool = False
+    llm_cooldown_seconds: int = 3
+    llm_max_messages: int = 25
+    llm_max_chars: int = 12000
+    llm_debug: bool = False
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
+
     # Jobs alerts (Greenhouse/Lever)
     jobs_poll_seconds: int = 600
     greenhouse_boards: list[str] | None = None
@@ -270,6 +279,15 @@ class Settings:
         go_ca_bundle_path = os.getenv("GO_CA_BUNDLE_PATH", "").strip()
         go_debug = _to_bool(os.getenv("GO_DEBUG", "false"), False)
 
+        # LLM mention assistant (Gemini)
+        llm_enabled = _to_bool(os.getenv("LLM_ENABLED", "false"), False)
+        llm_cooldown_seconds = _to_int(os.getenv("LLM_COOLDOWN_SECONDS", "3"), 3)
+        llm_max_messages = _to_int(os.getenv("LLM_MAX_MESSAGES", "25"), 25)
+        llm_max_chars = _to_int(os.getenv("LLM_MAX_CHARS", "12000"), 12000)
+        llm_debug = _to_bool(os.getenv("LLM_DEBUG", "false"), False)
+        gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+
         jobs_poll_seconds = _to_int(os.getenv("JOBS_POLL_SECONDS", "600"), 600)
         greenhouse_boards = _to_str_list(os.getenv("GREENHOUSE_BOARDS", ""))
         lever_sites = _to_str_list(os.getenv("LEVER_SITES", ""))
@@ -355,6 +373,13 @@ class Settings:
             go_ssl_verify=go_ssl_verify,
             go_ca_bundle_path=go_ca_bundle_path,
             go_debug=go_debug,
+            llm_enabled=llm_enabled,
+            llm_cooldown_seconds=llm_cooldown_seconds,
+            llm_max_messages=llm_max_messages,
+            llm_max_chars=llm_max_chars,
+            llm_debug=llm_debug,
+            gemini_api_key=gemini_api_key,
+            gemini_model=gemini_model,
             jobs_poll_seconds=jobs_poll_seconds,
             greenhouse_boards=greenhouse_boards,
             lever_sites=lever_sites,

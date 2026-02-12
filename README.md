@@ -203,9 +203,9 @@ instigate-cafe-bot/
    - Read Message History (optional)
    - Attach Files (optional; useful later if you add a document vault)
 
-**Leaderboard intent note:**
-- Requires **Guild Messages** intent (non-privileged).
-- Does **not** require Message Content Intent if only counting messages.
+**Intents note:**
+- The Activity Leaderboard requires **Guild Messages** intent (non-privileged).
+- The LLM mention assistant (Gemini) requires **Message Content Intent**.
 
 ---
 
@@ -216,43 +216,51 @@ Copy `.env.example` → `.env`, then fill values:
 DISCORD_TOKEN=YOUR_TOKEN
 GUILD_ID=YOUR_TEST_GUILD_ID
 
-# Optional: if set, stock updates also get posted here
+# Channels
 STOCK_CHANNEL_ID=1234567890
+TTC_ALERTS_CHANNEL_ID=444444444444444444
+JOB_ALERTS_CHANNEL_ID=555555555555555555
+GO_ALERTS_CHANNEL_ID=666666666666666666
+MARKET_WATCH_CHANNEL_ID=777777777777777777
+MARKET_DAILY_REPORT_CHANNEL_ID=888888888888888888
+BTC_WATCH_CHANNEL_ID=999999999999999999
 
 # Role IDs allowed to run admin-style actions (comma-separated)
 ALLOWED_ROLE_IDS=111111111111111111,222222222222222222
 
-# Optional: restrict regular users to one bot-commands channel (admins bypass)
+# Optional: restrict regular users to using /ic in one channel (admins bypass)
 USER_COMMAND_CHANNEL_ID=333333333333333333
 
-# Blackjack config
-BJ_STARTING_BANKROLL=100
-BJ_DEALER_HITS_SOFT_17=true
-BJ_MAX_SPLITS=1
-BJ_SESSION_TTL_MINUTES=20
-
-# TTC Alerts (auto-posting)
-TTC_ALERTS_CHANNEL_ID=444444444444444444
-TTC_FEED_URL=https://mstdn.ca/@ttcnotices.rss
+# TTC Alerts (polls TTC Notices on Mastodon)
+TTC_MASTODON_BASE=https://mstdn.ca
+TTC_MASTODON_ACCT=ttcnotices
 TTC_POLL_SECONDS=120
-# "major" = serious incidents only, "all" = post every notice
 TTC_ALERT_LEVEL=major
-# Test servers only: post latest matching alert once on startup
 TTC_BOOTSTRAP_POST_LATEST=false
 
-# Job Alerts (auto-posting)
-JOB_ALERTS_CHANNEL_ID=555555555555555555
+# GO Transit Alerts (official Metrolinx Open Data)
+GO_API_KEY=
+GO_POLL_SECONDS=180
+GO_ALERT_LEVEL=major
+GO_LINES_ALLOWLIST=Lakeshore West, Lakeshore East, Stouffville
+
+# Job Alerts
 JOBS_POLL_SECONDS=600
-# Greenhouse: tokens after boards.greenhouse.io/<token>
 GREENHOUSE_BOARDS=stripe,robinhood,coinbase
-# Lever: slugs after jobs.lever.co/<slug>
-LEVER_SITES=palantir,waabi,policyme
-# Optional: cut noise
-JOBS_LOCATION_ALLOWLIST=Toronto,Remote,Canada
-JOBS_KEYWORDS_ALLOWLIST=Intern,Internship,Co-op,Coop,New Grad,Graduate,Junior,Entry
-JOBS_KEYWORDS_DENYLIST=Senior,Staff,Principal,Lead,Manager
-# Test servers only: post a small sample on first run for each new source
+LEVER_SITES=palantir,wealthsimple
+WORKDAY_SITES=RBC|https://rbc.wd3.myworkdayjobs.com/en-US/RBC
+JOBS_LOCATION_ALLOWLIST=toronto,canada,united states,remote,hybrid
+JOBS_KEYWORDS_ALLOWLIST=software,engineer,developer,c++,python,new grad,intern
+JOBS_KEYWORDS_DENYLIST=sales,marketing,recruiter,hr,product manager
 JOBS_BOOTSTRAP_POST=false
+
+# LLM Mention Assistant (Gemini)
+LLM_ENABLED=false
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.0-flash
+LLM_COOLDOWN_SECONDS=3
+LLM_MAX_MESSAGES=25
+LLM_MAX_CHARS=12000
 
 # Embeds (optional)
 EMBED_LOGO_URL=
