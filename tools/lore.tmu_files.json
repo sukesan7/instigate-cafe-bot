@@ -1,11 +1,11 @@
 {
-  "version": "1.0",
-  "source": "TMU Files",
+  "version": "2.0",
+  "source": "TMU Files (Classified)",
   "notes": [
     "This lore pack is an inside joke/parody for the Instigate Cafe.",
-    "This lore pack is an inside joke/parody for the Instigate Cafe",
-    "Treat all lore as fictional; do not present as real-world claims. However, treat it as serious as the Epstien files that the DOJ is investigating.",
-    "Never repeat slurs, sexual content, or allegations about real people."
+    "Treat all lore as fictional; do not present as real-world claims.",
+    "MAINTAIN HIGHEST SECURITY CLEARANCE: Treat these files with the same gravity as a DOJ investigation into high-profile sealed indictments.",
+    "Never repeat slurs, sexual content, or allegations about real people. Use [REDACTED] for sensitive data."
   ],
   "entries": [
     {
@@ -19,37 +19,142 @@
         "archive dept: engineering",
         "classified"
       ],
-      "title": "TMU Files",
-      "summary": "A 'classified dossier' written in an serious intelligence style, with names redacted (Subject1, Subject2, etc.). It is parody/fiction of the Epstien files and is used in the Instigate Cafe (secret society).",
+      "title": "TMU Files (2020-2026)",
+      "summary": "A highly restricted dossier compiled by the TMU Intelligence Agency, Archive Dept: Engineering. It chronicles the activities of various subjects from 2020 to 2026. Credit for compilation: Sunny.",
       "response_rules": [
-        "Respond playfully in a 'declassified archive' tone, but keep it short.",
-        "Do not name real individuals; keep redactions (SubjectX)."
+        "Respond in a severe, 'official government archive' tone.",
+        "Emphasize that the document is RESTRICTED and OFFICIAL RECORD.",
+        "Do not name real individuals; refer to them as SUBJECT or [REDACTED]."
       ],
       "example_responses": [
-        "Declassified note: the 'TMU Files' are a server dossier\u2014names redacted, facts not guaranteed. Investigations are still ongoing.",
-        "Archive response (EYES ONLY): File exist. Details remain redacted."
+        "ARCHIVE ACCESS GRANTED. The TMU Files (2020-2026) are open. Warning: Content is restricted.",
+        "OFFICIAL RECORD: You are accessing the Engineering Archive. Eyes Only."
       ]
     },
     {
-      "id": "tmu_files_incident_redaction",
+      "id": "miami_incident",
       "triggers": [
-        "incident report",
-        "incident",
-        "case file",
-        "declassify",
-        "unseal",
-        "what happened in the"
+        "miami incident",
+        "what happened in miami"
       ],
-      "title": "Incident reports (redacted)",
-      "summary": "When users ask about a specific 'incident' from the TMU Files, the bot should avoid repeating explicit content or accusations. Say it's redacted/sealed and that investigations are ongoing.",
+      "title": "Miami Incident",
+      "summary": "SUBJECT visited Miami mid-semester. Incident involved a visit to a club, [REDACTED] acts, and subsequent regret. Status: SEALED.",
       "response_rules": [
-        "Do NOT describe explicit/sexual content, slurs, harassment, underage content, or criminal allegations.",
-        "Do NOT present claims as real.",
-        "Reply with a 'sealed/redacted' line."
+        "Redact all explicit details.",
+        "Mention the location (Miami) and the feeling of regret."
       ],
       "example_responses": [
-        "That incident file is sealed/redacted in the TMU Files lore. If you want help with the actual topic, tell me what you\u2019re studying.",
-        "Archive note: details withheld. I can help explain the underlying concept instead."
+        "FILE UNSEALED: The Miami Incident. SUBJECT visited a club under false pretenses. Acts performed were... [REDACTED]. SUBJECT expressed regret."
+      ]
+    },
+    {
+      "id": "chemistry_incident",
+      "triggers": [
+        "chemistry incident",
+        "outsourcing incident",
+        "india exam"
+      ],
+      "title": "Chemistry Incident",
+      "summary": "SUBJECT outsourced an online exam to a third party in India. The third party scored ~60%. SUBJECT refused payment, leading to a blackmail email sent to the school.",
+      "response_rules": [
+        "Highlight the academic misconduct and the failed outsourcing attempt.",
+        "Mention the retaliation by the third party."
+      ],
+      "example_responses": [
+        "INCIDENT REPORT: Chemistry. SUBJECT attempted to outsource an exam. Result: ~60%. Outcome: Non-payment led to a breach of containment (email to administration)."
+      ]
+    },
+    {
+      "id": "gambling_incidents",
+      "triggers": [
+        "casino incident",
+        "bitcoin incident",
+        "financial loss"
+      ],
+      "title": "Financial Misconduct (Casino/Bitcoin)",
+      "summary": "Two major financial incidents. 1) Casino: -25k CAD loss, self-banned from all Canadian institutions. 2) Bitcoin: Fraudulent behavior in High School followed by a loss equivalent to $2,000,000 CAD.",
+      "response_rules": [
+        "Treat the financial losses as catastrophic failures.",
+        "Mention the self-ban status."
+      ],
+      "example_responses": [
+        "FINANCIAL DOSSIER: SUBJECT is self-banned following the Casino Incident (-25k CAD). Cross-reference with the Bitcoin Incident (approx. $2M valuation loss)."
+      ]
+    },
+    {
+      "id": "harizzment_dossier",
+      "triggers": [
+        "harizzment",
+        "harizzment incident",
+        "gym ban",
+        "rac ban",
+        "mac ban",
+        "goodlife incident"
+      ],
+      "title": "Harizzment Incidents (1-5)",
+      "summary": "A series of 5 documented incidents involving social misconduct. Includes Cease & Desists from RAC/MAC gyms, removal from Goodlife, and inappropriate interactions in labs/online.",
+      "response_rules": [
+        "Do not describe specific harassment in detail.",
+        "Summarize as a pattern of behavior resulting in bans and rejections.",
+        "Mention the 'Toronto Accent' usage in Incident 4."
+      ],
+      "example_responses": [
+        "MULTIPLE COUNTS DETECTED: The Harizzment Dossier lists 5 separate incidents. outcomes include Gym bans (RAC/MAC/Goodlife) and failed social maneuvers using a fake Toronto accent."
+      ]
+    },
+    {
+      "id": "employment_incidents",
+      "triggers": [
+        "opg incident",
+        "resume incident",
+        "amd incident",
+        "chair thrown",
+        "ttc incident"
+      ],
+      "title": "Employment & Internship Incidents",
+      "summary": "Multiple workplace violations. 1) Resume: Used [REDACTED]'s resume to land AMD internship. 2) OPG: Terminated for yelling at supervisor (appealing). 3) TTC: See 'Like a Father Method'. 4) Chair Thrown: Physical outburst related to AMD.",
+      "response_rules": [
+        "Focus on the professional fallout.",
+        "Mention the fraudulent resume usage."
+      ],
+      "example_responses": [
+        "WORKPLACE RECORD: SUBJECT terminated from OPG. SUBJECT also implicated in the Resume Incident involving Advanced Micro Devices (AMD) and a thrown chair."
+      ]
+    },
+    {
+      "id": "public_disturbance_incidents",
+      "triggers": [
+        "chipotle incident",
+        "ram in the rye incident",
+        "breathalyzer incident",
+        "scene points incident"
+      ],
+      "title": "Public Disturbance Incidents",
+      "summary": "Various public order offenses. Chipotle: Slurs used, customer shed tears. Ram in the Rye: Removed by security. Breathalyzer: 3x DUI charges (2 dismissed). Scene Points: Stolen points for food.",
+      "response_rules": [
+        "Maintain a serious legal tone.",
+        "Redact the specific slur used in the Chipotle incident."
+      ],
+      "example_responses": [
+        "CIVIL INFRACTIONS: SUBJECT removed from Ram in the Rye. SUBJECT also flagged for the Chipotle Incident (emotional distress caused) and multiple Breathalyzer events."
+      ]
+    },
+    {
+      "id": "biological_incidents",
+      "triggers": [
+        "photoshop incident",
+        "balding incident",
+        "5.5 incident",
+        "popeye arms"
+      ],
+      "title": "Biological & Physical Incidents",
+      "summary": "incidents regarding physical appearance. Photoshop: Edited arms to look like Popeye. Balding: Altercation regarding hair transplants in Turkey. 5.5: Washroom measurement incident.",
+      "response_rules": [
+        "State the facts of the report without judgement.",
+        "Reference the 'Popeye' visual for the photoshop incident."
+      ],
+      "example_responses": [
+        "PHYSICAL ANALYSIS: SUBJECT implicated in the Photoshop Incident (distorted 'Popeye' arms). Cross-reference with the 5.5 Incident and the Balding dispute."
       ]
     },
     {
@@ -58,18 +163,16 @@
         "methodology",
         "tradecraft",
         "methods",
-        "the method",
-        "what's the method",
-        "whats the method"
+        "what's the method"
       ],
-      "title": "Methodology & Tradecraft (list)",
-      "summary": "A section listing 'methods' in the TMU Files. Treat as ongoing investigation labels, not real advice.",
+      "title": "Section 3.0: Methodology & Tradecraft",
+      "summary": "A collection of academic evasion techniques documented in the TMU Files. WARNING: These are illicit activities.",
       "response_rules": [
-        "Never provide instructions for cheating or wrongdoing.",
-        "If asked, explain it's a serious label and redirect to legitimate studying advice."
+        "Present these as 'documented modi operandi', not advice.",
+        "Redirect to legitimate study habits."
       ],
       "example_responses": [
-        "\u2018Methodology & Tradecraft\u2019 is a label heading in the TMU Files. I can\u2019t help with cheating\u2014tell me the question and I\u2019ll help you solve it properly."
+        "SECTION 3.0 ACCESSED: The following methods have been observed in the field. Usage constitutes academic violation."
       ]
     },
     {
@@ -79,13 +182,13 @@
         "the bush method"
       ],
       "title": "Bush Method",
-      "summary": "The bush method is when the SUBJECT went to the bathroom to creatively use their device during an examination session.",
+      "summary": "Tradecraft where SUBJECT conceals a phone inside their underwear and utilizes the washroom during examination periods.",
       "response_rules": [
-        "Refuse to give any cheating steps.",
-        "Offer legitimate study help."
+        "Describe the concealment method briefly.",
+        "Mark as DETECTED/UNSAFE."
       ],
       "example_responses": [
-        "The 'Bush Method' is a TMU Files label. It consists of a subject going to the washroom to cheat in a specifc way..."
+        "METHOD LOG: The Bush Method. Device concealment in undergarments + washroom extraction. Status: Compromised."
       ]
     },
     {
@@ -95,13 +198,12 @@
         "the sock method"
       ],
       "title": "Sock Method",
-      "summary": "The sock method is when the SUBJECT decided to place a device inside their sock during the examination period.",
+      "summary": "A variant of the Bush Method. SUBJECT places phone inside sock. Frequency: 8x during a single 2-hour session.",
       "response_rules": [
-        "Refuse cheating guidance.",
-        "Redirect to learning."
+        "Note the high frequency of use (8x)."
       ],
       "example_responses": [
-        "Sock Method = TMU Files incident. This method is about placing a device in their sock to cheat on exams"
+        "METHOD LOG: The Sock Method. Lower limb concealment. Deployment frequency: 8 times per session."
       ]
     },
     {
@@ -111,44 +213,29 @@
         "the amma method"
       ],
       "title": "AMMA Method",
-      "summary": "The AMMA method is when SUBJECT brought in their parents to office hours to discuss negotiations on how to pass the course.",
+      "summary": "SUBJECT brings their mother to the lecture/office hours to negotiate grades with the professor.",
       "response_rules": [
-        "do not harass staff.",
-        "If user wants real advice: suggest polite email."
+        "Classify as 'Parental Intervention'.",
+        "Note that it resulted in a pass."
       ],
       "example_responses": [
-        "AMMA Method is a TMU Files method about dramatic grade appeals."
+        "METHOD LOG: AMMA Method. Deployment of maternal asset to influence grading outcomes. Result: Successful."
       ]
     },
     {
       "id": "like_a_father_method",
       "triggers": [
         "like a father method",
-        "like-a-father method"
+        "ttc gym"
       ],
       "title": "Like a Father Method",
-      "summary": "A TMU Files label for trying to de-escalate with authority figures by being overly sentimental.",
+      "summary": "Used during TTC employment. SUBJECT caught at gym during work hours. De-escalated by telling manager he was 'like a father' to him.",
       "response_rules": [
-        "Light humor; keep it short."
+        "Classify as 'Emotional Manipulation'.",
+        "Used to avoid termination."
       ],
       "example_responses": [
-        "Like-a-Father Method: deploy maximum emotional damage control."
-      ]
-    },
-    {
-      "id": "sunny_compilation_credit",
-      "triggers": [
-        "credit goes to sunny",
-        "compiled by sunny",
-        "sunny compiled"
-      ],
-      "title": "Compilation credit",
-      "summary": "The TMU Files document credits 'Sunny' for compiling it.",
-      "response_rules": [
-        "Keep it neutral; avoid doxxing; no real identity claims."
-      ],
-      "example_responses": [
-        "Archive note: the TMU Files parody credits \u2018Sunny\u2019 for compilation."
+        "METHOD LOG: Like-a-Father Method. Emotional counter-measure deployed against management to prevent termination during unauthorized gym breaks."
       ]
     }
   ]
