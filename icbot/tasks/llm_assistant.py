@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from typing import Iterable
+from typing import Iterable, Optional, Sequence, Tuple
 
 import discord
 
@@ -13,13 +13,11 @@ from icbot.services.gemini_client import GeminiError, gemini_generate_text
 
 _MENTION_RE_TEMPLATE = r"<@!?{bot_id}>"
 
+# Supported image attachment extensions for multimodal Q&A
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
-# Heuristics for special intents. We keep these lightweight on purpose.
-_SUMMARY_INTENT_RE = re.compile(
-    r"\b(summarize|summary|recap|tl;dr|tldr|catch\s+me\s+up|what\s+did\s+we\s+talk\s+about)\b",
-    re.IGNORECASE,
-)
-_LAST_N_RE = re.compile(r"\blast\s+(\d{1,3})\s+messages\b", re.IGNORECASE)
+# Detect requests like "keep it under 500 chars"
+_CHAR_LIMIT_PAT = re.compile(r"under\s+(\d{2,5})\s*(?:chars|characters)\b", re.IGNORECASE)
 
 
 def _strip_bot_mentions(text: str, bot_id: int) -> str:
@@ -30,153 +28,97 @@ def _strip_bot_mentions(text: str, bot_id: int) -> str:
     return pat.sub("", text).strip()
 
 
-def _embed_to_text(embed: discord.Embed, *, max_chars: int = 3000) -> str:
-    """Convert a Discord embed into plain text suitable for LLM context."""
-    parts: list[str] = []
-    title = (getattr(embed, "title", None) or "").strip()
-    if title:
-        parts.append(f"Title: {title}")
-
-    desc = (getattr(embed, "description", None) or "").strip()
-    if desc:
-        parts.append(desc)
-
-    for f in (getattr(embed, "fields", None) or []):
-        name = (getattr(f, "name", None) or "").strip()
-        value = (getattr(f, "value", None) or "").strip()
-        if not (name or value):
-            continue
-        if name and value:
-            parts.append(f"{name}:\n{value}")
-        elif name:
-            parts.append(name)
-        else:
-            parts.append(value)
-
-    footer_obj = getattr(embed, "footer", None)
-    footer_text = (getattr(footer_obj, "text", None) or "").strip() if footer_obj else ""
-    if footer_text:
-        parts.append(f"Footer: {footer_text}")
-
-    out = "\n\n".join([p for p in parts if p]).strip()
-    if max_chars > 0 and len(out) > max_chars:
-        out = out[:max_chars] + " …"
-    return out
-
-
-def _message_to_text(msg: discord.Message, *, max_chars: int = 3500) -> str:
-    """Convert a Discord message (content + embeds) into plain text."""
-    parts: list[str] = []
-    content = (msg.content or "").strip()
-    if content:
-        parts.append(content)
-
-    embeds = getattr(msg, "embeds", None) or []
-    for e in embeds:
-        try:
-            et = _embed_to_text(e, max_chars=max_chars)
-        except Exception:
-            et = ""
-        if et:
-            parts.append(et)
-
-    out = "\n\n".join([p for p in parts if p]).strip()
-    if max_chars > 0 and len(out) > max_chars:
-        out = out[:max_chars] + " …"
-    return out
-
-
-def _collapse_ws(text: str) -> str:
-    """Collapse whitespace/newlines for compact context lines."""
-    if not text:
-        return ""
-    return re.sub(r"\s+", " ", text, flags=re.UNICODE).strip()
-
-
-def _parse_summary_target(question: str, *, default_n: int = 10, max_n: int = 25) -> int | None:
-    """Return N if the question appears to ask for a summary/recap, else None."""
-    if not question:
-        return None
-    if not _SUMMARY_INTENT_RE.search(question):
-        return None
-    n = default_n
-    m = _LAST_N_RE.search(question)
-    if m:
-        try:
-            n = int(m.group(1))
-        except Exception:
-            n = default_n
-    n = max(1, min(max_n, n))
-    return n
-
-
-async def _get_referenced_message(message: discord.Message) -> discord.Message | None:
-    """Fetch the message that `message` is replying to, if any."""
-    ref = getattr(message, "reference", None)
-    if not ref:
-        return None
-
-    resolved = getattr(ref, "resolved", None)
-    if isinstance(resolved, discord.Message):
-        return resolved
-
-    msg_id = getattr(ref, "message_id", None)
-    if not msg_id:
-        return None
-
-    fetch = getattr(message.channel, "fetch_message", None)
-    if not fetch:
-        return None
-
-    try:
-        got = await fetch(msg_id)
-        return got if isinstance(got, discord.Message) else None
-    except Exception:
-        return None
-
-
-def _format_context_lines(msgs: Iterable[discord.Message], *, per_msg_max_chars: int = 900) -> list[str]:
-    """Format a list of Discord messages into compact one-line context entries.
-
-    Notes:
-    - We include embeds (e.g., /ic report) by converting them to text.
-    - We include bot messages so follow-ups like "what was the answer?" have continuity.
-    """
-
+def _format_context_lines(msgs: Iterable[discord.Message]) -> list[str]:
     lines: list[str] = []
     for m in msgs:
         author = (m.author.display_name if m.author else "Unknown").strip() or "Unknown"
-        text = _message_to_text(m, max_chars=per_msg_max_chars)
-        text = _collapse_ws(text)
-        if not text:
+        parts: list[str] = []
+
+        content = (m.content or "").strip()
+        if content:
+            parts.append(content)
+
+        # Include embed text (so replying to /ic report etc has context)
+        embeds = getattr(m, "embeds", None) or []
+        for e in embeds:
+            try:
+                title = (getattr(e, "title", None) or "").strip()
+                desc = (getattr(e, "description", None) or "").strip()
+                if title:
+                    parts.append(f"[embed title] {title}")
+                if desc:
+                    parts.append(f"[embed] {desc}")
+                for f in (getattr(e, "fields", None) or []):
+                    name = (getattr(f, "name", None) or "").strip()
+                    value = (getattr(f, "value", None) or "").strip()
+                    if name and value:
+                        parts.append(f"[embed field] {name}: {value}")
+            except Exception:
+                continue
+
+        joined = "\n".join([p for p in parts if p]).strip()
+        if not joined:
             continue
-        if per_msg_max_chars > 0 and len(text) > per_msg_max_chars:
-            text = text[:per_msg_max_chars] + " …"
-        lines.append(f"{author}: {text}")
+
+        # Keep each line reasonably short; long walls make the model worse.
+        if len(joined) > 900:
+            joined = joined[:900] + " …"
+        lines.append(f"{author}: {joined}")
     return lines
 
 
-def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: int, summary_n: int | None = None) -> str:
+def _split_discord(text: str, limit: int = 1900) -> list[str]:
+    """Split long text into Discord-safe chunks.
+
+    Discord hard-limits message content to 2000 chars. We keep a little headroom.
+    """
+
+    t = (text or "").strip()
+    if not t:
+        return []
+    if len(t) <= limit:
+        return [t]
+
+    chunks: list[str] = []
+    buf = t
+    while buf:
+        if len(buf) <= limit:
+            chunks.append(buf)
+            break
+
+        # Prefer splitting on paragraph boundaries, then sentence-ish, then hard split.
+        cut = buf.rfind("\n\n", 0, limit)
+        if cut < 200:
+            cut = buf.rfind("\n", 0, limit)
+        if cut < 200:
+            cut = buf.rfind(". ", 0, limit)
+        if cut < 200:
+            cut = limit
+
+        chunks.append(buf[:cut].rstrip())
+        buf = buf[cut:].lstrip()
+
+    return [c for c in chunks if c]
+
+
+def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: int) -> str:
     """Build a single-turn prompt with trimmed context."""
-    if summary_n is not None:
-        header = (
-            "You are Instigator, a Discord assistant.\n"
-            "You are given exactly the last N messages from this channel (N is provided below).\n"
-            "Summarize ONLY what is in those messages. Do NOT add facts, assumptions, or outside knowledge.\n"
-            "If the user asks for information that is not present in the provided messages, say so.\n"
-            "Keep the summary compact and structured.\n"
-        )
-    else:
-        header = (
-            "You are Instigator, a Discord assistant.\n"
-            "Use recent chat context when it is relevant, and answer direct questions using general knowledge when needed.\n"
-            "Never claim something was said unless it appears in the Conversation block.\n"
-            "Be concise, correct, and practical. If missing context is required, ask 1 short clarifying question.\n"
-            "You do NOT browse the internet.\n"
-            "For time-sensitive questions (latest/so far/today), say you cannot verify live updates and offer a general explanation or ask for a source link.\n"
-            "Explain reports and metrics; do not provide personalized financial advice.\n"
-            "When asked to compute/encode/convert something, provide the final result (not just a description).\n"
-        )
+    header = (
+        "You are Instigator, a friendly, chill, and smart Discord companion hanging out in a group chat.\n"
+        "Your goal is to be helpful without being 'robotic' or 'preachy'.\n\n"
+        
+        "**CORE PERSONALITY & FORMATTING:**\n"
+        "- **Tone:** Warm, casual, and capable. (e.g., Use 'Sure,' 'Here’s the answer,' or 'Got it' rather than 'As an AI assistant...').\n"
+        "- **Brevity:** Keep responses short and punchy. Avoid walls of text. Optimize for quick reading.\n\n"
+
+        "**CRITICAL RULES FOR IMAGES:**\n"
+        "- If the user provides an image containing a problem (math, logic, etc.): **PROVIDE THE FINAL ANSWER ONLY.**\n"
+        "- **DO NOT** explain the steps, show your work, or derive the solution unless the user specifically asks (e.g., 'explain how', 'show steps').\n"
+
+        "**OPERATIONAL CONSTRAINTS:**\n"
+        "- You do not browse the live internet. If asked about real-time events, briefly admit you can't check live updates.\n"
+        "- If a request is vague, ask ONE short clarifying question.\n"
+    )
 
     # Start with newest context (closest to the question) when trimming.
     ctx = list(context_lines)
@@ -185,18 +127,13 @@ def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: in
     def assemble(ctx_lines: list[str]) -> str:
         ctx_block = "\n".join(ctx_lines)
         if ctx_block:
-            n_line = f"N={summary_n}\n" if summary_n is not None else ""
             return (
-                f"{header}"
-                f"{n_line}"
-                "<CONVERSATION>\n"
-                f"{ctx_block}\n"
-                "</CONVERSATION>\n\n"
-                "<QUESTION>\n"
-                f"{question}\n"
-                "</QUESTION>\n"
+                f"{header}\n"
+                "Conversation (oldest → newest):\n"
+                f"{ctx_block}\n\n"
+                f"User question: {question}\n"
             )
-        return f"{header}<QUESTION>\n{question}\n</QUESTION>\n"
+        return f"{header}\nUser question: {question}\n"
 
     prompt = assemble(ctx)
     if max_chars <= 0 or len(prompt) <= max_chars:
@@ -211,6 +148,92 @@ def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: in
     if len(prompt) > max_chars:
         prompt = prompt[-max_chars:]
     return prompt
+
+
+def _looks_truncated(text: str) -> bool:
+    """Heuristic: detect obviously cut-off model replies."""
+    t = (text or "").strip()
+    if not t:
+        return True
+
+    # Common dangling endings
+    if t.endswith(("1.", "1)", "-", "•", ":", "—")):
+        return True
+
+    # Started a numbered list but didn't continue
+    if "\n1." in t and "\n2." not in t and len(t) < 600:
+        return True
+
+    return False
+
+
+def _extract_char_limit(user_question: str) -> Optional[int]:
+    m = _CHAR_LIMIT_PAT.search(user_question or "")
+    if not m:
+        return None
+    try:
+        n = int(m.group(1))
+        return max(50, min(4000, n))
+    except Exception:
+        return None
+
+
+async def _get_referenced_message(message: discord.Message) -> Optional[discord.Message]:
+    ref = getattr(message, "reference", None)
+    if not ref:
+        return None
+
+    resolved = getattr(ref, "resolved", None)
+    if isinstance(resolved, discord.Message):
+        return resolved
+
+    msg_id = getattr(ref, "message_id", None)
+    if not msg_id:
+        return None
+    fetch = getattr(message.channel, "fetch_message", None)
+    if not fetch:
+        return None
+
+    try:
+        got = await fetch(msg_id)
+        return got if isinstance(got, discord.Message) else None
+    except Exception:
+        return None
+
+
+async def _extract_first_image(
+    message: discord.Message,
+    *,
+    max_bytes: int,
+) -> Optional[Tuple[str, bytes]]:
+    """Return (mime_type, bytes) for the first image attachment on message or its reply target."""
+
+    candidates: list[discord.Message] = [message]
+    ref_msg = await _get_referenced_message(message)
+    if ref_msg is not None:
+        candidates.append(ref_msg)
+
+    for msg in candidates:
+        for att in (getattr(msg, "attachments", None) or []):
+            fn = (getattr(att, "filename", None) or "").lower()
+            if not any(fn.endswith(ext) for ext in _IMAGE_EXTS):
+                continue
+
+            ctype = (getattr(att, "content_type", None) or "").strip() or "image/png"
+            try:
+                data = await att.read()
+            except Exception:
+                continue
+
+            if not data:
+                continue
+            if max_bytes > 0 and len(data) > max_bytes:
+                # Too large; skip (avoid cost/timeouts)
+                continue
+
+            return (ctype, data)
+
+    return None
 
 
 async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message) -> bool:
@@ -233,7 +256,8 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
 
     llm_enabled = bool(getattr(settings, "llm_enabled", False))
     api_key = str(getattr(settings, "gemini_api_key", "") or "").strip()
-    model = str(getattr(settings, "gemini_model", "") or "").strip() or "gemini-2.0-flash"
+    # Default to a capable low-latency model. Can be overridden via GEMINI_MODEL in .env.
+    model = str(getattr(settings, "gemini_model", "") or "").strip() or "gemini-2.5-flash"
     if not llm_enabled or not api_key:
         return False
 
@@ -262,67 +286,126 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
     max_msgs = int(getattr(settings, "llm_max_messages", 25) or 25)
     max_chars = int(getattr(settings, "llm_max_chars", 12000) or 12000)
 
-    # Special handling for “summarize last N messages” style requests.
-    summary_n = _parse_summary_target(question, default_n=10, max_n=max_msgs)
-    target_n = summary_n if summary_n is not None else max(1, max_msgs - 1)
+    # If this message is a reply, include the referenced message in context (even if it was sent by a bot,
+    # and even if it only contains embeds). This prevents "I don't see the report" style failures.
+    ref_msg: Optional[discord.Message] = None
+    try:
+        ref_msg = await _get_referenced_message(message)
+    except Exception:
+        ref_msg = None
 
     # History excludes the current message (we add the question separately)
-    history_limit = min(250, max(30, target_n * 4))
+    history_limit = max(10, min(100, max_msgs * 2))
     collected: list[discord.Message] = []
     try:
         async for m in message.channel.history(limit=history_limit, before=message.created_at, oldest_first=True):
-            # Include bot messages and embeds to preserve continuity (e.g., /ic report, follow-ups).
-            if not _message_to_text(m, max_chars=1):
+            if m.author.bot:
+                continue
+            has_text = bool((m.content or "").strip())
+            has_embeds = bool(getattr(m, "embeds", None) or [])
+            if not (has_text or has_embeds):
                 continue
             collected.append(m)
     except Exception:
         collected = []
 
-    # Keep only the last target_n context messages
-    if len(collected) > target_n:
-        collected = collected[-target_n:]
+    if ref_msg is not None and ref_msg.id != message.id:
+        # Do not let arbitrary old bot chatter leak into context: include only the explicit reference.
+        if all(m.id != ref_msg.id for m in collected):
+            collected.append(ref_msg)
 
-    # If the user is replying to a message (e.g., an /ic report embed), include that referenced
-    # message in the LLM context so the bot can explain it when explicitly mentioned.
-    # For summary requests, we skip this extra line to avoid “N messages” mismatches.
-    ref_line = ""
-    if summary_n is None:
-        try:
-            ref_msg = await _get_referenced_message(message)
-            if ref_msg is not None:
-                ref_author = (ref_msg.author.display_name if ref_msg.author else "Unknown").strip() or "Unknown"
-                ref_text = _collapse_ws(_message_to_text(ref_msg, max_chars=1200))
-                if ref_text:
-                    ref_line = f"Referenced message (user replied to) — {ref_author}: {ref_text}"
-        except Exception:
-            ref_line = ""
+    # Keep only the last (max_msgs - 1) context messages, but preserve the referenced message if present.
+    if max_msgs > 1 and len(collected) > (max_msgs - 1):
+        if ref_msg is not None and any(m.id == ref_msg.id for m in collected):
+            # Ensure referenced message stays as the newest line.
+            others = [m for m in collected if m.id != ref_msg.id]
+            keep_n = max(0, max_msgs - 2)
+            others = others[-keep_n:] if keep_n else []
+            collected = others + [ref_msg]
+        else:
+            collected = collected[-(max_msgs - 1) :]
 
     context_lines = _format_context_lines(collected)
-    if ref_line:
-        context_lines = [ref_line] + context_lines
-    prompt = _build_prompt(context_lines=context_lines, user_question=question, max_chars=max_chars, summary_n=summary_n)
+    prompt = _build_prompt(context_lines=context_lines, user_question=question, max_chars=max_chars)
+
+    # Vision: if the user posted (or replied to) an image, include it.
+    max_img_bytes = int(getattr(settings, "llm_max_image_bytes", 2_000_000) or 2_000_000)
+    inline_images: Optional[Sequence[Tuple[str, bytes]]] = None
+    try:
+        img = await _extract_first_image(message, max_bytes=max_img_bytes)
+        if img is not None:
+            inline_images = [img]
+    except Exception:
+        inline_images = None
 
     # Generate and reply
     try:
         async with message.channel.typing():
+            # Output budget. Defaults higher to avoid cut-off replies; can be overridden via LLM_MAX_OUTPUT_TOKENS.
+            max_out = int(getattr(settings, "llm_max_output_tokens", 1536) or 1536)
+            # Honor "under N chars" (rough clamp by lowering output tokens)
+            char_limit = _extract_char_limit(question)
+            if char_limit is not None:
+                max_out = min(max_out, 512)
+
             reply = await gemini_generate_text(
                 api_key=api_key,
                 model=model,
                 prompt=prompt,
+                inline_images=inline_images,
                 temperature=0.2,
-                max_output_tokens=512,
+                max_output_tokens=max_out,
                 timeout_seconds=25,
             )
+
+            # If Gemini produced an obviously cut-off reply, retry once with stricter formatting.
+            if _looks_truncated(reply):
+                repair_prompt = (
+                    "Your previous answer was cut off.\n"
+                    "Rewrite the answer fully in 4–8 sentences. "
+                    "Do not use numbered/bulleted lists. Be concise and factual.\n\n"
+                    f"User question: {question.strip()}\n"
+                )
+                try:
+                    reply2 = await gemini_generate_text(
+                        api_key=api_key,
+                        model=model,
+                        prompt=repair_prompt,
+                        inline_images=inline_images,
+                        temperature=0.2,
+                        max_output_tokens=min(max_out, 768),
+                        timeout_seconds=25,
+                    )
+                    if reply2.strip():
+                        reply = reply2
+                except Exception:
+                    pass
+
+            # Final hard clamp if user asked for under N chars
+            if char_limit is not None and len(reply) > char_limit:
+                reply = reply[: max(0, char_limit - 2)].rstrip() + "…"
 
         # Avoid mention spam by default.
         allowed_mentions = discord.AllowedMentions.none()
 
+        chunks = _split_discord(reply)
+        if not chunks:
+            return False
+
         # Prefer replying to keep context in UI
-        await message.reply(
-            reply,
+        first = await message.reply(
+            chunks[0],
             mention_author=False,
             allowed_mentions=allowed_mentions,
         )
+
+        # If we had to split, post the rest as follow-ups in-thread.
+        for chunk in chunks[1:]:
+            await message.channel.send(
+                chunk,
+                allowed_mentions=allowed_mentions,
+                reference=first,
+            )
         return True
 
     except GeminiError as e:

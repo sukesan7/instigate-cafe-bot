@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Sequence, Tuple
 
 import aiohttp
 
@@ -41,6 +42,8 @@ async def gemini_generate_text(
     model: str,
     prompt: str,
     system_instruction: Optional[str] = None,
+    # Optional inline images (mime_type, bytes). If provided, the request becomes multimodal.
+    inline_images: Optional[Sequence[Tuple[str, bytes]]] = None,
     temperature: Optional[float] = None,
     max_output_tokens: Optional[int] = None,
     timeout_seconds: int = 25,
@@ -59,19 +62,27 @@ async def gemini_generate_text(
         f"?key={api_key}"
     )
 
-    body: dict[str, Any] = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": prompt}],
-            }
-        ]
-    }
+    parts: list[dict[str, Any]] = []
+    if inline_images:
+        for mime, b in inline_images:
+            mime = (mime or "").strip() or "image/png"
+            # Gemini REST expects base64 data
+            parts.append(
+                {
+                    "inlineData": {
+                        "mimeType": mime,
+                        "data": base64.b64encode(b).decode("ascii"),
+                    }
+                }
+            )
 
-    # The API reference uses camelCase `systemInstruction`, but the official curl sample
-    # uses snake_case `system_instruction`. The endpoint accepts the curl form.
+    parts.append({"text": prompt})
+
+    body: dict[str, Any] = {"contents": [{"role": "user", "parts": parts}]}
+
+    # Prefer the API's canonical camelCase field name.
     if system_instruction and system_instruction.strip():
-        body["system_instruction"] = {
+        body["systemInstruction"] = {
             "parts": [{"text": system_instruction.strip()}],
         }
 
