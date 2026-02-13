@@ -1,191 +1,254 @@
-# Modular Discord Bot (v0.2.12)
+# Modular Discord Bot (v0.2.15)
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![discord.py](https://img.shields.io/badge/discord.py-app__commands-5865F2)
 ![SQLite](https://img.shields.io/badge/Storage-SQLite-lightgrey)
-![Status](https://img.shields.io/badge/Project-Active-success)
+![Status](https://img.shields.io/badge/Project-inactive-red)
 
-A modular Discord bot built with Python and `discord.py`. The bot combines slash-command utilities with background pollers for alerts, reporting, and tracking. The codebase is organized into feature modules (commands), service clients (API integrations), and tasks (scheduled loops).
+A modular Discord bot built with Python and `discord.py` that combines:
+- Slash-command utilities under a single root command group (`/ic`)
+- Background pollers for alerts and reporting
+- Persistent storage using SQLite for state, checkpoints, leaderboards, and schedules
+- An optional mention-based LLM assistant powered by the Gemini API (text + image)
 
-## Features
+This codebase is structured to be easy to extend: **features** (slash commands), **tasks** (polling loops), and **services** (API clients) are separated cleanly.
 
-### Slash Commands
-- **Jobs**
-  - `/ic jobs`: Show the latest matching job posts.
-- **Market report**
-  - `/ic report`: Generate a real-time market snapshot and report.
-- **Additional utilities**
-  - Feature modules are designed to be added/removed cleanly without affecting unrelated components.
+---
 
-### Background Pollers
-- **Job alerts**
-  - Polls and posts matching roles from:
-    - Workday career sites
-    - Greenhouse boards
-    - Lever sites
-  - Uses allow/deny keyword filters and location allowlists.
-  - Checkpointing prevents reposting the same job repeatedly.
-- **TTC alerts**
-  - Polls the configured TTC feed and posts new incidents to a designated channel.
-  - Supports severity filtering and checkpointing.
-- **GO Transit alerts (Metrolinx Open Data API)**
-  - Polls GO service alerts and posts new items to a designated channel.
-  - Supports line allowlisting (e.g., Lakeshore West, Lakeshore East, Stouffville).
-  - Checkpointing prevents reposting.
-- **Market watch and daily market report**
-  - Periodic volatility monitoring and watchlist movement alerts.
-  - Scheduled daily report in a configurable timezone.
-- **Optional BTC address watch**
-  - Polls an Esplora-compatible API for activity on configured addresses.
+## Highlights
 
-### Mention Assistant (Gemini)
-When a user mentions the bot in any channel (e.g., `@botname <question>`), the bot:
-- collects up to `LLM_MAX_MESSAGES` prior messages (default: 25)
-- caps context to `LLM_MAX_CHARS` (default: 12,000)
-- calls Gemini to generate a response
-- replies in the same channel
+### Command features (`icbot/features/`)
+- **Jobs**: `/ic jobs` shows the most recent SWE/CS/hardware jobs the bot has ingested (Workday + Greenhouse + Lever).
+- **Market report**: `/ic report` generates a real-time market snapshot and report.
+- **Exam schedule**: `/ic exams` shows upcoming exams (admin-managed via `/ic exams_add`, `/ic exams_remove`, `/ic exams_clear`).
+- **Virtual stock ticker**: `$IC` commands to view and manage a server “stock” price and history.
+- **Blackjack**: interactive button-based blackjack with persistent bankroll/stats, leaderboard, and reset counters.
+- **Activity leaderboard**: `/ic leaderboard` and `/ic reset` (admin/allowed roles) for activity tracking.
+- **Sports utility**: `/ic nba`, `/ic nfl`, `/ic ufc`, `/ic mma`, `/ic boxing` to show upcoming events and related headlines.
 
-Notes:
-- The assistant does not browse the internet.
-- Context is kept in-memory only; no persistent storage of message content is required for this mode.
+### Background tasks (`icbot/tasks/`)
+- **TTC alerts**: polls TTC/Mastodon notices and posts new service alerts.
+- **GO Transit alerts**: polls Metrolinx GO Open Data API and posts alerts, optionally filtered to specific lines.
+- **Jobs pollers**: polls Greenhouse/Lever/Workday sources and posts new jobs after filtering.
+- **Market watch**: volatility watcher (VIX threshold and large index/stock moves) with anti-spam latching + cooldown.
+- **Daily market report**: scheduled daily summary at a configured local time (default 16:30 America/Toronto).
+- **BTC address watch**: monitors a configured set of BTC addresses (e.g., whale/institution wallets) for activity.
+- **LLM mention assistant**: responds only when explicitly mentioned, using recent channel context and optional lore.
 
-### Games and Activities
-- The bot also consists of an ingame leaderboard system dependant on message count by user. To access this the user must type `/ic leaderboard`. 
+### External integrations (`icbot/services/`)
+- **Gemini API** (LLM): text + image understanding, mention-triggered only.
+- **Workday** job search (CXS endpoints) + URL normalization.
+- **Greenhouse** and **Lever** job board clients.
+- **Yahoo finance-style quotes** client for tickers/VIX/index moves (via a lightweight HTTP client).
+- **Metrolinx GO Open Data API** for GO alerts.
+- **Mastodon** client for TTC alerts.
+- **Blockstream Esplora-compatible** API for BTC address activity.
+- **Sports schedule/news** client for NBA/NFL/UFC/boxing utilities.
 
-- The bot includes a fun casino game of blackjack as well, that keeps track of bankroll per user as well as reset count. `/ic blackjack` to play and `/ic bj leaderboard` to see the leaderboard of users.
+---
 
-- There is a fictional stock system as well, where the user can set the stock, change the stock, and add reasoning as to why as well.
+## Command reference
 
-## Architecture
+All slash commands are under the `/ic` root group.
 
-The project follows a layered structure:
+### General utilities
+- `/ic report` — Generate the current market report.
+- `/ic jobs` — Show the most recent matching jobs the bot has seen.
+- `/ic exams` — Show the configured exam schedule.
 
-- **Features**: slash command handlers (Discord-facing)
-- **Services**: API clients and data fetch/parse utilities
-- **Tasks**: scheduled pollers that run continuously in the background
-- **DB**: SQLite persistence for checkpoints, histories, and lightweight state
+### Exams (admin/allowed roles)
+- `/ic exams_add` — Add an exam entry.
+- `/ic exams_remove` — Remove an exam entry by ID.
+- `/ic exams_clear` — Remove all exam entries.
 
-A typical workflow:
-1. A task poller fetches data via a service client.
-2. Data is filtered, deduplicated (checkpointed), and formatted.
-3. The bot posts to a configured channel and updates the checkpoint.
+### Virtual stock ticker
+- `/ic stock` — Show the current server stock price.
+- `/ic stock_history` — Show recent price changes.
+- `/ic stock_change` — Change the price by a delta (admin/allowed roles).
+- `/ic stock_set` — Set the price to an exact value (admin/allowed roles).
 
-## Requirements
-- Python 3.11+ recommended
-- `discord.py` 2.x
-- A Discord bot token
-- API keys for optional integrations (Gemini, Metrolinx GO, etc.)
+### Games and leaderboards
+- `/ic blackjack` — Start an interactive blackjack hand (buttons).
+  - Persistent bankroll and stats per user.
+  - Leaderboard view (top bankrolls).
+  - Reset counter tracking on resets.
+- `/ic leaderboard` — Activity leaderboard (monthly + all-time).
+- `/ic reset` — Reset activity counts (admin/allowed roles).
 
-## Repo Layout
+### Sports utilities
+- `/ic nba` — Upcoming NBA games + latest headlines.
+- `/ic nfl` — Upcoming NFL games + latest headlines.
+- `/ic ufc` / `/ic mma` — Upcoming MMA events + latest headlines.
+- `/ic boxing` — Upcoming boxing bouts + latest headlines.
 
-```text
-instigate-cafe-bot/
-  main.py
-  requirements.txt
-  .env.example
+---
 
-  icbot/
-    app.py                 # /ic root command group
-    config.py              # Settings + .env parsing
-    db.py                  # SQLite wrapper (async)
-    permissions.py         # role-ID permission checks
-    embeds.py              # consistent embed styling (stock/games/alerts/jobs)
+## LLM assistant (Gemini)
 
-    features/
-      stock.py             # stock commands + history
-      blackjack.py         # /ic blackjack + interactive buttons
-      lc_leaderboard.py    # /ic leaderboard + monthly/all-time paging
+The LLM assistant is **mention-based** and will only respond when the bot is explicitly mentioned in a message (e.g., `@botname ...`).
 
-    games/
-      blackjack_engine.py  # blackjack rules/state engine (pure logic)
+### Behavior
+- Reads up to `LLM_MAX_MESSAGES` recent messages (default 25) with a `LLM_MAX_CHARS` cap (default 12,000).
+- Supports **image Q&A** when the mention message (or the replied-to message) contains an image attachment.
+- Uses a per-user cooldown (default 3 seconds).
+- Applies safe formatting and anti-spam constraints (no `@everyone` / `@here` mentions in replies).
 
-    services/
-      ttc_client.py        # TTC RSS fetch + parse
-      jobs_ats_client.py   # Greenhouse + Lever fetch + normalize
-      yahoo_quotes.py      # quote fetcher (used by market watch + daily report)
-      crypto_fng.py        # crypto fear & greed (alternative.me)
-      btc_esplora.py       # BTC address watcher (Esplora API)
+### Lore support
+A lightweight lore system can inject server-specific inside jokes or context into the prompt **only when triggers match**.
 
-    tasks/
-      ttc_alerts.py        # background poller that posts TTC alerts
-      job_alerts.py        # background poller that posts job alerts
-      market_watch.py      # background poller that posts volatility alerts
-      market_daily_report.py  # scheduled daily recap
-      btc_watch.py         # BTC address movement alerts
-```
+- Lore file example: `tools/lore.tmu_files.json`
+- Optional: set `LORE_PATH=tools/lore.tmu_files.json`
 
-## Setup
+This avoids bloating every request while still making the assistant context-aware.
 
-### 1) Discord Developer Portal Configuration
-Create a Discord application and bot, then invite it to your server with:
-- `bot`
-- `applications.commands`
+---
 
-Required intents depend on enabled features:
-- The mention assistant requires **Message Content Intent** to read message text for context.
+## Jobs ingestion and filtering
 
-### 2) Environment Configuration
-Copy `.env.example` to `.env`, then fill in values for the features you enable.
+The bot supports:
+- **Greenhouse** boards (`GREENHOUSE_BOARDS`)
+- **Lever** sites (`LEVER_SITES`)
+- **Workday** sites (`WORKDAY_SITES`)
 
-### 3) Install and Run
+Filtering is driven by `.env` allow/deny lists:
+- `JOBS_LOCATION_ALLOWLIST`
+- `JOBS_KEYWORDS_ALLOWLIST`
+- `JOBS_KEYWORDS_DENYLIST`
 
-#### Windows (PowerShell)
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-py -m pip install --upgrade pip
-pip install -r requirements.txt
-py main.py
-```
+Recommended approach:
+- Keep allowlist focused on SWE/CS/CE/hardware keywords (e.g., “software engineer”, “embedded”, “firmware”, “fpga”).
+- Use denylist aggressively for non-technical roles (sales, marketing, PM, HR, etc.).
+- Keep short ambiguous tokens out of allowlists (e.g., plain “c”) to reduce false positives.
 
-#### macOS/Linux
+---
+
+## Alerts and reporting
+
+### Market watch
+- Designed to avoid spamming: it triggers on threshold crossings/edges (not every cooldown interval while above threshold).
+- Checks:
+  - VIX threshold (`MARKET_WATCH_VIX_LEVEL`)
+  - Large index move (`MARKET_WATCH_INDEX_MOVE_PCT`)
+  - Large watched-stock move (`MARKET_WATCH_STOCK_MOVE_PCT`)
+
+### Daily market report
+- Posts at `MARKET_DAILY_REPORT_TIME` in `MARKET_DAILY_REPORT_TZ`.
+- Summarizes watched tickers and includes the server’s virtual stock close.
+
+### TTC and GO alerts
+- TTC: polls a Mastodon feed (instance/account configurable).
+- GO: polls Metrolinx GO Open Data API; supports line allowlist and optional filtering of facility advisories.
+
+### BTC address watch
+- Watches a configured list of BTC addresses and posts events into the configured channel.
+- Uses an Esplora-compatible endpoint (default Blockstream).
+
+---
+
+## Data storage (SQLite)
+
+The bot uses SQLite for:
+- Persistent bot state and checkpoints (e.g., “last seen” IDs for feeds)
+- Job de-duplication (avoid reposting previously seen jobs)
+- Exam schedule storage
+- Blackjack bankroll/stats/leaderboards and reset counts
+- Activity leaderboard counts
+- Virtual stock history
+
+Database path is configured via `DB_PATH`.
+
+---
+
+## Configuration
+
+The bot is configured via environment variables. Copy `.env.example` to `.env` and fill in values.
+
+Minimum required:
+- `DISCORD_TOKEN`
+- Optional (recommended for dev): `GUILD_ID`
+- Channels for the features you enable (set to 0 to disable)
+
+### Enabling modules
+Most subsystems are enabled by:
+- setting the relevant channel id to a non-zero value, and/or
+- setting an explicit `*_ENABLED=true` flag (where applicable)
+
+Examples:
+- Jobs: `JOB_ALERTS_CHANNEL_ID`, `GREENHOUSE_BOARDS`, `LEVER_SITES`, `WORKDAY_SITES`
+- Market watch: `MARKET_WATCH_ENABLED=true`, `MARKET_WATCH_CHANNEL_ID=...`
+- Daily report: `MARKET_DAILY_REPORT_ENABLED=true`, `MARKET_DAILY_REPORT_CHANNEL_ID=...`
+- TTC: `TTC_ALERTS_CHANNEL_ID=...`
+- GO: `GO_ALERTS_CHANNEL_ID=...`, `GO_API_KEY=...`
+- LLM: `LLM_ENABLED=true`, `GEMINI_API_KEY=...`, `GEMINI_MODEL=gemini-2.5-flash`
+
+### Permissions
+Admin-only actions are gated by role IDs:
+- `ALLOWED_ROLE_IDS` (comma-separated role IDs)
+
+---
+
+## Setup and run
+
+### Requirements
+- Python 3.11+
+- A Discord bot token (Discord Developer Portal)
+- Optional API keys (GO, Gemini, etc.) depending on enabled modules
+
+### Install
 ```bash
-python3 -m venv .venv
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
 source .venv/bin/activate
-python -m pip install --upgrade pip
+
 pip install -r requirements.txt
+```
+
+### Configure
+```bash
+cp .env.example .env
+# edit .env with your token, guild, channels, and API keys
+```
+
+### Run
+```bash
 python main.py
 ```
 
-## Commands
-Commands are grouped under `/ic`. Exact availability depends on which feature modules are included and synced.
+---
 
-Example:
-- `/ic jobs`
-- `/ic report`
+## Project layout
 
-## Configuration Overview
+```
+project-root/
+  main.py                     # bot entrypoint, task startup, command sync
+  icbot/
+    app.py                    # defines /ic root command group
+    config.py                 # Settings loader (.env parsing)
+    db.py                     # SQLite database wrapper + schema init
+    permissions.py            # role/channel gates for admin commands
+    embeds.py                 # embed factory helpers
+    features/                 # slash commands (/ic ...)
+    tasks/                    # background pollers/loops
+    services/                 # HTTP/API clients
+    games/                    # game engines (e.g., blackjack)
+  tools/
+    lore_loader.py            # lore pack loader + trigger matcher
+    lore.tmu_files.json       # example lore pack (fictional/inside jokes)
+```
 
-### Channels
-Most background services require a channel ID. If a channel ID is `0` or unset, that service should be considered disabled (unless your code falls back to a default channel).
+---
 
-### Poll Intervals
-- Jobs and alerts run on configurable intervals.
-- Use conservative polling intervals in public servers to reduce spam and API usage.
+## Notes for production use
 
-### GO Line Allowlisting
-Limit GO alerts to specific corridors by listing either codes or names.
+If you run this in a public server:
+- Keep the LLM assistant mention-only (default behavior).
+- Set conservative caps (`LLM_MAX_MESSAGES`, `LLM_MAX_CHARS`) and a small cooldown.
+- Configure budgets/alerts at your model provider and keep API keys private.
+- Use `ALLOWED_ROLE_IDS` for destructive actions (resets, stock changes, exam updates).
 
-Examples:
-- `GO_LINES_ALLOWLIST=LW,LE,ST`
-- `GO_LINES_ALLOWLIST=Lakeshore West,Lakeshore East,Stouffville`
-
-## Operational Safety (Public Server Guidance)
-
-If deploying to a large public server:
-- Add per-user and per-server rate limits for the mention assistant.
-- Add concurrency caps for LLM calls.
-- Enforce provider-side budgets and billing protections.
-- Restrict API keys where possible.
-
-## Data Persistence
-SQLite is used for:
-- job checkpoints and posting state
-- alert checkpoints (TTC, GO)
-- market report state (if enabled)
-- other lightweight bot state
+---
 
 ## License
-Refer to the MIT License. 
-
-> All data provided by this bot does not constitute any financial advice.
+See `LICENSE`.
