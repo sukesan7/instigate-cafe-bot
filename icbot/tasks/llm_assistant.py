@@ -14,6 +14,14 @@ from icbot.services.gemini_client import GeminiError, gemini_generate_text
 _MENTION_RE_TEMPLATE = r"<@!?{bot_id}>"
 
 
+# Heuristics for special intents. We keep these lightweight on purpose.
+_SUMMARY_INTENT_RE = re.compile(
+    r"\b(summarize|summary|recap|tl;dr|tldr|catch\s+me\s+up|what\s+did\s+we\s+talk\s+about)\b",
+    re.IGNORECASE,
+)
+_LAST_N_RE = re.compile(r"\blast\s+(\d{1,3})\s+messages\b", re.IGNORECASE)
+
+
 def _strip_bot_mentions(text: str, bot_id: int) -> str:
     """Remove <@id> and <@!id> mentions for this bot from a message."""
     if not text:
@@ -78,6 +86,30 @@ def _message_to_text(msg: discord.Message, *, max_chars: int = 3500) -> str:
     return out
 
 
+def _collapse_ws(text: str) -> str:
+    """Collapse whitespace/newlines for compact context lines."""
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text, flags=re.UNICODE).strip()
+
+
+def _parse_summary_target(question: str, *, default_n: int = 10, max_n: int = 25) -> int | None:
+    """Return N if the question appears to ask for a summary/recap, else None."""
+    if not question:
+        return None
+    if not _SUMMARY_INTENT_RE.search(question):
+        return None
+    n = default_n
+    m = _LAST_N_RE.search(question)
+    if m:
+        try:
+            n = int(m.group(1))
+        except Exception:
+            n = default_n
+    n = max(1, min(max_n, n))
+    return n
+
+
 async def _get_referenced_message(message: discord.Message) -> discord.Message | None:
     """Fetch the message that `message` is replying to, if any."""
     ref = getattr(message, "reference", None)
@@ -103,32 +135,48 @@ async def _get_referenced_message(message: discord.Message) -> discord.Message |
         return None
 
 
-def _format_context_lines(msgs: Iterable[discord.Message]) -> list[str]:
+def _format_context_lines(msgs: Iterable[discord.Message], *, per_msg_max_chars: int = 900) -> list[str]:
+    """Format a list of Discord messages into compact one-line context entries.
+
+    Notes:
+    - We include embeds (e.g., /ic report) by converting them to text.
+    - We include bot messages so follow-ups like "what was the answer?" have continuity.
+    """
+
     lines: list[str] = []
     for m in msgs:
         author = (m.author.display_name if m.author else "Unknown").strip() or "Unknown"
-        content = (m.content or "").strip()
-        if not content:
+        text = _message_to_text(m, max_chars=per_msg_max_chars)
+        text = _collapse_ws(text)
+        if not text:
             continue
-        # Keep each line reasonably short; long walls make the model worse.
-        if len(content) > 800:
-            content = content[:800] + " …"
-        lines.append(f"{author}: {content}")
+        if per_msg_max_chars > 0 and len(text) > per_msg_max_chars:
+            text = text[:per_msg_max_chars] + " …"
+        lines.append(f"{author}: {text}")
     return lines
 
 
-def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: int) -> str:
+def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: int, summary_n: int | None = None) -> str:
     """Build a single-turn prompt with trimmed context."""
-    header = (
-        "You are Instigator, a helpful Discord assistant for the Instigate Cafe server.\n"
-        "Use recent chat context only when it is relevant or when the user asks about what was said.\n"
-        "You may answer using general knowledge even if the recent chat context doesn't mention the topic.\n"
-        "Be concise, correct, and practical. If there is missing context, ask 1 short clarifying question.\n"
-        "You do NOT browse the internet\n."
-        "For time-sensitive questions (latest/so far/today), say you cannot verify live updates and offer a general explanation or ask for a source link.\n"
-        "Explain reports and metrics; do not provide personalized financial advice.\n"
-        "Do NOT invent details that aren't in the chat.\n"
-    )
+    if summary_n is not None:
+        header = (
+            "You are Instigator, a Discord assistant.\n"
+            "You are given exactly the last N messages from this channel (N is provided below).\n"
+            "Summarize ONLY what is in those messages. Do NOT add facts, assumptions, or outside knowledge.\n"
+            "If the user asks for information that is not present in the provided messages, say so.\n"
+            "Keep the summary compact and structured.\n"
+        )
+    else:
+        header = (
+            "You are Instigator, a Discord assistant.\n"
+            "Use recent chat context when it is relevant, and answer direct questions using general knowledge when needed.\n"
+            "Never claim something was said unless it appears in the Conversation block.\n"
+            "Be concise, correct, and practical. If missing context is required, ask 1 short clarifying question.\n"
+            "You do NOT browse the internet.\n"
+            "For time-sensitive questions (latest/so far/today), say you cannot verify live updates and offer a general explanation or ask for a source link.\n"
+            "Explain reports and metrics; do not provide personalized financial advice.\n"
+            "When asked to compute/encode/convert something, provide the final result (not just a description).\n"
+        )
 
     # Start with newest context (closest to the question) when trimming.
     ctx = list(context_lines)
@@ -137,13 +185,18 @@ def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: in
     def assemble(ctx_lines: list[str]) -> str:
         ctx_block = "\n".join(ctx_lines)
         if ctx_block:
+            n_line = f"N={summary_n}\n" if summary_n is not None else ""
             return (
-                f"{header}\n"
-                "Conversation (oldest → newest):\n"
-                f"{ctx_block}\n\n"
-                f"User question: {question}\n"
+                f"{header}"
+                f"{n_line}"
+                "<CONVERSATION>\n"
+                f"{ctx_block}\n"
+                "</CONVERSATION>\n\n"
+                "<QUESTION>\n"
+                f"{question}\n"
+                "</QUESTION>\n"
             )
-        return f"{header}\nUser question: {question}\n"
+        return f"{header}<QUESTION>\n{question}\n</QUESTION>\n"
 
     prompt = assemble(ctx)
     if max_chars <= 0 or len(prompt) <= max_chars:
@@ -209,39 +262,45 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
     max_msgs = int(getattr(settings, "llm_max_messages", 25) or 25)
     max_chars = int(getattr(settings, "llm_max_chars", 12000) or 12000)
 
+    # Special handling for “summarize last N messages” style requests.
+    summary_n = _parse_summary_target(question, default_n=10, max_n=max_msgs)
+    target_n = summary_n if summary_n is not None else max(1, max_msgs - 1)
+
     # History excludes the current message (we add the question separately)
-    history_limit = max(10, min(100, max_msgs * 2))
+    history_limit = min(250, max(30, target_n * 4))
     collected: list[discord.Message] = []
     try:
         async for m in message.channel.history(limit=history_limit, before=message.created_at, oldest_first=True):
-            if m.author.bot:
-                continue
-            if not (m.content or "").strip():
+            # Include bot messages and embeds to preserve continuity (e.g., /ic report, follow-ups).
+            if not _message_to_text(m, max_chars=1):
                 continue
             collected.append(m)
     except Exception:
         collected = []
 
-    # Keep only the last (max_msgs - 1) context messages
-    if max_msgs > 1 and len(collected) > (max_msgs - 1):
-        collected = collected[-(max_msgs - 1) :]
+    # Keep only the last target_n context messages
+    if len(collected) > target_n:
+        collected = collected[-target_n:]
 
     # If the user is replying to a message (e.g., an /ic report embed), include that referenced
     # message in the LLM context so the bot can explain it when explicitly mentioned.
+    # For summary requests, we skip this extra line to avoid “N messages” mismatches.
     ref_line = ""
-    try:
-        ref_msg = await _get_referenced_message(message)
-        if ref_msg is not None:
-            ref_text = _message_to_text(ref_msg, max_chars=3500)
-            if ref_text:
-                ref_line = f"Referenced message (user replied to):\n{ref_text}"
-    except Exception:
-        ref_line = ""
+    if summary_n is None:
+        try:
+            ref_msg = await _get_referenced_message(message)
+            if ref_msg is not None:
+                ref_author = (ref_msg.author.display_name if ref_msg.author else "Unknown").strip() or "Unknown"
+                ref_text = _collapse_ws(_message_to_text(ref_msg, max_chars=1200))
+                if ref_text:
+                    ref_line = f"Referenced message (user replied to) — {ref_author}: {ref_text}"
+        except Exception:
+            ref_line = ""
 
     context_lines = _format_context_lines(collected)
     if ref_line:
         context_lines = [ref_line] + context_lines
-    prompt = _build_prompt(context_lines=context_lines, user_question=question, max_chars=max_chars)
+    prompt = _build_prompt(context_lines=context_lines, user_question=question, max_chars=max_chars, summary_n=summary_n)
 
     # Generate and reply
     try:

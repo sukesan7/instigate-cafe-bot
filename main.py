@@ -480,9 +480,19 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
-    # LLM mention assistant: @Instigator ... (responds in the same channel)
+    # LLM mention assistant: ONLY respond when the bot is explicitly mentioned in the message content.
+    # Note: When replying in Discord, there is an optional "Mention @user" toggle that inserts a real mention
+    # into the reply. If that toggle is on, this will correctly count as an explicit mention.
     try:
-        await maybe_handle_llm_mention(bot, message)
+        if bot.user is not None and bot.user in (message.mentions or []):
+            await maybe_handle_llm_mention(bot, message)
+        else:
+            # Optional debug: helps confirm whether Discord inserted an @mention into a reply.
+            if bool(getattr(settings, "llm_debug", False)) and bot.user is not None:
+                if getattr(message, "reference", None) is not None and message.author and not message.author.bot:
+                    mentioned_ids = [u.id for u in (message.mentions or [])]
+                    if bot.user.id in mentioned_ids:
+                        print("[LLM] NOTE: reply contains a bot mention (likely due to 'Mention @user' reply toggle).")
     except Exception as e:
         if bool(getattr(settings, "llm_debug", False)):
             print(f"[LLM] on_message handler error: {e!r}")
@@ -495,6 +505,7 @@ async def on_message(message: discord.Message):
 
 
 def main():
+
     if not settings.token:
         raise SystemExit("Missing DISCORD_TOKEN in .env")
     bot.run(settings.token)
