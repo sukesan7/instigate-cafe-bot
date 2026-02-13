@@ -161,6 +161,9 @@ class Settings:
     go_ca_bundle_path: str = ""
     go_debug: bool = False
 
+    # Exams
+    exams_tz: str = "America/Toronto"
+
     # LLM mention assistant (Gemini)
     llm_enabled: bool = False
     llm_cooldown_seconds: int = 3
@@ -335,6 +338,7 @@ class Settings:
         btc_watch_cooldown_minutes = _to_int(os.getenv("BTC_WATCH_COOLDOWN_MINUTES", "30"), 30)
 
         db_path = os.getenv("DB_PATH", "ic_stock.db").strip() or "ic_stock.db"
+        exams_tz = os.getenv("EXAMS_TZ", "America/Toronto").strip() or "America/Toronto"
 
         # Default workday poll seconds to jobs poll seconds if unset
         if workday_poll_seconds <= 0:
@@ -417,4 +421,5 @@ class Settings:
             btc_esplora_base_url=btc_esplora_base_url,
             btc_watch_cooldown_minutes=btc_watch_cooldown_minutes,
             db_path=db_path,
+            exams_tz=exams_tz,
         )

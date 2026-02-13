@@ -97,6 +97,24 @@ class Database:
                 """
             )
 
+            # Exams (manual schedule configured by admins)
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS exams (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    course_code TEXT NOT NULL,
+                    course_name TEXT NOT NULL,
+                    start_ts INTEGER NOT NULL,
+                    end_ts INTEGER,
+                    location TEXT,
+                    notes TEXT,
+                    created_by INTEGER,
+                    created_at INTEGER NOT NULL
+                )
+                """
+            )
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_exams_start_ts ON exams(start_ts)")
+
             # Initialize stock value if missing
             cur = await db.execute("SELECT value FROM meta WHERE key='stock_value'")
             row = await cur.fetchone()

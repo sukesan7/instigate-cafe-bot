@@ -25,6 +25,7 @@ from icbot.features import lc_leaderboard  # noqa: F401
 from icbot.features import sports  # noqa: F401
 from icbot.features import report  # noqa: F401
 from icbot.features import jobs  # noqa: F401
+from icbot.features import exams  # noqa: F401
 from icbot.features.lc_leaderboard import ActivityTracker
 
 
