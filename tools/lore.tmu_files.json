@@ -1,0 +1,155 @@
+{
+  "version": "1.0",
+  "source": "TMU Files",
+  "notes": [
+    "This lore pack is an inside joke/parody for the Instigate Cafe.",
+    "Treat all lore as fictional; do not present as real-world claims.",
+    "Never repeat slurs, sexual content, or allegations about real people."
+  ],
+  "entries": [
+    {
+      "id": "tmu_files_overview",
+      "triggers": [
+        "tmu files",
+        "the tmu files",
+        "tmu intelligence agency",
+        "eyes only",
+        "confidential // tmu",
+        "archive dept: engineering",
+        "classified"
+      ],
+      "title": "TMU Files",
+      "summary": "A running server joke: a 'classified dossier' written in an over-serious intelligence style, with names redacted (Subject1, Subject2, etc.). It is parody/fiction used for memes in chat.",
+      "response_rules": [
+        "Respond playfully in a 'declassified archive' tone, but keep it short.",
+        "Do not name real individuals; keep redactions (SubjectX)."
+      ],
+      "example_responses": [
+        "Declassified note: the 'TMU Files' are a server parody dossier\u2014names redacted, facts not guaranteed.",
+        "Archive response (EYES ONLY): File exists as a meme. Details remain redacted."
+      ]
+    },
+    {
+      "id": "tmu_files_incident_redaction",
+      "triggers": [
+        "incident report",
+        "incident",
+        "case file",
+        "file number",
+        "declassify",
+        "unseal",
+        "what happened in the"
+      ],
+      "title": "Incident reports (redacted)",
+      "summary": "When users ask about a specific 'incident' from the TMU Files, the bot should avoid repeating explicit content or accusations. Keep it as a joke: say it's redacted/sealed and offer to help with something legitimate instead.",
+      "response_rules": [
+        "Do NOT describe explicit/sexual content, slurs, harassment, underage content, or criminal allegations.",
+        "Do NOT present claims as real.",
+        "Reply with a 'sealed/redacted' line and optionally ask what they want help with."
+      ],
+      "example_responses": [
+        "That incident file is sealed/redacted in the TMU Files lore. If you want help with the actual topic, tell me what you\u2019re studying.",
+        "Archive note: details withheld. I can help explain the underlying concept instead."
+      ]
+    },
+    {
+      "id": "methodology_tradecraft_meta",
+      "triggers": [
+        "methodology",
+        "tradecraft",
+        "methods",
+        "the method",
+        "what's the method",
+        "whats the method"
+      ],
+      "title": "Methodology & Tradecraft (meme section)",
+      "summary": "A parody section listing 'methods' in the TMU Files. Treat as meme labels, not real advice.",
+      "response_rules": [
+        "Never provide instructions for cheating or wrongdoing.",
+        "If asked, explain it's a meme label and redirect to legitimate studying/office-hours advice."
+      ],
+      "example_responses": [
+        "\u2018Methodology & Tradecraft\u2019 is a meme heading in the TMU Files parody. I can\u2019t help with cheating\u2014tell me the question and I\u2019ll help you solve it properly."
+      ]
+    },
+    {
+      "id": "bush_method",
+      "triggers": [
+        "bush method",
+        "the bush method"
+      ],
+      "title": "Bush Method (meme)",
+      "summary": "A meme label from the TMU Files 'tradecraft' section. It is associated with wrongdoing/cheating in the parody.",
+      "response_rules": [
+        "Refuse to give any cheating steps.",
+        "Offer legitimate study help."
+      ],
+      "example_responses": [
+        "The 'Bush Method' is a TMU Files label. It consists of a subject going to the washroom to cheat in a specifc way..."
+      ]
+    },
+    {
+      "id": "sock_method",
+      "triggers": [
+        "sock method",
+        "the sock method"
+      ],
+      "title": "Sock Method (meme)",
+      "summary": "Another label from the TMU Files 'tradecraft' section, associated with cheating in the files.",
+      "response_rules": [
+        "Refuse cheating guidance.",
+        "Redirect to learning."
+      ],
+      "example_responses": [
+        "Sock Method = TMU Files incident. This method is about placing a device in their sock to cheat on exams"
+      ]
+    },
+    {
+      "id": "amma_method",
+      "triggers": [
+        "amma method",
+        "the amma method"
+      ],
+      "title": "AMMA Method (meme)",
+      "summary": "A TMU Files meme label about over-the-top grade negotiations. Keep it light and redirect to respectful, legitimate grade inquiry advice if needed. It is about bringing one's mother to convince the professors.",
+      "response_rules": [
+        "Keep it as a meme; do not harass staff.",
+        "If user wants real advice: suggest polite email/office hours."
+      ],
+      "example_responses": [
+        "AMMA Method is a TMU Files meme about dramatic grade appeals. Real play: be polite, ask for feedback, and use office hours."
+      ]
+    },
+    {
+      "id": "like_a_father_method",
+      "triggers": [
+        "like a father method",
+        "like-a-father method"
+      ],
+      "title": "Like a Father Method",
+      "summary": "A TMU Files meme label for trying to de-escalate with authority figures by being overly sentimental. Treat as a joke; keep it harmless.",
+      "response_rules": [
+        "Light humor; keep it short."
+      ],
+      "example_responses": [
+        "Like-a-Father Method: deploy maximum emotional damage control."
+      ]
+    },
+    {
+      "id": "sunny_compilation_credit",
+      "triggers": [
+        "credit goes to sunny",
+        "compiled by sunny",
+        "sunny compiled"
+      ],
+      "title": "Compilation credit",
+      "summary": "The TMU Files parody document credits 'Sunny' for compiling it.",
+      "response_rules": [
+        "Keep it neutral; avoid doxxing; no real identity claims."
+      ],
+      "example_responses": [
+        "Archive note: the TMU Files parody credits \u2018Sunny\u2019 for compilation."
+      ]
+    }
+  ]
+}

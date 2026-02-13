@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import pathlib
 import re
 import time
 from typing import Iterable, Optional, Sequence, Tuple
@@ -18,6 +21,131 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 # Detect requests like "keep it under 500 chars"
 _CHAR_LIMIT_PAT = re.compile(r"under\s+(\d{2,5})\s*(?:chars|characters)\b", re.IGNORECASE)
+
+_DEFAULT_LORE_PATHS = (
+    "tools/lore.json",
+    "tools/lore.tmu_files.json",
+)
+
+def _find_lore_path(settings: Settings) -> Optional[str]:
+    # Prefer explicit settings/env, then common defaults.
+    candidates: list[str] = []
+    sp = str(getattr(settings, "lore_path", "") or "").strip()
+    if sp:
+        candidates.append(sp)
+    ep = (os.getenv("LORE_PATH") or "").strip()
+    if ep:
+        candidates.append(ep)
+    candidates.extend(list(_DEFAULT_LORE_PATHS))
+
+    for p in candidates:
+        if not p:
+            continue
+        try:
+            if pathlib.Path(p).exists():
+                return p
+        except Exception:
+            continue
+    return None
+
+
+def _load_lore_entries(bot: discord.Client, settings: Settings) -> list[dict]:
+    """Load lore entries from disk with a simple mtime cache."""
+    lore_path = _find_lore_path(settings)
+    if not lore_path:
+        return []
+
+    cache = getattr(bot, "_lore_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(bot, "_lore_cache", cache)
+
+    try:
+        p = pathlib.Path(lore_path)
+        mtime = p.stat().st_mtime
+        cached = cache.get(lore_path)
+        if isinstance(cached, dict) and cached.get("mtime") == mtime and isinstance(cached.get("entries"), list):
+            return cached["entries"]  # type: ignore[return-value]
+
+        raw = p.read_text(encoding="utf-8", errors="ignore")
+        # Only JSON is supported in-code to avoid extra deps.
+        entries = json.loads(raw)
+        if not isinstance(entries, list):
+            return []
+        # Normalize shape: require triggers + meaning/summary
+        cleaned: list[dict] = []
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            triggers = e.get("triggers") or e.get("keywords") or []
+            if isinstance(triggers, str):
+                triggers = [triggers]
+            if not isinstance(triggers, list) or not triggers:
+                continue
+            cleaned.append(e)
+
+        cache[lore_path] = {"mtime": mtime, "entries": cleaned}
+        return cleaned
+    except Exception:
+        return []
+
+
+def _match_lore(entries: list[dict], text_blob: str, *, max_items: int = 5) -> list[dict]:
+    t = (text_blob or "").lower()
+    if not t or not entries:
+        return []
+
+    scored: list[tuple[int, dict]] = []
+    for e in entries:
+        triggers = e.get("triggers") or e.get("keywords") or []
+        if isinstance(triggers, str):
+            triggers = [triggers]
+        if not isinstance(triggers, list):
+            continue
+        hits = 0
+        for trig in triggers:
+            try:
+                trig_s = str(trig).strip().lower()
+            except Exception:
+                continue
+            if trig_s and trig_s in t:
+                hits += 1
+        if hits > 0:
+            scored.append((hits, e))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [e for _, e in scored[:max_items]]
+
+
+def _build_lore_snippet(matches: list[dict], *, max_chars: int = 1400) -> str:
+    if not matches:
+        return ""
+
+    lines: list[str] = []
+    lines.append("SERVER LORE:")
+    lines.append("- Treat lore as fiction. Do NOT present as real-world facts.")
+    lines.append("- Do not repeat explicit sexual content, slurs, or harassment")
+    lines.append("- If asked for 'incidents' or 'methods' details, keep it brief and redacted unless it's harmless.")
+    lines.append("")
+
+    for e in matches:
+        title = str(e.get("id") or e.get("title") or "lore").strip()
+        meaning = str(e.get("meaning") or e.get("summary") or e.get("definition") or "").strip()
+        style = str(e.get("reply_style") or e.get("response_style") or "").strip()
+        if not meaning and not style:
+            continue
+        lines.append(f"* {title}:")
+        if meaning:
+            lines.append(f"  - meaning: {meaning}")
+        if style:
+            lines.append(f"  - style: {style}")
+        lines.append("")
+
+    out = "\n".join(lines).strip()
+    if len(out) > max_chars:
+        out = out[:max_chars].rstrip() + "…"
+    return out
+
 
 
 def _strip_bot_mentions(text: str, bot_id: int) -> str:
@@ -101,7 +229,7 @@ def _split_discord(text: str, limit: int = 1900) -> list[str]:
     return [c for c in chunks if c]
 
 
-def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: int) -> str:
+def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: int, lore_snippet: str = "") -> str:
     """Build a single-turn prompt with trimmed context."""
     header = (
         "You are Instigator, a friendly, chill, and smart Discord companion hanging out in a group chat.\n"
@@ -109,6 +237,7 @@ def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: in
         
         "**CORE PERSONALITY & FORMATTING:**\n"
         "- **Tone:** Warm, casual, and capable. (e.g., Use 'Sure,' 'Here’s the answer,' or 'Got it' rather than 'As an AI assistant...').\n"
+        "- **do not answer coding questions.**\n"
         "- **Brevity:** Keep responses short and punchy. Avoid walls of text. Optimize for quick reading.\n\n"
 
         "**CRITICAL RULES FOR IMAGES:**\n"
@@ -126,14 +255,16 @@ def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: in
 
     def assemble(ctx_lines: list[str]) -> str:
         ctx_block = "\n".join(ctx_lines)
+        lore_block = (lore_snippet.strip() + "\n\n") if lore_snippet and lore_snippet.strip() else ""
         if ctx_block:
             return (
                 f"{header}\n"
+                f"{lore_block}"
                 "Conversation (oldest → newest):\n"
                 f"{ctx_block}\n\n"
                 f"User question: {question}\n"
             )
-        return f"{header}\nUser question: {question}\n"
+        return f"{header}\n{lore_block}User question: {question}\n"
 
     prompt = assemble(ctx)
     if max_chars <= 0 or len(prompt) <= max_chars:
@@ -326,7 +457,13 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
             collected = collected[-(max_msgs - 1) :]
 
     context_lines = _format_context_lines(collected)
-    prompt = _build_prompt(context_lines=context_lines, user_question=question, max_chars=max_chars)
+    # Lore: inject relevant inside-joke context (small + targeted) if available.
+    lore_entries = _load_lore_entries(bot, settings)
+    text_blob = ("\n".join(context_lines) + "\n\n" + question).strip()
+    lore_matches = _match_lore(lore_entries, text_blob)
+    lore_snippet = _build_lore_snippet(lore_matches)
+
+    prompt = _build_prompt(context_lines=context_lines, user_question=question, max_chars=max_chars, lore_snippet=lore_snippet)
 
     # Vision: if the user posted (or replied to) an image, include it.
     max_img_bytes = int(getattr(settings, "llm_max_image_bytes", 2_000_000) or 2_000_000)
