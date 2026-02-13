@@ -42,8 +42,15 @@ def _find_lore_path(settings: Settings) -> Optional[str]:
         if not p:
             continue
         try:
-            if pathlib.Path(p).exists():
-                return p
+            pp = pathlib.Path(p)
+            if pp.exists():
+                return str(pp)
+            # If running from a different working directory, also try resolving relative to the repo root.
+            if not pp.is_absolute():
+                repo_root = pathlib.Path(__file__).resolve().parents[2]
+                alt = (repo_root / pp).resolve()
+                if alt.exists():
+                    return str(alt)
         except Exception:
             continue
     return None
@@ -69,7 +76,12 @@ def _load_lore_entries(bot: discord.Client, settings: Settings) -> list[dict]:
 
         raw = p.read_text(encoding="utf-8", errors="ignore")
         # Only JSON is supported in-code to avoid extra deps.
-        entries = json.loads(raw)
+        entries_obj = json.loads(raw)
+        # Support either a raw list of entries OR an object with an "entries" list (recommended lore-pack format).
+        if isinstance(entries_obj, dict) and isinstance(entries_obj.get("entries"), list):
+            entries = entries_obj.get("entries")  # type: ignore[assignment]
+        else:
+            entries = entries_obj
         if not isinstance(entries, list):
             return []
         # Normalize shape: require triggers + meaning/summary
@@ -83,6 +95,9 @@ def _load_lore_entries(bot: discord.Client, settings: Settings) -> list[dict]:
             if not isinstance(triggers, list) or not triggers:
                 continue
             cleaned.append(e)
+
+        if bool(getattr(settings, "llm_debug", False)):
+            print(f"[LORE] loaded {len(cleaned)} entries from {lore_path}")
 
         cache[lore_path] = {"mtime": mtime, "entries": cleaned}
         return cleaned

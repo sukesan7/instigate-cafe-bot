@@ -3,7 +3,8 @@
   "source": "TMU Files",
   "notes": [
     "This lore pack is an inside joke/parody for the Instigate Cafe.",
-    "Treat all lore as fictional; do not present as real-world claims.",
+    "This lore pack is an inside joke/parody for the Instigate Cafe",
+    "Treat all lore as fictional; do not present as real-world claims. However, treat it as serious as the Epstien files that the DOJ is investigating.",
     "Never repeat slurs, sexual content, or allegations about real people."
   ],
   "entries": [
@@ -19,14 +20,14 @@
         "classified"
       ],
       "title": "TMU Files",
-      "summary": "A running server joke: a 'classified dossier' written in an over-serious intelligence style, with names redacted (Subject1, Subject2, etc.). It is parody/fiction used for memes in chat.",
+      "summary": "A 'classified dossier' written in an serious intelligence style, with names redacted (Subject1, Subject2, etc.). It is parody/fiction of the Epstien files and is used in the Instigate Cafe (secret society).",
       "response_rules": [
         "Respond playfully in a 'declassified archive' tone, but keep it short.",
         "Do not name real individuals; keep redactions (SubjectX)."
       ],
       "example_responses": [
-        "Declassified note: the 'TMU Files' are a server parody dossier\u2014names redacted, facts not guaranteed.",
-        "Archive response (EYES ONLY): File exists as a meme. Details remain redacted."
+        "Declassified note: the 'TMU Files' are a server dossier\u2014names redacted, facts not guaranteed. Investigations are still ongoing.",
+        "Archive response (EYES ONLY): File exist. Details remain redacted."
       ]
     },
     {
@@ -35,17 +36,16 @@
         "incident report",
         "incident",
         "case file",
-        "file number",
         "declassify",
         "unseal",
         "what happened in the"
       ],
       "title": "Incident reports (redacted)",
-      "summary": "When users ask about a specific 'incident' from the TMU Files, the bot should avoid repeating explicit content or accusations. Keep it as a joke: say it's redacted/sealed and offer to help with something legitimate instead.",
+      "summary": "When users ask about a specific 'incident' from the TMU Files, the bot should avoid repeating explicit content or accusations. Say it's redacted/sealed and that investigations are ongoing.",
       "response_rules": [
         "Do NOT describe explicit/sexual content, slurs, harassment, underage content, or criminal allegations.",
         "Do NOT present claims as real.",
-        "Reply with a 'sealed/redacted' line and optionally ask what they want help with."
+        "Reply with a 'sealed/redacted' line."
       ],
       "example_responses": [
         "That incident file is sealed/redacted in the TMU Files lore. If you want help with the actual topic, tell me what you\u2019re studying.",
@@ -62,14 +62,14 @@
         "what's the method",
         "whats the method"
       ],
-      "title": "Methodology & Tradecraft (meme section)",
-      "summary": "A parody section listing 'methods' in the TMU Files. Treat as meme labels, not real advice.",
+      "title": "Methodology & Tradecraft (list)",
+      "summary": "A section listing 'methods' in the TMU Files. Treat as ongoing investigation labels, not real advice.",
       "response_rules": [
         "Never provide instructions for cheating or wrongdoing.",
-        "If asked, explain it's a meme label and redirect to legitimate studying/office-hours advice."
+        "If asked, explain it's a serious label and redirect to legitimate studying advice."
       ],
       "example_responses": [
-        "\u2018Methodology & Tradecraft\u2019 is a meme heading in the TMU Files parody. I can\u2019t help with cheating\u2014tell me the question and I\u2019ll help you solve it properly."
+        "\u2018Methodology & Tradecraft\u2019 is a label heading in the TMU Files. I can\u2019t help with cheating\u2014tell me the question and I\u2019ll help you solve it properly."
       ]
     },
     {
@@ -78,8 +78,8 @@
         "bush method",
         "the bush method"
       ],
-      "title": "Bush Method (meme)",
-      "summary": "A meme label from the TMU Files 'tradecraft' section. It is associated with wrongdoing/cheating in the parody.",
+      "title": "Bush Method",
+      "summary": "The bush method is when the SUBJECT went to the bathroom to creatively use their device during an examination session.",
       "response_rules": [
         "Refuse to give any cheating steps.",
         "Offer legitimate study help."
@@ -94,8 +94,8 @@
         "sock method",
         "the sock method"
       ],
-      "title": "Sock Method (meme)",
-      "summary": "Another label from the TMU Files 'tradecraft' section, associated with cheating in the files.",
+      "title": "Sock Method",
+      "summary": "The sock method is when the SUBJECT decided to place a device inside their sock during the examination period.",
       "response_rules": [
         "Refuse cheating guidance.",
         "Redirect to learning."
@@ -110,14 +110,14 @@
         "amma method",
         "the amma method"
       ],
-      "title": "AMMA Method (meme)",
-      "summary": "A TMU Files meme label about over-the-top grade negotiations. Keep it light and redirect to respectful, legitimate grade inquiry advice if needed. It is about bringing one's mother to convince the professors.",
+      "title": "AMMA Method",
+      "summary": "The AMMA method is when SUBJECT brought in their parents to office hours to discuss negotiations on how to pass the course.",
       "response_rules": [
-        "Keep it as a meme; do not harass staff.",
-        "If user wants real advice: suggest polite email/office hours."
+        "do not harass staff.",
+        "If user wants real advice: suggest polite email."
       ],
       "example_responses": [
-        "AMMA Method is a TMU Files meme about dramatic grade appeals. Real play: be polite, ask for feedback, and use office hours."
+        "AMMA Method is a TMU Files method about dramatic grade appeals."
       ]
     },
     {
@@ -127,7 +127,7 @@
         "like-a-father method"
       ],
       "title": "Like a Father Method",
-      "summary": "A TMU Files meme label for trying to de-escalate with authority figures by being overly sentimental. Treat as a joke; keep it harmless.",
+      "summary": "A TMU Files label for trying to de-escalate with authority figures by being overly sentimental.",
       "response_rules": [
         "Light humor; keep it short."
       ],
@@ -143,7 +143,7 @@
         "sunny compiled"
       ],
       "title": "Compilation credit",
-      "summary": "The TMU Files parody document credits 'Sunny' for compiling it.",
+      "summary": "The TMU Files document credits 'Sunny' for compiling it.",
       "response_rules": [
         "Keep it neutral; avoid doxxing; no real identity claims."
       ],
