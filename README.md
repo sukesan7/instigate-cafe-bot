@@ -1,14 +1,14 @@
-# Modular Discord Bot (v0.2.15)
+# Modular Discord Bot (v0.2.16)
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![discord.py](https://img.shields.io/badge/discord.py-app__commands-5865F2)
 ![SQLite](https://img.shields.io/badge/Storage-SQLite-lightgrey)
-![Status](https://img.shields.io/badge/Project-inactive-red)
+![Status](https://img.shields.io/badge/Project-active-a)
 
 A modular Discord bot built with Python and `discord.py` that combines:
 - Slash-command utilities under a single root command group (`/ic`)
 - Background pollers for alerts and reporting
-- Persistent storage using SQLite for state, checkpoints, leaderboards, and schedules
+- Persistent storage using SQLite for state, checkpoints, leaderboards, schedules, and game/economy data
 - An optional mention-based LLM assistant powered by the Gemini API (text + image)
 
 This codebase is structured to be easy to extend: **features** (slash commands), **tasks** (polling loops), and **services** (API clients) are separated cleanly.
@@ -21,7 +21,8 @@ This codebase is structured to be easy to extend: **features** (slash commands),
 - **Jobs**: `/ic jobs` shows the most recent SWE/CS/hardware jobs the bot has ingested (Workday + Greenhouse + Lever).
 - **Market report**: `/ic report` generates a real-time market snapshot and report.
 - **Exam schedule**: `/ic exams` shows upcoming exams (admin-managed via `/ic exams_add`, `/ic exams_remove`, `/ic exams_clear`).
-- **Virtual stock ticker**: `$IC` commands to view and manage a server “stock” price and history.
+- **Virtual stock ticker**: legacy `$IC` commands to view/manage the server “stock” price and history (now backed by the fun market system for compatibility).
+- **Fun market / investing system**: `/ic invest ...` commands for server-specific stocks (e.g., capstone teams, meme stocks), long/short positions, portfolios, trade history, and leaderboards.
 - **Blackjack**: interactive button-based blackjack with persistent bankroll/stats, leaderboard, and reset counters.
 - **Activity leaderboard**: `/ic leaderboard` and `/ic reset` (admin/allowed roles) for activity tracking.
 - **Sports utility**: `/ic nba`, `/ic nfl`, `/ic ufc`, `/ic mma`, `/ic boxing` to show upcoming events and related headlines.
@@ -31,7 +32,7 @@ This codebase is structured to be easy to extend: **features** (slash commands),
 - **GO Transit alerts**: polls Metrolinx GO Open Data API and posts alerts, optionally filtered to specific lines.
 - **Jobs pollers**: polls Greenhouse/Lever/Workday sources and posts new jobs after filtering.
 - **Market watch**: volatility watcher (VIX threshold and large index/stock moves) with anti-spam latching + cooldown.
-- **Daily market report**: scheduled daily summary at a configured local time (default 16:30 America/Toronto).
+- **Daily market report**: scheduled daily summary at a configured local time (default 16:30 America/Toronto), including the server’s stock close and a fun-market weekly snapshot.
 - **BTC address watch**: monitors a configured set of BTC addresses (e.g., whale/institution wallets) for activity.
 - **LLM mention assistant**: responds only when explicitly mentioned, using recent channel context and optional lore.
 
@@ -44,6 +45,8 @@ This codebase is structured to be easy to extend: **features** (slash commands),
 - **Mastodon** client for TTC alerts.
 - **Blockstream Esplora-compatible** API for BTC address activity.
 - **Sports schedule/news** client for NBA/NFL/UFC/boxing utilities.
+- **Crypto Fear & Greed** support (if enabled by your reporting flow).
+- **Fun market service layer** for server stock catalog sync, positions, trades, portfolios, and weekly rollovers.
 
 ---
 
@@ -61,11 +64,41 @@ All slash commands are under the `/ic` root group.
 - `/ic exams_remove` — Remove an exam entry by ID.
 - `/ic exams_clear` — Remove all exam entries.
 
-### Virtual stock ticker
-- `/ic stock` — Show the current server stock price.
-- `/ic stock_history` — Show recent price changes.
-- `/ic stock_change` — Change the price by a delta (admin/allowed roles).
-- `/ic stock_set` — Set the price to an exact value (admin/allowed roles).
+### Virtual stock ticker (legacy compatibility)
+- `/ic stock` — Show the current server stock price (`$IC`).
+- `/ic stock_history` — Show recent `$IC` price changes.
+- `/ic stock_change` — Change `$IC` price by a delta (admin/allowed roles).
+- `/ic stock_set` — Set `$IC` price to an exact value (admin/allowed roles).
+
+> Note: These legacy `$IC` commands are preserved for compatibility and now use the newer fun-market backend internally.
+
+### Fun market / investing (`/ic invest ...`)
+Server-specific paper-trading style market using the **same economy bankroll** used by blackjack.
+
+#### Market & portfolio
+- `/ic invest market` — Show all active fun stocks (price + weekly move snapshot).
+- `/ic invest quote <symbol>` — Show a single stock quote and weekly change (e.g., `IC`, `DISD`, `AGIS`).
+- `/ic invest portfolio [user]` — Show open positions, cash, and net worth.
+- `/ic invest leaderboard [limit]` — Show fun-market net-worth leaderboard.
+- `/ic invest trades [limit] [user]` — Show recent fun-market trades.
+- `/ic invest history [limit] [symbol]` — Show recent admin price-change history.
+
+#### Trading
+- `/ic invest buy <symbol> <qty>` — Buy (long) shares/contracts.
+- `/ic invest sell <symbol> <qty>` — Sell long shares/contracts.
+- `/ic invest short <symbol> <qty>` — Open a short position (collateral required).
+- `/ic invest cover <symbol> <qty>` — Close (cover) part/all of a short position.
+
+#### Admin / market controls (admin/allowed roles)
+- `/ic invest move <symbol> <delta> [reason]` — Move a stock price by a delta.
+- `/ic invest set <symbol> <value> [reason]` — Set a stock to an exact price.
+- `/ic invest sync` — Sync the code-defined stock catalog into the database.
+- `/ic invest weekroll [note]` — Manually roll/reset weekly baselines (for weekly change tracking).
+
+#### Catalog behavior (code-defined stocks)
+- Fun stocks are defined in code (e.g., `icbot/services/fun_market_catalog.py`).
+- Add/remove/update symbols in code, then run `/ic invest sync`.
+- Missing symbols are marked inactive on sync (history/positions preserved).
 
 ### Games and leaderboards
 - `/ic blackjack` — Start an interactive blackjack hand (buttons).
@@ -74,6 +107,8 @@ All slash commands are under the `/ic` root group.
   - Reset counter tracking on resets.
 - `/ic leaderboard` — Activity leaderboard (monthly + all-time).
 - `/ic reset` — Reset activity counts (admin/allowed roles).
+
+> Note: bankroll resets are guarded to prevent economy exploits while a user still has open fun-market positions.
 
 ### Sports utilities
 - `/ic nba` — Upcoming NBA games + latest headlines.
@@ -96,8 +131,8 @@ The LLM assistant is **mention-based** and will only respond when the bot is exp
 ### Lore support
 A lightweight lore system can inject server-specific inside jokes or context into the prompt **only when triggers match**.
 
-- Lore file example: `tools/lore.tmu_files.json`
-- Optional: set `LORE_PATH=tools/lore.tmu_files.json`
+- Lore file example: `tools/lore.x_files.json`
+- Optional: set `LORE_PATH=tools/lore.x_files.json`
 
 This avoids bloating every request while still making the assistant context-aware.
 
@@ -134,6 +169,7 @@ Recommended approach:
 ### Daily market report
 - Posts at `MARKET_DAILY_REPORT_TIME` in `MARKET_DAILY_REPORT_TZ`.
 - Summarizes watched tickers and includes the server’s virtual stock close.
+- Also includes a **fun-market section** (weekly snapshot of active server stocks).
 
 ### TTC and GO alerts
 - TTC: polls a Mastodon feed (instance/account configurable).
@@ -153,7 +189,9 @@ The bot uses SQLite for:
 - Exam schedule storage
 - Blackjack bankroll/stats/leaderboards and reset counts
 - Activity leaderboard counts
-- Virtual stock history
+- Virtual stock history (`$IC`)
+- Fun market stock catalog/state (prices, weekly baselines, active/inactive status)
+- Fun market positions (long/short), collateral locks, and trade ledger/history
 
 Database path is configured via `DB_PATH`.
 
@@ -180,6 +218,11 @@ Examples:
 - TTC: `TTC_ALERTS_CHANNEL_ID=...`
 - GO: `GO_ALERTS_CHANNEL_ID=...`, `GO_API_KEY=...`
 - LLM: `LLM_ENABLED=true`, `GEMINI_API_KEY=...`, `GEMINI_MODEL=gemini-2.5-flash`
+
+### Fun market configuration
+The fun market stock catalog is **code-defined** (not configured via slash commands):
+- Edit `icbot/services/fun_market_catalog.py` to add/remove/update server stocks.
+- Run `/ic invest sync` after changes to sync catalog updates into SQLite.
 
 ### Permissions
 Admin-only actions are gated by role IDs:
@@ -220,22 +263,62 @@ python main.py
 
 ## Project layout
 
-```
+```text
 project-root/
-  main.py                     # bot entrypoint, task startup, command sync
-  icbot/
-    app.py                    # defines /ic root command group
-    config.py                 # Settings loader (.env parsing)
-    db.py                     # SQLite database wrapper + schema init
-    permissions.py            # role/channel gates for admin commands
-    embeds.py                 # embed factory helpers
-    features/                 # slash commands (/ic ...)
-    tasks/                    # background pollers/loops
-    services/                 # HTTP/API clients
-    games/                    # game engines (e.g., blackjack)
-  tools/
-    lore_loader.py            # lore pack loader + trigger matcher
-    lore.tmu_files.json       # example lore pack (fictional/inside jokes)
+├─ .env.example
+├─ .gitignore
+├─ LICENSE
+├─ README.md
+├─ main.py
+├─ requirements.txt
+├─ icbot/
+│  ├─ __init__.py
+│  ├─ app.py
+│  ├─ config.py
+│  ├─ db.py
+│  ├─ embeds.py
+│  ├─ permissions.py
+│  ├─ utils.py
+│  ├─ features/
+│  │  ├─ __init__.py
+│  │  ├─ blackjack.py
+│  │  ├─ exams.py
+│  │  ├─ invest.py                  
+│  │  ├─ jobs.py
+│  │  ├─ lc_leaderboard.py
+│  │  ├─ report.py
+│  │  ├─ sports.py
+│  │  └─ stock.py                   
+│  ├─ games/
+│  │  ├─ __init__.py
+│  │  └─ blackjack_engine.py
+│  ├─ services/
+│  │  ├─ __init__.py
+│  │  ├─ btc_esplora.py
+│  │  ├─ crypto_fng.py
+│  │  ├─ fun_market.py              
+│  │  ├─ fun_market_catalog.py      
+│  │  ├─ gemini_client.py
+│  │  ├─ go_client.py
+│  │  ├─ jobs_ats_client.py
+│  │  ├─ jobs_workday_client.py
+│  │  ├─ sports_client.py
+│  │  ├─ ttc_client.py
+│  │  └─ yahoo_quotes.py
+│  └─ tasks/
+│     ├─ __init__.py
+│     ├─ btc_watch.py
+│     ├─ go_alerts.py
+│     ├─ job_alerts.py
+│     ├─ jobs_workday_alerts.py
+│     ├─ llm_assistant.py
+│     ├─ market_daily_report.py     
+│     ├─ market_watch.py
+│     └─ ttc_alerts.py
+└─ tools/
+   ├─ __init__.py
+   ├─ lore_loader.py
+   └─ purge_global_commands.py
 ```
 
 ---
@@ -246,7 +329,8 @@ If you run this in a public server:
 - Keep the LLM assistant mention-only (default behavior).
 - Set conservative caps (`LLM_MAX_MESSAGES`, `LLM_MAX_CHARS`) and a small cooldown.
 - Configure budgets/alerts at your model provider and keep API keys private.
-- Use `ALLOWED_ROLE_IDS` for destructive actions (resets, stock changes, exam updates).
+- Use `ALLOWED_ROLE_IDS` for destructive actions (resets, stock changes, exam updates, fun-market price changes).
+- Be transparent with fun-market price updates (use reasons when moving/setting prices) to keep it fair/fun for server members.
 
 ---
 
