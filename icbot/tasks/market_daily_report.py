@@ -9,6 +9,7 @@ import discord
 from icbot.embeds import system as system_embed
 from icbot.services.yahoo_quotes import Quote, fetch_quotes
 from icbot.services.crypto_fng import fetch_fear_greed
+from icbot.services.fun_market import FunMarketStore
 
 
 def _fmt_pct(x: float | None) -> str:
@@ -39,6 +40,29 @@ async def _get_meta(db, key: str) -> str:
 async def _set_meta(db, key: str, value: str) -> None:
     await db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
+
+
+
+async def _fun_market_lines(settings, db) -> list[str]:
+    """Fun stocks for the daily report (excluding IC to avoid duplicate with legacy $IC line)."""
+    try:
+        store = FunMarketStore(
+            db,
+            starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
+            tz_name=str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"),
+        )
+        rows = await store.list_stocks(active_only=True)
+    except Exception:
+        return []
+
+    lines: list[str] = []
+    for s in rows:
+        if str(s.symbol).upper() == "IC":
+            continue
+        lines.append(
+            f"• **${s.symbol}** ${s.price} ({s.weekly_change_abs:+d}, {_fmt_pct(s.weekly_change_pct)})"
+        )
+    return lines[:10]
 
 async def _resolve_channel(bot: discord.Client, channel_id: int) -> Optional[discord.abc.Messageable]:
     ch = bot.get_channel(channel_id)
@@ -207,6 +231,10 @@ async def build_market_report_embed(
     if l_lines:
         fields.append(("Top losers", "\n".join(l_lines), True))
     fields.append(("$IC close", f"**${ic_val}**", False))
+
+    fun_lines = await _fun_market_lines(settings, db)
+    if fun_lines:
+        fields.append(("Instigate Cafe Stock Exchange (weekly)", "\n".join(fun_lines), False))
 
     footer_hint = "Stock Watcher"
 

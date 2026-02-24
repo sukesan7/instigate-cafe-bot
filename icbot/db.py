@@ -53,6 +53,7 @@ class Database:
                 await db.execute(
                     "ALTER TABLE blackjack_users ADD COLUMN reset_count INTEGER NOT NULL DEFAULT 0"
                 )
+
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS activity_counts (
@@ -115,7 +116,118 @@ class Database:
             )
             await db.execute("CREATE INDEX IF NOT EXISTS idx_exams_start_ts ON exams(start_ts)")
 
-            # Initialize stock value if missing
+            # ------------------------------------------------------
+            # Fun Market tables (server stocks + user positions/trades)
+            # ------------------------------------------------------
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fun_stocks (
+                    symbol TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    price INTEGER NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'misc',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_ts INTEGER NOT NULL,
+                    updated_ts INTEGER NOT NULL,
+                    week_key TEXT,
+                    week_open INTEGER
+                )
+                """
+            )
+
+            # Additive migrations for old installs if table existed from an experimental branch
+            cur = await db.execute("PRAGMA table_info(fun_stocks)")
+            fun_cols = [str(r[1]) for r in (await cur.fetchall() or [])]
+            if fun_cols:
+                if "category" not in fun_cols:
+                    await db.execute("ALTER TABLE fun_stocks ADD COLUMN category TEXT NOT NULL DEFAULT 'misc'")
+                if "is_active" not in fun_cols:
+                    await db.execute("ALTER TABLE fun_stocks ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+                if "week_key" not in fun_cols:
+                    await db.execute("ALTER TABLE fun_stocks ADD COLUMN week_key TEXT")
+                if "week_open" not in fun_cols:
+                    await db.execute("ALTER TABLE fun_stocks ADD COLUMN week_open INTEGER")
+
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fun_stock_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts_unix INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    delta INTEGER NOT NULL,
+                    new_value INTEGER NOT NULL,
+                    reason TEXT
+                )
+                """
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fun_stock_events_symbol_ts ON fun_stock_events(symbol, ts_unix DESC)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fun_stock_events_ts ON fun_stock_events(ts_unix DESC)"
+            )
+
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fun_positions (
+                    user_id INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    qty INTEGER NOT NULL,
+                    avg_price REAL NOT NULL,
+                    collateral_locked INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, symbol, side)
+                )
+                """
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fun_positions_user ON fun_positions(user_id)"
+            )
+
+            # Additive migration if table existed before collateral support
+            cur = await db.execute("PRAGMA table_info(fun_positions)")
+            pos_cols = [str(r[1]) for r in (await cur.fetchall() or [])]
+            if pos_cols and "collateral_locked" not in pos_cols:
+                await db.execute(
+                    "ALTER TABLE fun_positions ADD COLUMN collateral_locked INTEGER NOT NULL DEFAULT 0"
+                )
+
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fun_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts_unix INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    qty INTEGER NOT NULL,
+                    price INTEGER NOT NULL,
+                    cash_delta INTEGER NOT NULL,
+                    realized_pnl INTEGER NOT NULL DEFAULT 0,
+                    note TEXT
+                )
+                """
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fun_trades_user_ts ON fun_trades(user_id, ts_unix DESC)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fun_trades_ts ON fun_trades(ts_unix DESC)"
+            )
+
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fun_market_weeks (
+                    week_key TEXT PRIMARY KEY,
+                    settled_at INTEGER NOT NULL,
+                    settled_by INTEGER,
+                    notes TEXT
+                )
+                """
+            )
+
+            # Initialize legacy $IC stock value if missing
             cur = await db.execute("SELECT value FROM meta WHERE key='stock_value'")
             row = await cur.fetchone()
             if row is None:

@@ -21,6 +21,7 @@ from icbot.tasks.llm_assistant import maybe_handle_llm_mention
 # Import features (registers commands onto /ic)
 from icbot.features import stock  # noqa: F401
 from icbot.features import blackjack  # noqa: F401
+from icbot.features import invest  # noqa: F401
 from icbot.features import lc_leaderboard  # noqa: F401
 from icbot.features import sports  # noqa: F401
 from icbot.features import report  # noqa: F401

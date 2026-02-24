@@ -753,6 +753,27 @@ async def reset(interaction: discord.Interaction, user: discord.User):
         await interaction.response.send_message("❌ You don’t have permission to reset bankrolls.", ephemeral=True)
         return
 
+    # Guardrail: prevent resetting bankroll while the user has open fun-market positions.
+    try:
+        from icbot.services.fun_market import FunMarketStore
+
+        fm = FunMarketStore(
+            interaction.client.db,  # type: ignore[attr-defined]
+            starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
+            tz_name=str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"),
+        )
+        open_qty = await fm.count_open_positions(user.id)
+        if open_qty > 0:
+            await interaction.response.send_message(
+                f"❌ Cannot reset {user.mention}: they have open fun-market positions (total qty **{open_qty}**). "
+                f"Ask them to close positions first (`/ic invest portfolio`, `/sell`, `/cover`).",
+                ephemeral=True,
+            )
+            return
+    except Exception:
+        # Fail open here to avoid breaking admin reset if fun-market code is unavailable.
+        pass
+
     store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
     resets = await store.reset_user(user.id)
     await interaction.response.send_message(
