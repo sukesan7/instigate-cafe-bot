@@ -132,7 +132,7 @@ def match_lore(texts: Iterable[str], *, max_entries: int = 5, max_chars: int = 1
     picked = [e for _, e in scored[:max_entries]]
 
     lines: list[str] = []
-    lines.append("Server lore (inside jokes; parody/fiction, not factual):")
+    lines.append("Server lore:")
     for e in picked:
         rules = ""
         if e.response_rules:
