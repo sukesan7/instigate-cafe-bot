@@ -87,22 +87,23 @@ class FunMarketStore:
     # Internal low-level helpers
     # ---------------------------
     async def _ensure_bj_user_conn(self, conn: aiosqlite.Connection, user_id: int) -> None:
-        cur = await conn.execute("SELECT user_id FROM blackjack_users WHERE user_id=?", (user_id,))
+        """Ensure the central `users` row exists (source of truth for balance)."""
+        cur = await conn.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
         row = await cur.fetchone()
         if row is None:
             await conn.execute(
-                "INSERT INTO blackjack_users (user_id, bankroll) VALUES (?, ?)",
-                (user_id, self.starting_bankroll),
+                "INSERT INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
+                (user_id, self.starting_bankroll, int(time.time())),
             )
 
     async def _get_bankroll_conn(self, conn: aiosqlite.Connection, user_id: int) -> int:
         await self._ensure_bj_user_conn(conn, user_id)
-        cur = await conn.execute("SELECT bankroll FROM blackjack_users WHERE user_id=?", (user_id,))
+        cur = await conn.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
         row = await cur.fetchone()
         return int(row[0]) if row else self.starting_bankroll
 
     async def _set_bankroll_conn(self, conn: aiosqlite.Connection, user_id: int, bankroll: int) -> None:
-        await conn.execute("UPDATE blackjack_users SET bankroll=? WHERE user_id=?", (int(bankroll), user_id))
+        await conn.execute("UPDATE users SET balance=? WHERE user_id=?", (int(bankroll), user_id))
 
     async def _get_stock_conn(self, conn: aiosqlite.Connection, symbol: str) -> Optional[tuple]:
         cur = await conn.execute(
@@ -629,15 +630,15 @@ class FunMarketStore:
     async def portfolio(self, *, user_id: int) -> PortfolioSnapshot:
         await self.sync_catalog()
         cash_row = await self.db.fetchone(
-            "SELECT bankroll FROM blackjack_users WHERE user_id=?",
+            "SELECT balance FROM users WHERE user_id=?",
             (int(user_id),),
         )
         cash = int(cash_row[0]) if cash_row and cash_row[0] is not None else self.starting_bankroll
         # ensure user row exists lazily for consistency
         if cash_row is None:
             await self.db.execute(
-                "INSERT OR IGNORE INTO blackjack_users (user_id, bankroll) VALUES (?, ?)",
-                (int(user_id), self.starting_bankroll),
+                "INSERT OR IGNORE INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
+                (int(user_id), self.starting_bankroll, int(time.time())),
             )
             cash = self.starting_bankroll
 
@@ -703,7 +704,7 @@ class FunMarketStore:
         await self.sync_catalog()
         user_rows = await self.db.fetchall(
             """
-            SELECT DISTINCT user_id FROM blackjack_users
+            SELECT DISTINCT user_id FROM users
             UNION
             SELECT DISTINCT user_id FROM fun_positions
             """

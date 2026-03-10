@@ -5,15 +5,26 @@ from typing import Iterable
 import discord
 from discord import app_commands
 
-from icbot.app import ic
+from icbot.app import icse, admin
 from icbot.embeds import stock as stock_embed, system as system_embed
 from icbot.permissions import is_admin_or_allowed
 from icbot.services.fun_market import FunMarketStore, FunMarketError, format_signed_money
 from icbot.utils import parse_signed_int
 
 
-invest = app_commands.Group(name="invest", description="ICSE server stock market")
-ic.add_command(invest)
+
+
+
+async def _post_optional_announcement(interaction: discord.Interaction, embed: discord.Embed) -> None:
+    """Post an embed to the stock channel when an admin moves/sets a stock."""
+    settings = interaction.client.settings  # type: ignore[attr-defined]
+    if settings.stock_channel_id and interaction.guild:
+        ch = interaction.guild.get_channel(settings.stock_channel_id)
+        if isinstance(ch, discord.TextChannel):
+            try:
+                await ch.send(embed=embed)
+            except discord.Forbidden:
+                pass
 
 
 def _store(interaction: discord.Interaction) -> FunMarketStore:
@@ -50,7 +61,7 @@ def _chunk_lines(lines: Iterable[str], n: int) -> list[str]:
     return out
 
 
-@invest.command(name="market", description="Show the current Instigate Cafe Stock Exchange.")
+@icse.command(name="market", description="Show the current Instigate Cafe Stock Exchange.")
 async def market(interaction: discord.Interaction):
     st = _store(interaction)
     rows = await st.list_stocks(active_only=True)
@@ -74,14 +85,14 @@ async def market(interaction: discord.Interaction):
     embed = system_embed(
         settings,
         title="🧪 Instigate Cafe Stock Exchange",
-        summary=f"Weekly change baseline: **{wk}** • Use `/ic invest quote`, `/buy`, `/sell`, `/short`, `/cover`",
+        summary=f"Weekly change baseline: **{wk}** • Use `/ic icse quote`, `/ic icse buy`, `/ic icse sell`, `/ic icse short`, `/ic icse cover`",
         fields=fields[:20],
         footer_hint="ICSE",
     )
     await interaction.response.send_message(embed=embed)
 
 
-@invest.command(name="quote", description="Show a single stock quote.")
+@icse.command(name="quote", description="Show a single stock quote.")
 @app_commands.describe(symbol="Example: IC, DISD, AGIS")
 async def quote(interaction: discord.Interaction, symbol: str):
     st = _store(interaction)
@@ -101,7 +112,7 @@ async def quote(interaction: discord.Interaction, symbol: str):
     await interaction.response.send_message(embed=embed)
 
 
-@invest.command(name="portfolio", description="Show your market portfolio.")
+@icse.command(name="portfolio", description="Show your market portfolio.")
 @app_commands.describe(user="Optional: view another user's portfolio")
 async def portfolio(interaction: discord.Interaction, user: discord.User | None = None):
     target = user or interaction.user
@@ -144,7 +155,7 @@ async def portfolio(interaction: discord.Interaction, user: discord.User | None 
     await interaction.response.send_message(embed=embed, ephemeral=(target.id == interaction.user.id))
 
 
-@invest.command(name="buy", description="Buy a stock (long).")
+@icse.command(name="buy", description="Buy a stock (long).")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def buy(interaction: discord.Interaction, symbol: str, qty: int):
     st = _store(interaction)
@@ -168,7 +179,7 @@ async def buy(interaction: discord.Interaction, symbol: str, qty: int):
     await interaction.response.send_message(embed=embed)
 
 
-@invest.command(name="sell", description="Sell a long position.")
+@icse.command(name="sell", description="Sell a long position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def sell(interaction: discord.Interaction, symbol: str, qty: int):
     st = _store(interaction)
@@ -194,7 +205,7 @@ async def sell(interaction: discord.Interaction, symbol: str, qty: int):
     await interaction.response.send_message(embed=embed)
 
 
-@invest.command(name="short", description="Open/increase a short position.")
+@icse.command(name="short", description="Open/increase a short position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def short(interaction: discord.Interaction, symbol: str, qty: int):
     st = _store(interaction)
@@ -219,7 +230,7 @@ async def short(interaction: discord.Interaction, symbol: str, qty: int):
     await interaction.response.send_message(embed=embed)
 
 
-@invest.command(name="cover", description="Cover (close) a short position.")
+@icse.command(name="cover", description="Cover (close) a short position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def cover(interaction: discord.Interaction, symbol: str, qty: int):
     st = _store(interaction)
@@ -246,7 +257,7 @@ async def cover(interaction: discord.Interaction, symbol: str, qty: int):
     await interaction.response.send_message(embed=embed)
 
 
-@invest.command(name="trades", description="Show recent market trades.")
+@icse.command(name="trades", description="Show recent market trades.")
 @app_commands.describe(limit="Max 25", user="Optional: show another user's trades")
 async def trades(interaction: discord.Interaction, limit: int = 10, user: discord.User | None = None):
     target = user or interaction.user
@@ -275,34 +286,9 @@ async def trades(interaction: discord.Interaction, limit: int = 10, user: discor
     await interaction.response.send_message(embed=embed, ephemeral=(target.id == interaction.user.id))
 
 
-@invest.command(name="leaderboard", description="Rank users by ICSE market net worth (cash + positions).")
-@app_commands.describe(limit="How many entries (max 25)")
-async def leaderboard(interaction: discord.Interaction, limit: int = 10):
-    st = _store(interaction)
-    rows = await st.leaderboard_by_networth(limit=limit)
-    if not rows:
-        await interaction.response.send_message("No data yet.")
-        return
-
-    lines = []
-    for i, snap in enumerate(rows, start=1):
-        lines.append(
-            f"**{i}.** <@{snap.user_id}> — **${snap.net_worth}** "
-            f"(cash ${snap.cash}, long ${snap.long_value}, short ${snap.short_equity})"
-        )
-
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    embed = system_embed(
-        settings,
-        title="🏦 Instigate Cafe Stock Exchange Market Net-Worth Leaderboard",
-        summary="Cash + marked-to-market stock positions",
-        fields=[("Leaderboard", "\n".join(lines[:25]), False)],
-        footer_hint="ICSE",
-    )
-    await interaction.response.send_message(embed=embed)
 
 
-@invest.command(name="history", description="Show recent admin price updates for ICSE stocks.")
+@icse.command(name="history", description="Show recent admin price updates for ICSE stocks.")
 @app_commands.describe(limit="Max 25", symbol="Optional symbol filter")
 async def history(interaction: discord.Interaction, limit: int = 10, symbol: str | None = None):
     st = _store(interaction)
@@ -340,7 +326,7 @@ async def history(interaction: discord.Interaction, limit: int = 10, symbol: str
 # -------------------------
 
 
-@invest.command(name="move", description="Admin: move a stock by +/- delta.")
+@admin.command(name="move", description="Admin: move a stock by +/- delta.")
 @app_commands.describe(symbol="Example: IC", change="Examples: +10, -5", reason="Optional reason")
 async def admin_move(interaction: discord.Interaction, symbol: str, change: str, reason: str | None = None):
     settings = interaction.client.settings  # type: ignore[attr-defined]
@@ -361,17 +347,19 @@ async def admin_move(interaction: discord.Interaction, symbol: str, change: str,
         return
 
     sign = "+" if int(delta) >= 0 else ""
+    title_text = f"📈 ${s.symbol} Up" if int(delta) >= 0 else f"📉 ${s.symbol} Down"
     embed = stock_embed(
         settings,
-        title=("📈 Stock Up" if int(delta) >= 0 else "📉 Stock Down"),
+        title=title_text,
         headline=f"**${s.symbol}** • **{sign}{int(delta)} → ${s.price}**",
         reason=(f"{s.name}\nWeek: {s.weekly_change_abs:+d} ({_fmt_pct(s.weekly_change_pct)})" + (f"\n{reason}" if reason else "")),
-        footer_hint=interaction.user.display_name,
+        footer_hint=f"Moved by {interaction.user.name}",
     )
     await interaction.response.send_message(embed=embed)
+    await _post_optional_announcement(interaction, embed)
 
 
-@invest.command(name="set", description="Admin: set a stock to an exact price.")
+@admin.command(name="set", description="Admin: set a stock to an exact price.")
 @app_commands.describe(symbol="Example: IC", value="New price (>=1)", reason="Optional reason")
 async def admin_set(interaction: discord.Interaction, symbol: str, value: int, reason: str | None = None):
     settings = interaction.client.settings  # type: ignore[attr-defined]
@@ -388,15 +376,16 @@ async def admin_set(interaction: discord.Interaction, symbol: str, value: int, r
 
     embed = stock_embed(
         settings,
-        title="🧾 Fun Stock Set",
+        title=f"🧾 ${s.symbol} Set",
         headline=f"**${s.symbol}** • **${s.price}**",
         reason=(f"{s.name}\nWeek: {s.weekly_change_abs:+d} ({_fmt_pct(s.weekly_change_pct)})" + (f"\n{reason}" if reason else "")),
-        footer_hint=interaction.user.display_name,
+        footer_hint=f"Set by {interaction.user.name}",
     )
     await interaction.response.send_message(embed=embed)
+    await _post_optional_announcement(interaction, embed)
 
 
-@invest.command(name="sync", description="Admin: sync the code-defined stock catalog into the DB.")
+@admin.command(name="sync_catalog", description="Admin: sync the code-defined stock catalog into the DB.")
 async def sync_catalog_cmd(interaction: discord.Interaction):
     settings = interaction.client.settings  # type: ignore[attr-defined]
     if not is_admin_or_allowed(interaction, settings):
@@ -414,7 +403,7 @@ async def sync_catalog_cmd(interaction: discord.Interaction):
     )
 
 
-@invest.command(name="weekroll", description="Admin: reset weekly change baseline to current prices.")
+@admin.command(name="weekroll", description="Admin: reset weekly change baseline to current prices.")
 @app_commands.describe(note="Optional note")
 async def weekroll_cmd(interaction: discord.Interaction, note: str | None = None):
     settings = interaction.client.settings  # type: ignore[attr-defined]
@@ -425,3 +414,40 @@ async def weekroll_cmd(interaction: discord.Interaction, note: str | None = None
     st = _store(interaction)
     wk = await st.week_rollover(user_id=interaction.user.id, note=note)
     await interaction.response.send_message(f"✅ Weekly baseline reset for all active stocks. New week key: **{wk}**.")
+
+
+@icse.command(name="stock", description="Show the current Instigate Cafe ($IC) stock price and history.")
+async def stock(interaction: discord.Interaction):
+    st = _store(interaction)
+    settings = interaction.client.settings  # type: ignore[attr-defined]
+    
+    try:
+        s = await st.get_stock("IC")
+    except FunMarketError as e:
+        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        return
+
+    headline = (
+        f"**${s.price}**\n"
+        f"{s.name}\n"
+        f"Week open: **${s.week_open}** • Change: **{s.weekly_change_abs:+d}** ({_fmt_pct(s.weekly_change_pct)})"
+    )
+
+    try:
+        rows = await st.history(symbol="IC", limit=5)
+    except FunMarketError:
+        rows = []
+
+    reason_str = ""
+    if rows:
+        lines = []
+        for ts, sym, uid, delta, new_value, reason in rows:
+            sign = "+" if int(delta) >= 0 else ""
+            reason_s = f" — {reason}" if reason else ""
+            lines.append(f"<t:{int(ts)}:R> <@{int(uid)}>: **{sign}{int(delta)}** → **${int(new_value)}**{reason_s}")
+        reason_str = "\n".join(lines)
+    else:
+        reason_str = "No recent history."
+
+    embed = stock_embed(settings, title=f"📈 Instigate Cafe Stock ($IC)", headline=headline, reason=reason_str, footer_hint="ICSE")
+    await interaction.response.send_message(embed=embed)
