@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+import discord
+from discord import app_commands
+
+from icbot.app import casino
+from icbot.embeds import game as game_embed
+from icbot.services.user_service import UserStore, InsufficientBalanceError
+from icbot.games.slots_engine import spin, reel_display, payout_table
+
+
+def _make_user_store(interaction: discord.Interaction) -> UserStore:
+    settings = interaction.client.settings  # type: ignore[attr-defined]
+    db = interaction.client.db  # type: ignore[attr-defined]
+    return UserStore(
+        db,
+        starting_balance=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
+        daily_claim_amount=int(getattr(settings, "daily_claim_amount", 100) or 100),
+    )
+
+
+@casino.command(name="slots", description="Spin the slot machine!")
+@app_commands.describe(bet="Bet amount (integer)")
+async def slots_cmd(interaction: discord.Interaction, bet: int = 10):
+    settings = interaction.client.settings  # type: ignore[attr-defined]
+
+    if bet <= 0:
+        await interaction.response.send_message("❌ Bet must be at least $1.", ephemeral=True)
+        return
+
+    # Deduct balance
+    store = _make_user_store(interaction)
+    await store.ensure_user(
+        interaction.user.id,
+        display_name=interaction.user.display_name,
+        avatar_url=str(interaction.user.display_avatar.url) if interaction.user.display_avatar else "",
+    )
+    try:
+        await store.subtract_balance(interaction.user.id, bet)
+    except InsufficientBalanceError:
+        balance = await store.get_balance(interaction.user.id)
+        await interaction.response.send_message(
+            f"❌ Insufficient balance. You have **${balance}**, need **${bet}**.",
+            ephemeral=True,
+        )
+        return
+
+    # Spin
+    result = spin(bet)
+
+    # Credit winnings (if any)
+    if result.payout > 0:
+        await store.add_balance(interaction.user.id, result.payout)
+
+    new_balance = await store.get_balance(interaction.user.id)
+
+    # Build embed
+    reels_str = reel_display(result.reels)
+
+    if result.match_type == "three":
+        title = "🎰 Slots — JACKPOT!"
+        summary = f"Three of a kind! **{result.multiplier}x** payout!"
+    elif result.match_type == "two":
+        title = "🎰 Slots — Push"
+        summary = "Two matching — bet returned."
+    else:
+        title = "🎰 Slots — No Match"
+        summary = "Better luck next time!"
+
+    if result.net > 0:
+        net_text = f"💰 **+${result.net}**"
+    elif result.net == 0:
+        net_text = "🔄 **$0** (push)"
+    else:
+        net_text = f"📉 **-${bet}**"
+
+    fields = [
+        ("🎰 Reels", reels_str, False),
+        ("🎯 Bet", f"**${bet}**", True),
+        ("📊 Result", net_text, True),
+        ("💳 Balance", f"**${new_balance}**", True),
+    ]
+
+    embed = game_embed(
+        settings,
+        title=title,
+        summary=summary,
+        fields=fields,
+        footer_hint=f"Slots • {interaction.user.display_name}",
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+@casino.command(name="payouts", description="Show the slot machine payout table.")
+async def slots_payouts_cmd(interaction: discord.Interaction):
+    settings = interaction.client.settings  # type: ignore[attr-defined]
+    table = payout_table()
+
+    embed = game_embed(
+        settings,
+        title="🎰 Slot Machine — Payouts",
+        summary=table,
+        footer_hint=f"Slots • {interaction.user.display_name}",
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)

@@ -41,6 +41,30 @@ class Deck:
         return self.cards.pop()
 
 
+class Shoe:
+    """Multi-deck shoe (standard casino: 6 decks, reshuffle at ~75% penetration)."""
+
+    def __init__(self, num_decks: int = 6, reshuffle_pct: float = 0.75):
+        self.num_decks = num_decks
+        self.reshuffle_pct = reshuffle_pct
+        self._total_cards = num_decks * 52
+        self.cards: List[Card] = []
+        self._build_and_shuffle()
+
+    def _build_and_shuffle(self) -> None:
+        self.cards = [Card(r, s) for _ in range(self.num_decks) for s in SUITS for r in RANKS]
+        random.shuffle(self.cards)
+
+    def needs_reshuffle(self) -> bool:
+        dealt = self._total_cards - len(self.cards)
+        return dealt >= int(self._total_cards * self.reshuffle_pct)
+
+    def draw(self) -> Card:
+        if not self.cards:
+            self._build_and_shuffle()
+        return self.cards.pop()
+
+
 @dataclass
 class Hand:
     cards: List[Card] = field(default_factory=list)
@@ -87,9 +111,20 @@ class Hand:
         return " ".join(str(c) for c in self.cards)
 
 
+# Shared shoe across hands (reshuffled between rounds when penetration threshold hit)
+_SHOE: Shoe | None = None
+
+
+def _get_shoe() -> Shoe:
+    global _SHOE
+    if _SHOE is None or _SHOE.needs_reshuffle():
+        _SHOE = Shoe(num_decks=6, reshuffle_pct=0.75)
+    return _SHOE
+
+
 @dataclass
 class GameState:
-    deck: Deck
+    shoe: Shoe
     dealer: Hand
     hands: List[Hand]
     bets: List[int]
@@ -110,15 +145,15 @@ class GameState:
 
     @staticmethod
     def start(bet: int, dealer_hits_soft_17: bool = True, max_splits: int = 1) -> "GameState":
-        deck = Deck.standard(shuffle=True)
+        shoe = _get_shoe()
         dealer = Hand()
         player = Hand()
-        player.add(deck.draw())
-        dealer.add(deck.draw())
-        player.add(deck.draw())
-        dealer.add(deck.draw())
+        player.add(shoe.draw())
+        dealer.add(shoe.draw())
+        player.add(shoe.draw())
+        dealer.add(shoe.draw())
         return GameState(
-            deck=deck,
+            shoe=shoe,
             dealer=dealer,
             hands=[player],
             bets=[bet],
@@ -140,7 +175,7 @@ class GameState:
         h = self.active_hand()
         if self._hand_standing(self.active_index):
             return
-        h.add(self.deck.draw())
+        h.add(self.shoe.draw())
         if h.is_bust():
             self._set_stand(self.active_index)
             self._advance_if_needed()
@@ -157,7 +192,7 @@ class GameState:
         self.bets[self.active_index] *= 2
         h = self.active_hand()
         h.doubled = True
-        h.add(self.deck.draw())
+        h.add(self.shoe.draw())
         self._set_stand(self.active_index)
         self._advance_if_needed()
 
@@ -175,9 +210,16 @@ class GameState:
         self.bets.insert(self.active_index + 1, bet)
         self.splits_used += 1
 
-        # Deal one to each split hand (standard)
-        h.add(self.deck.draw())
-        new_hand.add(self.deck.draw())
+        # Deal one card to each split hand
+        h.add(self.shoe.draw())
+        new_hand.add(self.shoe.draw())
+
+        # Split aces restriction: one card only, auto-stand both hands
+        if c1.rank == "A":
+            self._set_stand(self.active_index)
+            self._set_stand(self.active_index + 1)
+            self._advance_if_needed()
+
         return True
 
     def _advance_if_needed(self) -> None:
@@ -200,7 +242,7 @@ class GameState:
     def _finish_round(self) -> None:
         if any(not h.is_bust() for h in self.hands):
             while self._dealer_should_hit():
-                self.dealer.add(self.deck.draw())
+                self.dealer.add(self.shoe.draw())
         self.done = True
 
     def settle(self) -> List[Tuple[str, int]]:

@@ -8,7 +8,7 @@ from typing import Dict, Optional, Tuple
 import discord
 from discord import app_commands
 
-from icbot.app import ic
+from icbot.app import ic, casino
 from icbot.embeds import game as game_embed, system as system_embed
 from icbot.games.blackjack_engine import GameState
 from icbot.permissions import is_admin_or_allowed
@@ -38,21 +38,34 @@ class BlackjackStore:
         self.starting_bankroll = starting_bankroll
 
     async def ensure_user(self, user_id: int) -> None:
+        """Ensure both the central `users` row and `blackjack_users` stats row exist."""
+        import time as _time
+
+        # Central users table (source of truth for balance)
         row = await self.db.fetchone(
-            "SELECT user_id FROM blackjack_users WHERE user_id=?",
-            (user_id,),
+            "SELECT user_id FROM users WHERE user_id=?", (user_id,),
         )
         if row is None:
+            await self.db.execute(
+                "INSERT INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
+                (user_id, self.starting_bankroll, int(_time.time())),
+            )
+
+        # Blackjack stats table (game-specific stats only)
+        row2 = await self.db.fetchone(
+            "SELECT user_id FROM blackjack_users WHERE user_id=?", (user_id,),
+        )
+        if row2 is None:
             await self.db.execute(
                 "INSERT INTO blackjack_users (user_id, bankroll) VALUES (?, ?)",
                 (user_id, self.starting_bankroll),
             )
 
     async def get_bankroll(self, user_id: int) -> int:
+        """Read balance from the central `users` table."""
         await self.ensure_user(user_id)
         row = await self.db.fetchone(
-            "SELECT bankroll FROM blackjack_users WHERE user_id=?",
-            (user_id,),
+            "SELECT balance FROM users WHERE user_id=?", (user_id,),
         )
         return int(row[0]) if row else self.starting_bankroll
 
@@ -72,13 +85,23 @@ class BlackjackStore:
         hands_played: int,
     ) -> int:
         await self.ensure_user(user_id)
+
+        # Update balance in central users table
+        bal_row = await self.db.fetchone(
+            "SELECT balance FROM users WHERE user_id=?", (user_id,),
+        )
+        bankroll = int(bal_row[0]) if bal_row else self.starting_bankroll
+        bankroll = bankroll + delta
+        await self.db.execute(
+            "UPDATE users SET balance=? WHERE user_id=?", (bankroll, user_id),
+        )
+
+        # Update game stats in blackjack_users (stats only, not balance)
         row = await self.db.fetchone(
-            "SELECT bankroll, wins, losses, pushes, hands_played FROM blackjack_users WHERE user_id=?",
+            "SELECT wins, losses, pushes, hands_played FROM blackjack_users WHERE user_id=?",
             (user_id,),
         )
-        bankroll, wins, losses, pushes, played = map(int, row)
-
-        bankroll = bankroll + delta
+        wins, losses, pushes, played = map(int, row)
         wins += result_counts.get("win", 0) + result_counts.get("blackjack", 0)
         losses += result_counts.get("loss", 0) + result_counts.get("bust", 0)
         pushes += result_counts.get("push", 0)
@@ -91,9 +114,10 @@ class BlackjackStore:
         return bankroll
 
     async def leaderboard(self, limit: int = 10) -> list[tuple[int, int]]:
+        """Leaderboard by balance from the central users table."""
         limit = max(1, min(limit, 25))
         rows = await self.db.fetchall(
-            "SELECT user_id, bankroll FROM blackjack_users ORDER BY bankroll DESC LIMIT ?",
+            "SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT ?",
             (limit,),
         )
         return [(int(uid), int(br)) for uid, br in rows]
@@ -109,6 +133,13 @@ class BlackjackStore:
         resets = int(row[0]) if row and row[0] is not None else 0
         resets += 1
 
+        # Reset balance in central users table
+        await self.db.execute(
+            "UPDATE users SET balance=? WHERE user_id=?",
+            (self.starting_bankroll, user_id),
+        )
+
+        # Reset stats in blackjack_users
         await self.db.execute(
             "UPDATE blackjack_users "
             "SET bankroll=?, hands_played=0, wins=0, losses=0, pushes=0, reset_count=? "
@@ -183,7 +214,7 @@ def _build_live_embed(interaction: discord.Interaction, state: GameState, title:
             ("Dealer", f"{dealer}  → **{dealer_total}**"),
             ("Player", hands),
         ),
-        footer_hint=interaction.user.display_name,
+        footer_hint=f"Blackjack • {interaction.user.display_name}",
     )
 
 
@@ -203,7 +234,7 @@ def _build_done_embed(
             ("Dealer", f"{dealer}  → **{dealer_total}**"),
             ("Player", hands),
         ),
-        footer_hint=interaction.user.display_name,
+        footer_hint=f"Blackjack • {interaction.user.display_name}",
     )
 
 
@@ -682,7 +713,7 @@ class BlackjackView(discord.ui.View):
 # Commands
 # ==========
 
-@ic.command(name="blackjack", description="Start an interactive blackjack hand (buttons).")
+@casino.command(name="blackjack", description="Start an interactive blackjack hand (buttons).")
 @app_commands.describe(bet="Bet amount (integer). Default 10.")
 async def blackjack(interaction: discord.Interaction, bet: int = 10):
     try:
@@ -699,84 +730,3 @@ async def blackjack(interaction: discord.Interaction, bet: int = 10):
         view.message = msg  # type: ignore[attr-defined]
 
 
-# ==========
-# Optional: bankroll & admin tools (kept under /ic bj ...)
-# ==========
-
-bj = app_commands.Group(name="bj", description="Blackjack bankroll tools (balance/leaderboard/reset)")
-ic.add_command(bj)
-
-
-@bj.command(name="balance", description="Show your blackjack bankroll.")
-async def balance(interaction: discord.Interaction):
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
-    br = await store.get_bankroll(interaction.user.id)
-    resets = await store.get_reset_count(interaction.user.id)
-
-    embed = system_embed(
-        settings,
-        title="💰 Blackjack Bankroll",
-        summary=f"**${br}**",
-        fields=(("Reset Count", f"**{resets}**"),),
-        footer_hint=interaction.user.display_name,
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@bj.command(name="leaderboard", description="Top blackjack bankrolls.")
-@app_commands.describe(limit="How many entries (max 25)")
-async def leaderboard(interaction: discord.Interaction, limit: int = 10):
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
-    rows = await store.leaderboard(limit=limit)
-    if not rows:
-        await interaction.response.send_message("No blackjack data yet.")
-        return
-
-    lines = [f"**{i}.** <@{uid}> — **${br}**" for i, (uid, br) in enumerate(rows, start=1)]
-    embed = system_embed(
-        settings,
-        title="🏆 Blackjack Leaderboard",
-        summary="Top bankrolls",
-        fields=(("Leaderboard", "\n".join(lines)),),
-        footer_hint="Blackjack",
-    )
-    await interaction.response.send_message(embed=embed)
-
-
-@bj.command(name="reset", description="Reset a user's blackjack bankroll (admin/allowed roles only).")
-@app_commands.describe(user="User to reset")
-async def reset(interaction: discord.Interaction, user: discord.User):
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    if not is_admin_or_allowed(interaction, settings):
-        await interaction.response.send_message("❌ You don’t have permission to reset bankrolls.", ephemeral=True)
-        return
-
-    # Guardrail: prevent resetting bankroll while the user has open fun-market positions.
-    try:
-        from icbot.services.fun_market import FunMarketStore
-
-        fm = FunMarketStore(
-            interaction.client.db,  # type: ignore[attr-defined]
-            starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
-            tz_name=str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"),
-        )
-        open_qty = await fm.count_open_positions(user.id)
-        if open_qty > 0:
-            await interaction.response.send_message(
-                f"❌ Cannot reset {user.mention}: they have open fun-market positions (total qty **{open_qty}**). "
-                f"Ask them to close positions first (`/ic invest portfolio`, `/sell`, `/cover`).",
-                ephemeral=True,
-            )
-            return
-    except Exception:
-        # Fail open here to avoid breaking admin reset if fun-market code is unavailable.
-        pass
-
-    store = BlackjackStore(interaction.client.db, settings.bj_starting_bankroll)  # type: ignore[attr-defined]
-    resets = await store.reset_user(user.id)
-    await interaction.response.send_message(
-        f"✅ Reset bankroll for {user.mention} to **${settings.bj_starting_bankroll}**. "
-        f"Reset count: **{resets}**."
-    )
