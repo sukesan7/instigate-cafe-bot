@@ -1,0 +1,232 @@
+import discord
+from discord import app_commands
+import aiohttp
+import aiosqlite
+import json
+import re
+import urllib.parse
+from bs4 import BeautifulSoup
+import io
+import matplotlib.pyplot as plt
+import numpy as np
+
+from icbot.app import ic
+from icbot.embeds import system as system_embed
+import logging
+
+log = logging.getLogger(__name__)
+
+DB_PATH = "tmu_grades.db"
+
+async def _init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS course_cache (
+                course_code TEXT PRIMARY KEY,
+                title TEXT,
+                parsed_data JSON,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        await db.commit()
+
+async def fetch_course_data(course_code: str) -> dict | None:
+    """Fetch from TMU Grades or return cached payload."""
+    await _init_db() # Ensure DB is ready
+    course_code = course_code.lower().strip()
+    
+    # Check cache first
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT title, parsed_data FROM course_cache WHERE course_code = ?', (course_code,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                log.info(f"Serving {course_code} from local SQLite cache.")
+                return {"title": row[0], "professors": json.loads(row[1])}
+
+    # Not in cache, scrape live
+    url = f"https://tmu.grades.zone/course/{urllib.parse.quote(course_code)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            if resp.status == 404:
+                return None # Course not found
+            resp.raise_for_status()
+            html = await resp.text()
+
+    # Parse HTML
+    clean_html = html.replace('\\"', '"')
+    soup = BeautifulSoup(clean_html, "html.parser")
+
+    title_el = soup.find("h2")
+    if not title_el:
+        return None # Invalid page block
+        
+    course_title = title_el.text.strip()
+    
+    distributions = []
+    for match in re.finditer(r'"distribution":(\[.*?\])', clean_html):
+        try:
+            distributions.append(json.loads(match.group(1)))
+        except Exception:
+            pass
+
+    prof_blocks = soup.find_all("div", class_="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start")
+    
+    results = []
+    for i, block in enumerate(prof_blocks):
+        name_div = block.select_one(".font-bold")
+        if not name_div: continue
+        name = name_div.text.strip()
+        
+        # Skip the aggregate 'All Professors' row as per user request
+        if name.lower() == "all professors":
+            continue
+        
+        term_p = block.find("p")
+        term = term_p.text.strip() if term_p else ""
+        
+        badges = block.find_all("span", attrs={"data-slot": "badge"})
+        avg = badges[0].text if len(badges) > 0 else "N/A"
+        common = badges[1].text if len(badges) > 1 else "N/A"
+        
+        student_span = block.select_one(".bg-accent")
+        students = student_span.text.replace("student", "").strip() if student_span else ("N/A")
+        
+        dist = distributions[i] if i < len(distributions) else []
+        
+        results.append({
+            "name": name,
+            "term": term,
+            "avg": avg,
+            "common": common,
+            "students": students,
+            "dist": dist
+        })
+
+    # Save to Cache
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            INSERT OR REPLACE INTO course_cache (course_code, title, parsed_data)
+            VALUES (?, ?, ?)
+        ''', (course_code, course_title, json.dumps(results)))
+        await db.commit()
+
+    return {"title": course_title, "professors": results}
+
+def generate_chart(course_title: str, professors: list) -> io.BytesIO:
+    """Generate a grouped bar chart using Matplotlib for the given professors distributions."""
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Static X-axis letter grades
+    letters = ["F-S", "F", "FNA", "D-", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
+    
+    # Prepare data map
+    x = np.arange(len(letters))
+    num_profs = len(professors)
+    
+    if num_profs == 0:
+        # Fallback empty chart
+        ax.text(0.5, 0.5, 'No Distribution Data', ha='center', va='center', transform=ax.transAxes)
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight')
+        buf.seek(0)
+        plt.close(fig)
+        return buf
+
+    # Calculate dynamic bar width
+    total_width = 0.8
+    width = total_width / num_profs
+    
+    cmap = plt.get_cmap('Set2') # Nice distinct colors
+    
+    max_y = 0
+    for i, prof in enumerate(professors):
+        dist = prof.get("dist", [])
+        
+        # Map the json payload counts to the letter array
+        counts_map = {item["letterGrade"]: item["count"] for item in dist}
+        
+        y_vals = []
+        total_students = sum(counts_map.values())
+        for l in letters:
+            count = counts_map.get(l, 0)
+            # We plot percentages to match the reference image's Y-axis
+            pct = (count / total_students * 100) if total_students > 0 else 0
+            y_vals.append(pct)
+            if pct > max_y: max_y = pct
+        
+        offset = (i - num_profs/2) * width + width/2
+        ax.bar(x + offset, y_vals, width, label=prof['name'], color=cmap(i % 8))
+
+    ax.set_ylabel('Percentage of Students')
+    ax.set_title(f"{course_title} - Grade Distribution")
+    ax.set_xticks(x)
+    ax.set_xticklabels(letters)
+    ax.legend()
+    
+    # Minor grid lines
+    ax.yaxis.grid(True, linestyle='--', alpha=0.3)
+    ax.set_axisbelow(True)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+@ic.command(name="grades", description="Fetch TMU grade distributions by course code")
+@app_commands.describe(course="The course code (e.g., ele888, cps109)")
+async def grades_command(interaction: discord.Interaction, course: str):
+    await interaction.response.defer(thinking=True)
+    
+    settings = getattr(interaction.client, "settings", None)
+    
+    try:
+        data = await fetch_course_data(course)
+        if not data:
+            await interaction.followup.send(embed=system_embed(
+                settings,
+                title="Course Not Found",
+                summary=f"Could not locate grade distributions for `{course}`. Ensure the course code is valid on `tmu.grades.zone`.",
+                is_error=True
+            ))
+            return
+
+        if not data["professors"]:
+            await interaction.followup.send(embed=system_embed(
+                settings,
+                title="No Professor Data",
+                summary=f"`{data['title']}` exists, but has no discrete professor distributions available.",
+                is_error=True
+            ))
+            return
+
+        # Build Graph
+        chart_bytes = generate_chart(data["title"], data["professors"])
+        file = discord.File(chart_bytes, filename="distribution.png")
+        
+        embed = system_embed(
+            settings,
+            title=data["title"], 
+            summary="[View on TMU Grades Zone](https://tmu.grades.zone/course/" + urllib.parse.quote(course.lower().strip()) + ")"
+        )
+        embed.set_image(url="attachment://distribution.png")
+        
+        for prof in data["professors"]:
+            val = f"**{prof['students']} students** | {prof['avg']} | {prof['common']}\n*{prof['term']}*"
+            embed.add_field(name=prof['name'], value=val, inline=False)
+
+        await interaction.followup.send(embed=embed, file=file)
+        
+    except Exception as e:
+        log.error(f"Error fetching grades for {course}: {e}", exc_info=True)
+        await interaction.followup.send(embed=system_embed(
+            settings,
+            title="Grades Error",
+            summary="An unexpected internal error occurred while fetching course grades.",
+            is_error=True
+        ))
