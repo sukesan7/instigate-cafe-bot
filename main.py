@@ -33,6 +33,7 @@ from icbot.features import exams  # noqa: F401
 from icbot.features import profile  # noqa: F401
 from icbot.features import roulette  # noqa: F401
 from icbot.features import slots  # noqa: F401
+from icbot.features import grades # noqa: F401
 
 
 load_dotenv(override=True)
