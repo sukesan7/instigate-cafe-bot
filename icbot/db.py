@@ -19,6 +19,21 @@ class Database:
                 )
                 """
             )
+
+            # ---- Central user profile & economy table ----
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id        INTEGER PRIMARY KEY,
+                    display_name   TEXT    NOT NULL DEFAULT '',
+                    avatar_url     TEXT    NOT NULL DEFAULT '',
+                    balance        INTEGER NOT NULL DEFAULT 1000,
+                    created_at     INTEGER NOT NULL DEFAULT 0,
+                    daily_claim_ts INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS stock_events (
@@ -54,16 +69,7 @@ class Database:
                     "ALTER TABLE blackjack_users ADD COLUMN reset_count INTEGER NOT NULL DEFAULT 0"
                 )
 
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS activity_counts (
-                    guild_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    count INTEGER NOT NULL,
-                    PRIMARY KEY (guild_id, user_id)
-                )
-                """
-            )
+
 
             # Job alerts (dedupe + bootstrap checkpoints)
             await db.execute(

@@ -190,6 +190,9 @@ class Settings:
     # Dev
     force_guild_resync: bool = False
 
+    # Economy
+    daily_claim_amount: int = 100
+
     # Blackjack settings
     bj_starting_bankroll: int = 1000
     bj_dealer_hits_soft_17: bool = True
@@ -225,6 +228,12 @@ class Settings:
 
     # DB
     db_path: str = "ic_stock.db"
+
+    # Course Notes
+    notes_sites: list[str] | None = None
+
+    # RateMyProfessors
+    rmp_university: str = "Toronto Metropolitan University"
 
     # ---- Compatibility aliases (older callers) ----
     @property
@@ -306,6 +315,8 @@ class Settings:
 
         force_guild_resync = _to_bool(os.getenv("FORCE_GUILD_RESYNC", "false"), False)
 
+        daily_claim_amount = _to_int(os.getenv("DAILY_CLAIM_AMOUNT", "100"), 100)
+
         bj_starting_bankroll = _to_int(os.getenv("BJ_STARTING_BANKROLL", "1000"), 1000)
         bj_dealer_hits_soft_17 = _to_bool(os.getenv("BJ_DEALER_HITS_SOFT_17", "true"), True)
         bj_max_splits = _to_int(os.getenv("BJ_MAX_SPLITS", "1"), 1)
@@ -339,6 +350,8 @@ class Settings:
 
         db_path = os.getenv("DB_PATH", "ic_stock.db").strip() or "ic_stock.db"
         exams_tz = os.getenv("EXAMS_TZ", "America/Toronto").strip() or "America/Toronto"
+        notes_sites = _to_str_list(os.getenv("NOTES_SITES", ""))
+        rmp_university = os.getenv("RMP_UNIVERSITY", "Toronto Metropolitan University").strip() or "Toronto Metropolitan University"
 
         # Default workday poll seconds to jobs poll seconds if unset
         if workday_poll_seconds <= 0:
@@ -395,6 +408,7 @@ class Settings:
             workday_poll_seconds=workday_poll_seconds,
             workday_timeout_seconds=workday_timeout_seconds,
             force_guild_resync=force_guild_resync,
+            daily_claim_amount=daily_claim_amount,
             bj_starting_bankroll=bj_starting_bankroll,
             bj_dealer_hits_soft_17=bj_dealer_hits_soft_17,
             bj_max_splits=bj_max_splits,
@@ -422,4 +436,6 @@ class Settings:
             btc_watch_cooldown_minutes=btc_watch_cooldown_minutes,
             db_path=db_path,
             exams_tz=exams_tz,
+            notes_sites=notes_sites,
+            rmp_university=rmp_university,
         )

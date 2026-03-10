@@ -19,15 +19,19 @@ from icbot.tasks.btc_watch import poll_and_post_btc_watch
 from icbot.tasks.llm_assistant import maybe_handle_llm_mention
 
 # Import features (registers commands onto /ic)
-from icbot.features import stock  # noqa: F401
 from icbot.features import blackjack  # noqa: F401
 from icbot.features import invest  # noqa: F401
 from icbot.features import lc_leaderboard  # noqa: F401
 from icbot.features import sports  # noqa: F401
+from icbot.features import notes  # noqa: F401
+from icbot.features import prof  # noqa: F401
+from icbot.features import info  # noqa: F401
 from icbot.features import report  # noqa: F401
 from icbot.features import jobs  # noqa: F401
 from icbot.features import exams  # noqa: F401
-from icbot.features.lc_leaderboard import ActivityTracker
+from icbot.features import profile  # noqa: F401
+from icbot.features import roulette  # noqa: F401
+from icbot.features import slots  # noqa: F401
 
 
 load_dotenv(override=True)
@@ -40,7 +44,6 @@ intents.messages = True  # needed for message-count leaderboard tracking
 intents.message_content = True  # required for @bot mentions + reading chat context
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-activity_tracker = ActivityTracker(db)
 
 
 def _fmt_csv(items: list[str], *, limit: int = 12) -> str:
@@ -275,7 +278,6 @@ async def on_ready():
     # Make shared singletons available to feature modules via interaction.client
     bot.settings = settings  # type: ignore[attr-defined]
     bot.db = db  # type: ignore[attr-defined]
-    bot.activity_tracker = activity_tracker  # type: ignore[attr-defined]
 
     # ---- Startup config logs (helps debug .env issues) ----
     try:
@@ -498,11 +500,7 @@ async def on_message(message: discord.Message):
         if bool(getattr(settings, "llm_debug", False)):
             print(f"[LLM] on_message handler error: {e!r}")
 
-    # Track activity for leaderboard
-    try:
-        await activity_tracker.on_message(message)
-    finally:
-        await bot.process_commands(message)
+    await bot.process_commands(message)
 
 
 def main():

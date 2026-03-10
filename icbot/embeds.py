@@ -31,15 +31,15 @@ def _truncate(s: Optional[str], limit: int) -> Optional[str]:
 
 
 def _footer_text(settings: Settings, kind: str, footer_hint: str | None) -> str:
-    suffix = {
-        EMBED_KIND_STOCK: "Stock",
-        EMBED_KIND_GAME: "Games",
+    kind_label = {
+        EMBED_KIND_STOCK: "Stock Exchange",
+        EMBED_KIND_GAME: "Casino",
         EMBED_KIND_SYSTEM: "System",
         EMBED_KIND_ALERTS: "Alerts",
         EMBED_KIND_JOBS: "Jobs",
     }.get(kind, "Info")
 
-    parts = [settings.embed_footer_text, suffix]
+    parts = [settings.embed_footer_text, kind_label]
     if footer_hint:
         parts.append(footer_hint)
     return " • ".join([p for p in parts if p])
@@ -70,12 +70,18 @@ def _base_embed(
         color=settings.embed_accent_color,
     )
 
-    # Brand header
-    e.set_author(name=_truncate(settings.embed_footer_text, _MAX_TITLE) or "Instigate Cafe")
+    # Brand header with logo
+    author_kwargs: dict[str, str] = {
+        "name": _truncate(settings.embed_footer_text, _MAX_TITLE) or "Instigate Cafe",
+    }
+    logo = getattr(settings, "embed_logo_url", "")
+    if logo:
+        author_kwargs["icon_url"] = logo
+    e.set_author(**author_kwargs)
 
     # Logo thumbnail
-    if getattr(settings, "embed_logo_url", ""):
-        e.set_thumbnail(url=settings.embed_logo_url)
+    if logo:
+        e.set_thumbnail(url=logo)
 
     # Footer + timestamp
     e.set_footer(text=_truncate(_footer_text(settings, kind, footer_hint), _MAX_TITLE) or " ")
@@ -241,9 +247,10 @@ def job_alert(
     """
     Jobs-format embed for auto-posted ATS alerts.
 
-    Compatibility:
-      - Accepts either `title_text=` or `title=`
-      - Accepts either `tags=` or `categories=` (alias)
+    Clean format:
+      Title: 💼 <Job Title>
+      Company, Location, Tags as fields
+      Apply: clean markdown link
     """
     def _display_label(raw: str) -> str:
         raw = (raw or "").strip()
@@ -252,28 +259,23 @@ def job_alert(
         # strip internal prefixes like "workday:RBC", "lever:palantir", "greenhouse:stripe"
         if ":" in raw:
             raw = raw.split(":", 1)[1].strip()
-
         # prettify slugs: "wintermute-trading" -> "Wintermute Trading"
         raw = raw.replace("-", " ").strip()
         if not raw:
             return ""
         return " ".join(w.capitalize() for w in raw.split())
 
-    headline = (title_text or title or "").strip() or "New job posting"
-
-    # Prefer company in the header (human-friendly), else derive from source
-    header_label = _display_label(company or "") or _display_label(source or "")
-    header = "💼 Job Alert" + (f" • {header_label}" if header_label else "")
+    headline = (title_text or title or "").strip() or "New Job Posting"
+    company_label = _display_label(company or "") or _display_label(source or "")
 
     e = _base_embed(
         settings,
-        title=header,
+        title=f"💼 {_truncate(headline, 240)}",
         kind=EMBED_KIND_JOBS,
-        description=f"**{_truncate(headline, 250) or ''}**",
-        footer_hint=footer_hint or ("Tracking System"),
+        footer_hint=footer_hint or "Tracking System",
     )
 
-    # Make the embed clickable to the posting
+    # Make the embed title clickable to the posting
     if url:
         e.url = url
 
@@ -281,14 +283,15 @@ def job_alert(
     label_list = tags if tags is not None else categories
 
     fields: list[Field] = []
-    if company:
-        fields.append(("Company", company, True))
+    if company_label:
+        fields.append(("🏢 Company", f"**{company_label}**", True))
     if location:
-        fields.append(("Location", location, True))
+        fields.append(("📍 Location", location, True))
     if label_list:
-        fields.append(("Tags", ", ".join(label_list[:12]), False))
+        tag_str = " • ".join(label_list[:8])
+        fields.append(("🏷️ Tags", tag_str, False))
     if url:
-        fields.append(("Apply", url, False))
+        fields.append(("🔗 Apply", f"[Apply Here]({url})", False))
 
     _add_fields(e, fields)
     return e
