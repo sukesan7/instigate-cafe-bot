@@ -141,8 +141,18 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
 
     market_state = (q_spy.market_state if q_spy else None) or (q_qqq.market_state if q_qqq else None) or (
         q_vix.market_state if q_vix else None
-    ) or "UNKNOWN"
-    market_state = str(market_state).upper()
+    )
+    
+    raw_state = str(market_state).upper()
+    state_map = {
+        "PREPRE": "Pre-Market",
+        "PRE": "Pre-Market",
+        "REGULAR": "Regular Trading Hours",
+        "POST": "Post-Market",
+        "POSTPOST": "Post-Market",
+        "CLOSED": "Closed"
+    }
+    market_state = state_map.get(raw_state, raw_state)
 
     async def should_alert(key: str, triggered: bool) -> bool:
         """Edge-triggered alert gate with cooldown.
@@ -268,17 +278,12 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
         fields.append(("Snapshot", "\n".join(snap_lines), False))
     fields.append(("Triggered", "\n".join(alerts), False))
 
-    footer_hint = (
-        f"thr: VIX≥{vix_level_thr:g} | idx {index_move_thr:.1f}% | "
-        f"stk {stock_move_thr:.1f}% | cooldown {cooldown_min}m"
-    )
-
     embed = system_embed(
         settings,
         title=title,
         summary=subtitle,
         fields=fields,
-        footer_hint=footer_hint,
+        footer_hint="Market Volatility Tracker",
     )
 
     if debug:
