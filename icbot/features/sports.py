@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 from discord import app_commands
 import discord
 
-from icbot.app import ic
+from icbot.app import sports
 from icbot.embeds import system as system_embed
 from icbot.services.sports_client import OddsAPIClient, OddsAPIError
 
@@ -212,26 +212,26 @@ async def _send_sport(interaction: discord.Interaction, sport: str, title: str):
     await interaction.response.send_message(embed=emb)
 
 
-@ic.command(name="nba", description="Upcoming NBA games + latest headlines")
+@sports.command(name="nba", description="Upcoming NBA games + latest headlines")
 async def nba(interaction: discord.Interaction):
     await _send_sport(interaction, "nba", "🏀 NBA")
 
 
-@ic.command(name="nfl", description="Upcoming NFL games + latest headlines")
+@sports.command(name="nfl", description="Upcoming NFL games + latest headlines")
 async def nfl(interaction: discord.Interaction):
     await _send_sport(interaction, "nfl", "🏈 NFL")
 
 
-@ic.command(name="mma", description="Upcoming MMA events + latest headlines")
+@sports.command(name="mma", description="Upcoming MMA events + latest headlines")
 async def mma(interaction: discord.Interaction):
     await _send_sport(interaction, "mma", "🥊 MMA")
 
 
-@ic.command(name="ufc", description="Upcoming UFC (MMA) events + latest headlines")
+@sports.command(name="ufc", description="Upcoming UFC (MMA) events + latest headlines")
 async def ufc(interaction: discord.Interaction):
     await _send_sport(interaction, "ufc", "🥋 UFC")
 
 
-@ic.command(name="boxing", description="Upcoming boxing bouts + latest headlines")
+@sports.command(name="boxing", description="Upcoming boxing bouts + latest headlines")
 async def boxing(interaction: discord.Interaction):
     await _send_sport(interaction, "boxing", "🥊 Boxing")
