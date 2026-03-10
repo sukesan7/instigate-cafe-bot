@@ -142,6 +142,31 @@ def _location_passes_smart(location: str, text_blob: str, allowlist: list[str] |
 
     return any(tok.lower() in blob for tok in allowlist if tok)
 
+_SENIORITY_RX = re.compile(
+    r"\b(senior|sr\.?|staff|principal|lead|manager|director|head|vp|architect|distinguished)\b",
+    re.IGNORECASE,
+)
+
+_NON_TECH_RX = re.compile(
+    r"\b(business|analyst|marketing|sales|finance|hr|recruiter|product\s+manager|project\s+manager)\b",
+    re.IGNORECASE,
+)
+
+# Discipline signal: strictly SWE, CS, HW, EE, Data, AI
+_DISCIPLINE_RX = re.compile(
+    r"\b("
+    r"software|swe|computer\s+science|cs\b|"
+    r"hardware|electrical|ee\b|embedded|firmware|"
+    r"data|ai|machine\s+learning|ml\b"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Early career strictly Intern / New Grad (Co-op is basically intern)
+_EARLY_CAREER_HINT_RX = re.compile(
+    r"\b(intern(ship)?|co[- ]?op|new\s*grads?|graduates?|entry[- ]?level|junior|jr\.?|student|early\s+career)\b",
+    re.IGNORECASE,
+)
 
 def job_matches_env_filters(
     *,
@@ -180,13 +205,20 @@ def job_matches_env_filters(
     if not _DISCIPLINE_RX.search(t):
         return False
 
-    # Gate 4: .env deny keywords
-    if kw_deny and any(d.lower() in t for d in kw_deny if d):
-        return False
+    # Gate 4: .env deny keywords (always applied)
+    if kw_deny:
+        for d in kw_deny:
+            if not d: continue
+            # Use regex boundaries so 'pm' doesn't flag 'equipment' or 'development'
+            pattern = rf"\b{re.escape(d)}\b"
+            if re.search(pattern, t, re.IGNORECASE):
+                return False
 
     # Gate 5: .env allow keywords (if set, at least one must match)
-    if kw_allow and not any(a.lower() in t for a in kw_allow if a):
-        return False
+    # relaxed: Since discipline + early career are already hard-gated, 
+    # we don't strictly require an explicit keyword match unless it's explicitly wanted.
+    # We will let the hard gates do the primary filtering.
+    pass
 
     # Gate 6: Location
     if not _location_passes_smart(location, text_blob, loc_allow):
@@ -198,31 +230,6 @@ def job_matches_env_filters(
 # ---- Workday-specific filtering helpers ----
 # Workday bootstrap must NOT ignore filters (otherwise you post Audit/etc).
 # Workday also sometimes has blank location → don't auto-fail.
-
-_SENIORITY_RX = re.compile(
-    r"\b(senior|sr\.?|staff|principal|lead|manager|director|head|vp|architect|distinguished)\b",
-    re.IGNORECASE,
-)
-
-_NON_TECH_RX = re.compile(
-    r"\b(business|analyst|marketing|sales|finance|hr|recruiter|product\s+manager|project\s+manager)\b",
-    re.IGNORECASE,
-)
-
-# Discipline signal: strictly SWE, CS, HW, EE
-_DISCIPLINE_RX = re.compile(
-    r"\b("
-    r"software|swe|computer\s+science|cs\b|"
-    r"hardware|electrical|ee\b|embedded|firmware"
-    r")\b",
-    re.IGNORECASE,
-)
-
-# Early career strictly Intern / New Grad (Co-op is basically intern)
-_EARLY_CAREER_HINT_RX = re.compile(
-    r"\b(intern(ship)?|co[- ]?op|new\s*grad(uate)?)\b",
-    re.IGNORECASE,
-)
 
 
 def _location_passes_lenient(location: str, allowlist: list[str] | None) -> bool:
