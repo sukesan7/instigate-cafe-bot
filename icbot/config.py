@@ -171,7 +171,9 @@ class Settings:
     llm_max_chars: int = 12000
     llm_debug: bool = False
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_resume_model: str = "gemini-2.5-pro"
+    gemini_resume_prompt: str = ""
 
     # Jobs alerts (Greenhouse/Lever)
     jobs_poll_seconds: int = 600
@@ -298,7 +300,9 @@ class Settings:
         llm_max_chars = _to_int(os.getenv("LLM_MAX_CHARS", "12000"), 12000)
         llm_debug = _to_bool(os.getenv("LLM_DEBUG", "false"), False)
         gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+        gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+        gemini_resume_model = os.getenv("GEMINI_RESUME_MODEL", "gemini-2.5-pro").strip() or "gemini-2.5-pro"
+        gemini_resume_prompt = os.getenv("GEMINI_RESUME_PROMPT", "").strip()
 
         jobs_poll_seconds = _to_int(os.getenv("JOBS_POLL_SECONDS", "600"), 600)
         greenhouse_boards = _to_str_list(os.getenv("GREENHOUSE_BOARDS", ""))
@@ -397,6 +401,8 @@ class Settings:
             llm_debug=llm_debug,
             gemini_api_key=gemini_api_key,
             gemini_model=gemini_model,
+            gemini_resume_model=gemini_resume_model,
+            gemini_resume_prompt=gemini_resume_prompt,
             jobs_poll_seconds=jobs_poll_seconds,
             greenhouse_boards=greenhouse_boards,
             lever_sites=lever_sites,

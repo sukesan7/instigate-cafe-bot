@@ -26,6 +26,7 @@ from icbot.features import sports  # noqa: F401
 from icbot.features import notes  # noqa: F401
 from icbot.features import prof  # noqa: F401
 from icbot.features import info  # noqa: F401
+from icbot.features import resume  # noqa: F401
 from icbot.features import report  # noqa: F401
 from icbot.features import jobs  # noqa: F401
 from icbot.features import exams  # noqa: F401
@@ -95,10 +96,28 @@ async def _ic_tree_interaction_check(interaction: discord.Interaction) -> bool:
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CommandOnCooldown):
+        import math
+        mins, secs = divmod(error.retry_after, 60)
+        msg = f"⏳ This command is on cooldown. Please try again in **{math.ceil(mins)}m {math.ceil(secs)}s**."
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+        return
+
     # Silence check failures (we already responded in the gate)
     if isinstance(error, app_commands.CheckFailure):
         return
-    raise error
+        
+    print(f"[ERROR] App command error: {error!r}")
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ An unexpected error occurred.", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
+    except Exception:
+        pass
 
 
 async def _ttc_loop() -> None:
