@@ -8,7 +8,7 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
-from icbot.app import ic
+from icbot.app import exam
 from icbot.config import Settings
 from icbot.embeds import system
 from icbot.permissions import is_admin_or_allowed
@@ -127,7 +127,7 @@ def _exam_field(exam: ExamItem, tz_name: str) -> tuple[str, str, bool]:
     return (name[:256], "\n".join(parts)[:1024], False)
 
 
-@ic.command(name="exams", description="Show the current exam schedule.")
+@exam.command(name="list", description="Show the current exam schedule.")
 async def exams_cmd(interaction: discord.Interaction) -> None:
     await interaction.response.defer(thinking=True)
 
@@ -171,7 +171,7 @@ async def exams_cmd(interaction: discord.Interaction) -> None:
     await interaction.followup.send(embed=e)
 
 
-@ic.command(name="exams_add", description="(Admin) Add an exam to the schedule.")
+@exam.command(name="add", description="(Admin) Add an exam to the schedule.")
 @app_commands.describe(
     course_code="e.g., COE817",
     course_name="e.g., Applied Cryptography",
@@ -249,7 +249,7 @@ async def exams_add_cmd(
     await interaction.followup.send(msg, ephemeral=True)
 
 
-@ic.command(name="exams_remove", description="(Admin) Remove an exam by ID.")
+@exam.command(name="remove", description="(Admin) Remove an exam by ID.")
 @app_commands.describe(exam_id="The exam ID shown in /ic exams.")
 async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> None:
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -272,7 +272,7 @@ async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> No
     await interaction.followup.send(f"Removed exam ID {exam_id}.", ephemeral=True)
 
 
-@ic.command(name="exams_clear", description="(Admin) Remove ALL exams.")
+@exam.command(name="clear", description="(Admin) Remove ALL exams.")
 async def exams_clear_cmd(interaction: discord.Interaction) -> None:
     await interaction.response.defer(thinking=True, ephemeral=True)
 
