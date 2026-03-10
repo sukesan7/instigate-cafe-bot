@@ -100,7 +100,9 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
     kw_allow = list(getattr(settings, "jobs_keywords_allowlist", None) or []) or None
     kw_deny = list(getattr(settings, "jobs_keywords_denylist", None) or []) or None
 
-    lines: list[str] = []
+    from icbot.embeds import job_alert as job_alert_embed
+
+    embeds: list[discord.Embed] = []
     matched = 0
 
     for r in rows:
@@ -115,12 +117,11 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
         if not title:
             continue
 
-        # If DB doesn't have blob/location, build a fallback blob from what we have.
         blob2 = " ".join([title, company, location, source]).strip()
 
         if not job_matches_env_filters(
             text_blob=blob2,
-            location=location or blob2,  # location gate falls back to blob scan if needed
+            location=location or blob2,
             loc_allow=loc_allow,
             kw_allow=kw_allow,
             kw_deny=kw_deny,
@@ -130,33 +131,36 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
         seen = j.get(col_seen) if col_seen else None
         age = _format_age(int(seen)) if isinstance(seen, (int, float)) else ""
 
-        meta = " • ".join([x for x in [company, location, source, age] if x])
-        head = f"**{title}**"
-        if url:
-            lines.append(f"{head}\n{meta}\n<{url}>")
-        else:
-            lines.append(f"{head}\n{meta}")
+        # Build clean embed
+        e = job_alert_embed(
+            settings,
+            title=title,
+            company=company,
+            url=url,
+            location=location,
+            source=source,
+            footer_hint=f"Tracking System • {age}" if age else "Tracking System"
+        )
+        embeds.append(e)
 
         matched += 1
         if matched >= int(limit):
             break
 
-    if not lines:
+    if not embeds:
         await interaction.followup.send(
             "No SWE/CS roles matched the current filters in the most recent scan.\n"
             "Check `.env` allow/deny/location lists (you might be filtering too aggressively)."
         )
         return
 
-    body = "\n\n".join(lines).strip()
-    pages = _chunk(body, limit=3800)
-
-    embed = discord.Embed(title=f"🧰 SWE/CS Job Postings (latest {matched})", description=pages[0])
-    embed.set_footer(text="Instigate Jobs Watcher • Jobs • Manual Request ")
-
-    await interaction.followup.send(embed=embed)
-
-    for p in pages[1:]:
-        e2 = discord.Embed(title="🧰 SWE/CS Job Postings (cont.)", description=p)
-        e2.set_footer(text="Instigate Jobs Watcher • Jobs • Manual Request")
-        await interaction.followup.send(embed=e2)
+    # Send in chunks of up to 5 embeds per message (Discord API allows up to 10, but 5 is cleaner)
+    chunk_size = 5
+    first_chunk = True
+    for i in range(0, len(embeds), chunk_size):
+        chunk = embeds[i:i + chunk_size]
+        if first_chunk:
+            await interaction.followup.send(content=f"🧰 **SWE/CS Job Postings** (latest {matched})", embeds=chunk)
+            first_chunk = False
+        else:
+            await interaction.followup.send(embeds=chunk)

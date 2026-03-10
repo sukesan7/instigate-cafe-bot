@@ -151,11 +151,47 @@ def job_matches_env_filters(
     kw_allow: list[str] | None,
     kw_deny: list[str] | None,
 ) -> bool:
-    """Single source of truth for GH/Lever filtering based on .env lists."""
-    if not _keyword_passes(text_blob, kw_allow, kw_deny):
+    """Single source of truth for ALL ATS filtering (Greenhouse, Lever, Workday).
+
+    Hard gates (always enforced):
+      1. Reject seniority terms (senior, staff, manager, director, etc.)
+      2. Require early career signal (intern, co-op, new grad, entry-level, junior, student)
+      3. Require a tech discipline signal (SWE/CS/HW/EE — not analyst, business, finance, etc.)
+
+    Soft gates (from .env):
+      4. Keyword allow/deny lists
+      5. Location allowlist
+    """
+    t = (text_blob or "").lower()
+
+    # Gate 1: Reject senior/management roles
+    if _SENIORITY_RX.search(t):
         return False
+
+    # Gate 1b: Reject non-tech roles (analyst, business, finance, etc.)
+    if _NON_TECH_RX.search(t):
+        return False
+
+    # Gate 2: Require early career signal
+    if not _EARLY_CAREER_HINT_RX.search(t):
+        return False
+
+    # Gate 3: Require a tech discipline signal
+    if not _DISCIPLINE_RX.search(t):
+        return False
+
+    # Gate 4: .env deny keywords
+    if kw_deny and any(d.lower() in t for d in kw_deny if d):
+        return False
+
+    # Gate 5: .env allow keywords (if set, at least one must match)
+    if kw_allow and not any(a.lower() in t for a in kw_allow if a):
+        return False
+
+    # Gate 6: Location
     if not _location_passes_smart(location, text_blob, loc_allow):
         return False
+
     return True
 
 
@@ -168,20 +204,23 @@ _SENIORITY_RX = re.compile(
     re.IGNORECASE,
 )
 
-# Strong SWE/CS signal. Note: intentionally does NOT include plain "engineer"/"engineering" by itself.
-_WORKDAY_SWE_SIGNAL_RX = re.compile(
+_NON_TECH_RX = re.compile(
+    r"\b(business|analyst|marketing|sales|finance|hr|recruiter|product\s+manager|project\s+manager)\b",
+    re.IGNORECASE,
+)
+
+# Discipline signal: strictly SWE, CS, HW, EE
+_DISCIPLINE_RX = re.compile(
     r"\b("
-    r"software|developer|programmer|backend|front\s*end|frontend|full\s*stack|platform|infrastructure|"
-    r"site\s+reliability|sre|devops|cloud|distributed|microservices?|api\b|services\b|"
-    r"data\s+engineer|data\s+scientist|machine\s+learning|ml\b|artificial\s+intelligence|ai\b|"
-    r"security\s+engineer|cyber|embedded|firmware|fpga|verilog|vhdl|"
-    r"c\+\+|python|java|golang|go\b|rust|kotlin|scala"
+    r"software|swe|computer\s+science|cs\b|"
+    r"hardware|electrical|ee\b|embedded|firmware"
     r")\b",
     re.IGNORECASE,
 )
 
+# Early career strictly Intern / New Grad (Co-op is basically intern)
 _EARLY_CAREER_HINT_RX = re.compile(
-    r"\b(intern(ship)?|co[- ]?op|new\s*grad(uate)?|graduate|student|summer|entry[- ]?level|junior)\b",
+    r"\b(intern(ship)?|co[- ]?op|new\s*grad(uate)?)\b",
     re.IGNORECASE,
 )
 
@@ -204,33 +243,14 @@ def _workday_passes_filters(
     kw_allow: list[str] | None,
     kw_deny: list[str] | None,
 ) -> bool:
-    """
-    Workday eligibility gate:
-      - always reject seniority terms (even if denylist is loosened)
-      - apply global denylist
-      - require a SWE/CS signal so we don't post Audit/Analyst/etc
-      - apply location allowlist leniently (blank loc => pass)
-      - still respects keyword allow/deny if provided (but SWE signal is the real core gate)
-    """
-    t = (text_blob or "").lower()
-
-    if _SENIORITY_RX.search(t):
-        return False
-
-    if kw_deny and any(d.lower() in t for d in kw_deny if d):
-        return False
-
-    if not _location_passes_lenient(location, loc_allow):
-        return False
-
-    if not _WORKDAY_SWE_SIGNAL_RX.search(t):
-        return False
-
-    if kw_allow and not any(a.lower() in t for a in kw_allow if a):
-        if not _EARLY_CAREER_HINT_RX.search(t):
-            return False
-
-    return True
+    """Workday uses the same unified filter as all other sources."""
+    return job_matches_env_filters(
+        text_blob=text_blob,
+        location=location,
+        loc_allow=loc_allow,
+        kw_allow=kw_allow,
+        kw_deny=kw_deny,
+    )
 
 
 def _pick_bootstrap_sample_workday(
