@@ -414,6 +414,10 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
     if not llm_enabled or not api_key:
         return False
 
+    # Check runtime killswitch
+    if getattr(bot, "_llm_killed", False):
+        return False
+
     # Only trigger when THIS bot is mentioned
     if bot.user not in message.mentions:
         return False

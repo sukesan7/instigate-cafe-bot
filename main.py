@@ -34,6 +34,7 @@ from icbot.features import profile  # noqa: F401
 from icbot.features import roulette  # noqa: F401
 from icbot.features import slots  # noqa: F401
 from icbot.features import grades # noqa: F401
+from icbot.features import admin # noqa: F401
 
 
 load_dotenv(override=True)
@@ -300,6 +301,15 @@ async def on_ready():
     bot.db = db  # type: ignore[attr-defined]
 
     # ---- Startup config logs (helps debug .env issues) ----
+    
+    # Load LLM killswitch state from DB
+    try:
+        row = await db.fetchone("SELECT value FROM meta WHERE key=?", ("llm_killed",))
+        if row and str(row[0]) == "1":
+            setattr(bot, "_llm_killed", True)
+            print("[BOOT] Loaded persisted llm_killed=True state from DB.")
+    except Exception as e:
+        print(f"[BOOT] Error loading LLM killswitch state: {e!r}")
     try:
         mw_enabled = bool(getattr(settings, "market_watch_enabled", False))
         mw_poll = int(getattr(settings, "market_watch_poll_seconds", 0) or 0)

@@ -18,6 +18,10 @@ class ResumeReviewer:
             await interaction.followup.send("❌ Gemini API is not configured.", ephemeral=True)
             return
             
+        if getattr(interaction.client, "_llm_killed", False):
+            await interaction.followup.send("🛑 **Resume features are currently paused by an administrator.** Please try again later.", ephemeral=True)
+            return
+
         if attachment.size > MAX_FILE_SIZE:
             await interaction.followup.send("❌ File is too large. Please upload a file smaller than 5MB.", ephemeral=True)
             return
