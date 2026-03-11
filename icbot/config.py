@@ -183,6 +183,7 @@ class Settings:
     jobs_keywords_allowlist: list[str] | None = None
     jobs_keywords_denylist: list[str] | None = None
     jobs_bootstrap_post: bool = False
+    jobs_require_early_career: bool = False
 
     # Workday jobs (new)
     workday_sites: list[str] | None = None  # e.g. "RBC|https://rbc.wd3.myworkdayjobs.com/en-US/RBC"
@@ -311,6 +312,7 @@ class Settings:
         jobs_keywords_allowlist = _to_str_list(os.getenv("JOBS_KEYWORDS_ALLOWLIST", ""))
         jobs_keywords_denylist = _to_str_list(os.getenv("JOBS_KEYWORDS_DENYLIST", ""))
         jobs_bootstrap_post = _to_bool(os.getenv("JOBS_BOOTSTRAP_POST", "false"), False)
+        jobs_require_early_career = _to_bool(os.getenv("JOBS_REQUIRE_EARLY_CAREER", "false"), False)
 
         # Workday (new)
         workday_sites = _to_str_list(os.getenv("WORKDAY_SITES", ""))
@@ -410,6 +412,7 @@ class Settings:
             jobs_keywords_allowlist=jobs_keywords_allowlist,
             jobs_keywords_denylist=jobs_keywords_denylist,
             jobs_bootstrap_post=jobs_bootstrap_post,
+            jobs_require_early_career=jobs_require_early_career,
             workday_sites=workday_sites,
             workday_poll_seconds=workday_poll_seconds,
             workday_timeout_seconds=workday_timeout_seconds,

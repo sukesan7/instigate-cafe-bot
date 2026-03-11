@@ -175,6 +175,7 @@ def job_matches_env_filters(
     loc_allow: list[str] | None,
     kw_allow: list[str] | None,
     kw_deny: list[str] | None,
+    require_early_career: bool = False,
 ) -> bool:
     """Single source of truth for ALL ATS filtering (Greenhouse, Lever, Workday).
 
@@ -197,8 +198,8 @@ def job_matches_env_filters(
     if _NON_TECH_RX.search(t):
         return False
 
-    # Gate 2: Require early career signal
-    if not _EARLY_CAREER_HINT_RX.search(t):
+    # Gate 2: Require early career signal (if configured)
+    if require_early_career and not _EARLY_CAREER_HINT_RX.search(t):
         return False
 
     # Gate 3: Require a tech discipline signal
@@ -249,6 +250,7 @@ def _workday_passes_filters(
     loc_allow: list[str] | None,
     kw_allow: list[str] | None,
     kw_deny: list[str] | None,
+    require_early_career: bool = False,
 ) -> bool:
     """Workday uses the same unified filter as all other sources."""
     return job_matches_env_filters(
@@ -257,6 +259,7 @@ def _workday_passes_filters(
         loc_allow=loc_allow,
         kw_allow=kw_allow,
         kw_deny=kw_deny,
+        require_early_career=require_early_career,
     )
 
 
@@ -266,6 +269,7 @@ def _pick_bootstrap_sample_workday(
     loc_allow: list[str] | None,
     kw_allow: list[str] | None,
     kw_deny: list[str] | None,
+    require_early_career: bool = False,
     max_items: int = 5,
 ) -> list[tuple[JobPosting, list[str]]]:
     """Workday bootstrap is STRICT: never ignores filters."""
@@ -278,6 +282,7 @@ def _pick_bootstrap_sample_workday(
             loc_allow=loc_allow,
             kw_allow=kw_allow,
             kw_deny=kw_deny,
+            require_early_career=require_early_career,
         )
 
     # Pass 1: early-career + eligible
@@ -379,6 +384,7 @@ def _pick_bootstrap_sample(
     loc_allow: list[str] | None,
     kw_allow: list[str] | None,
     kw_deny: list[str] | None,
+    require_early_career: bool = False,
     max_items: int = 5,
 ) -> list[tuple[JobPosting, list[str]]]:
     """
@@ -395,6 +401,7 @@ def _pick_bootstrap_sample(
             loc_allow=loc_allow,
             kw_allow=kw_allow,
             kw_deny=kw_deny,
+            require_early_career=require_early_career,
         ):
             continue
         cats = _classify(j.text_blob) or ["General"]
@@ -434,6 +441,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
     kw_allow = list(getattr(settings, "jobs_keywords_allowlist", None) or []) or None
     kw_deny = list(getattr(settings, "jobs_keywords_denylist", None) or []) or None
     bootstrap_post = bool(getattr(settings, "jobs_bootstrap_post", False))
+    require_early_career = bool(getattr(settings, "jobs_require_early_career", False))
 
     bad_sources: set[str] = getattr(bot, "_jobs_bad_sources", set())
     setattr(bot, "_jobs_bad_sources", bad_sources)
@@ -498,6 +506,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 loc_allow=loc_allow,
                 kw_allow=kw_allow,
                 kw_deny=kw_deny,
+                require_early_career=require_early_career,
                 max_items=5,
             )
 
@@ -540,6 +549,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 loc_allow=loc_allow,
                 kw_allow=kw_allow,
                 kw_deny=kw_deny,
+                require_early_career=require_early_career,
             ):
                 await _mark_seen(db, [j])
                 continue

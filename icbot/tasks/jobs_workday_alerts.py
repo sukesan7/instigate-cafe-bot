@@ -103,6 +103,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
     kw_allow = list(getattr(settings, "jobs_keywords_allowlist", None) or []) or None
     kw_deny = list(getattr(settings, "jobs_keywords_denylist", None) or []) or None
     bootstrap_post = bool(getattr(settings, "jobs_bootstrap_post", False))
+    require_early_career = bool(getattr(settings, "jobs_require_early_career", False))
 
     workday_sites: list[WorkdaySite] = parse_workday_sites(raw_sites)
     if not workday_sites:
@@ -163,6 +164,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                     loc_allow=loc_allow,
                     kw_allow=kw_allow,
                     kw_deny=kw_deny,
+                    require_early_career=require_early_career,
                     max_items=5,
                 )
 
@@ -205,6 +207,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                     loc_allow=loc_allow,
                     kw_allow=kw_allow,
                     kw_deny=kw_deny,
+                    require_early_career=require_early_career,
                 ):
                     await _mark_seen(db, [j])
                     continue
