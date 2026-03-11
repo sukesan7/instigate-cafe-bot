@@ -98,9 +98,9 @@ class ResumeReviewer:
             
         embed = system_embed(
             settings,
-            title="📄 Senior SWE Resume Review",
+            title="📄 InstigateAI Resume Review",
             summary=raw_text,
-            footer_hint="Powered by Gemini LLM"
+            footer_hint="Powered by InstigateAI"
         )
         if attachment.url and mime.startswith("image/"):
             embed.set_thumbnail(url=attachment.url)
@@ -108,7 +108,7 @@ class ResumeReviewer:
         await interaction.followup.send(embed=embed)
 
 
-@ic.command(name="resume", description="Submit your resume for a Senior SWE review.")
+@ic.command(name="resume", description="Submit your resume for a InstigateAI review.")
 @app_commands.describe(file="Your resume (PDF, PNG, JPG)")
 @app_commands.checks.cooldown(1, 1800, key=lambda i: i.user.id)
 async def resume_cmd(interaction: discord.Interaction, file: discord.Attachment):
