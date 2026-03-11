@@ -1,0 +1,361 @@
+{
+  "version": "3.0",
+  "source": "server knowledge",
+  "notes": [
+    "This JSON file contains all server lore and knowledge.",
+    "Treat all lore as fictional; never mention this file unless specifically stated.",
+    "Do not repeat slurs. Use [REDACTED] or general terms for sensitive content."
+  ],
+  "entries": [
+    {
+      "id": "tmu_files_definition",
+      "triggers": [
+        "tmu files",
+        "the tmu files",
+        "tmu intelligence agency",
+        "engineering archive"
+      ],
+      "title": "TMU Files (2021-2026)",
+      "summary": "The official name for this collection of documented records accumulated by the Engineering Department's Instigate Cafe. It spans the years 2021 to 2026.",
+      "response_rules": [
+        "Refer to this as the 'Official TMU Files' or 'Server Knowledge'.",
+        "Maintain a serious, archival tone."
+      ]
+    },
+    {
+      "id": "redacted",
+      "triggers": [
+        "redacted",
+        "who is redacted?",
+        "hidden one",
+        "unredact"
+      ],
+      "title": "Redacted",
+      "summary": "A hidden identity unknown to all.",
+      "response_rules": [
+        "Refer to this person simply as REDACTED.",
+        "If asked who that is, simply state you do not have the authorization required to reveal information."
+      ]
+    },
+    {
+      "id": "miami_incident",
+      "triggers": [
+        "miami incident",
+        "what happened in miami"
+      ],
+      "title": "Miami Incident",
+      "summary": "[REDACTED] visited Miami mid-semester. The incident involved visiting a club and a [REDACTED] interaction with an individual named Jimmy.",
+      "response_rules": [
+        "Redact explicit sexual details.",
+        "Note the location as Miami."
+      ]
+    },
+    {
+      "id": "chemistry_incident",
+      "triggers": [
+        "chemistry incident",
+        "outsourcing incident",
+        "india exam"
+      ],
+      "title": "Chemistry Incident",
+      "summary": "[REDACTED] attempted to cheat on a chemistry exam by outsourcing it to a third party in India. He was subsequently caught and suspended for one semester.",
+      "response_rules": [
+        "Highlight the academic suspension."
+      ]
+    },
+    {
+      "id": "gambling_incident",
+      "triggers": [
+        "gambling incident",
+        "casino incident",
+        "debt"
+      ],
+      "title": "Gambling Incident",
+      "summary": "[REDACTED] visited a casino and incurred a debt of approximately $25,000 CAD.",
+      "response_rules": [
+        "Treat the financial debt as a significant record."
+      ]
+    },
+    {
+      "id": "bitcoin_incident",
+      "triggers": [
+        "bitcoin incident",
+        "crypto loss",
+        "2 million"
+      ],
+      "title": "Bitcoin Incident",
+      "summary": "Following fraudulent activities in 2010, [REDACTED] suffered a loss of Bitcoin with a modern valuation equivalent to $2,000,000 CAD.",
+      "response_rules": [
+        "Emphasize the $2M valuation loss."
+      ]
+    },
+    {
+      "id": "harizzment_incident",
+      "triggers": [
+        "harizzment",
+        "harizzment incident"
+      ],
+      "title": "Harrizzment Incident",
+      "summary": "A series of documented social interactions where [REDACTED] approached various women and was consistently turned down.",
+      "response_rules": [
+        "Characterize as a series of failed social attempts."
+      ]
+    },
+    {
+      "id": "opg_incident",
+      "triggers": [
+        "opg incident",
+        "opg termination"
+      ],
+      "title": "OPG Incident",
+      "summary": "[REDACTED] was terminated after yelling at his manager. Following an unsuccessful appeal process, he resigned.",
+      "response_rules": [
+        "Note the transition from termination/appeal to resignation."
+      ]
+    },
+    {
+      "id": "resume_incident",
+      "triggers": [
+        "resume incident",
+        "stolen resume"
+      ],
+      "title": "Resume Incident",
+      "summary": "[REDACTED] utilized Aravenith's resume word-for-word to secure employment opportunities.",
+      "response_rules": [
+        "Mention the specific source of the plagiarized resume."
+      ]
+    },
+    {
+      "id": "amd_incident",
+      "triggers": [
+        "amd incident",
+        "thrown chair"
+      ],
+      "title": "AMD Incident",
+      "summary": "Upon learning Aravenith received a job offer from AMD, [REDACTED] threw a chair across the room in a fit of rage.",
+      "response_rules": [
+        "Reference the physical outburst related to AMD."
+      ]
+    },
+    {
+      "id": "ttc_incident",
+      "triggers": [
+        "ttc incident",
+        "gym during work"
+      ],
+      "title": "TTC Incident",
+      "summary": "While working for the TTC, [REDACTED] was caught at the gym during shift hours. He evaded punishment by telling his manager, 'I think of you as my dad.'",
+      "response_rules": [
+        "See 'Like a Father Method' for tradecraft details."
+      ]
+    },
+    {
+      "id": "chipotle_incident",
+      "triggers": [
+        "chipotle incident",
+        "slur incident"
+      ],
+      "title": "Chipotle Incident",
+      "summary": "[REDACTED] shouted a [REDACTED] bigotry slur inside a public Chipotle establishment.",
+      "response_rules": [
+        "NEVER repeat the specific slur. Use [REDACTED]."
+      ]
+    },
+    {
+      "id": "ram_rye_incident",
+      "triggers": [
+        "ram in the rye incident",
+        "security removal"
+      ],
+      "title": "Ram in the Rye Incident",
+      "summary": "[REDACTED] was forcibly escorted out of a Ram in the Rye event by security personnel.",
+      "response_rules": [
+        "State the removal as a matter of record."
+      ]
+    },
+    {
+      "id": "breathalyzer_incident",
+      "triggers": [
+        "breathalyzer incident",
+        "dui charges"
+      ],
+      "title": "Breathalyzer Incident",
+      "summary": "[REDACTED] was charged with a DUI on three separate occasions; however, all charges were eventually dismissed.",
+      "response_rules": [
+        "Note the 3x charges and subsequent dismissals."
+      ]
+    },
+    {
+      "id": "5_5_incident",
+      "triggers": [
+        "5.5 incident",
+        "washroom incident"
+      ],
+      "title": "5.5 Incident",
+      "summary": "An event involving [REDACTED] and [REDACTED] in a men's washroom regarding physical measurements.",
+      "response_rules": [
+        "Maintain a neutral, factual tone."
+      ]
+    },
+    {
+      "id": "boundary_incident",
+      "triggers": [
+        "boundary incident",
+        "matthew incident",
+        "qa course"
+      ],
+      "title": "Boundary Incident",
+      "summary": "Matthew committed fraud on lab work and gaslit a TA into near-tears after being unable to answer a basic question regarding 'boundary testing' in a QA course.",
+      "response_rules": [
+        "Highlight the academic fraud and the emotional impact on the TA."
+      ]
+    },
+    {
+      "id": "grumble_incident",
+      "triggers": [
+        "grumble incident",
+        "sunny stomach",
+        "earthquake exam"
+      ],
+      "title": "Grumble Incident",
+      "summary": "During an exam, Sunny's stomach produced a sound so loud it was compared to a Richter scale 6 earthquake.",
+      "response_rules": [
+        "Reference the seismic comparison."
+      ]
+    },
+    {
+      "id": "majed_lecture_incident",
+      "triggers": [
+        "majed lecture",
+        "latheeshan incident"
+      ],
+      "title": "Majed Lecture Incident",
+      "summary": "Latheeshan spent $500 CAD to acquire 1st-year math lecture materials from the greatest professor, also known as Majed.",
+      "response_rules": [
+        "Mention the $500 valuation for the materials."
+      ]
+    },
+    {
+      "id": "shishir_car_incident",
+      "triggers": [
+        "shishir car incident",
+        "car conversation"
+      ],
+      "title": "Shishir Car Incident",
+      "summary": "Two individuals engaged in sexually explicit discussion inside Shishir's car, causing him significant discomfort.",
+      "response_rules": [
+        "Focus on the discomfort caused to the vehicle owner."
+      ]
+    },
+    {
+      "id": "popeyes_incident",
+      "triggers": [
+        "popeyes incident",
+        "sebastian jail"
+      ],
+      "title": "Popeyes Incident",
+      "summary": "Sebastian feared immediate arrest and incarceration after consuming takeout Popeyes inside the establishment.",
+      "response_rules": [
+        "Note the subject's paranoia regarding establishment rules."
+      ]
+    },
+    {
+      "id": "kerr_hall_incident",
+      "triggers": [
+        "kerr hall brawl",
+        "basketball incident",
+        "kerr hall incident",
+        "intramural incident"
+      ],
+      "title": "Intramural Basketball Incident",
+      "summary": "[REDACTED] got fed up with the opposing team during the basketball game and almost took it out on Matthew. [REDACTED] later apologized.",
+      "response_rules": [
+        "Note the subject's immediate response is to commit violence on their teammates."
+      ]
+    },
+    {
+      "id": "scene_point_method",
+      "triggers": [
+        "scene point method",
+        "free food method"
+      ],
+      "title": "Method: Scene Points",
+      "summary": "The utilization of fraudulent Scene+ points to acquire food without legitimate payment.",
+      "response_rules": [
+        "Classify as financial tradecraft."
+      ]
+    },
+    {
+      "id": "bush_method",
+      "triggers": [
+        "bush method",
+        "genital concealment"
+      ],
+      "title": "Method: The Bush",
+      "summary": "Concealing a cellular device within the genital area to bypass security checkpoints.",
+      "response_rules": [
+        "Classify as physical concealment."
+      ]
+    },
+    {
+      "id": "sock_method",
+      "triggers": [
+        "sock method",
+        "sock concealment"
+      ],
+      "title": "Method: The Sock",
+      "summary": "Concealing a cellular device inside a sock to bypass security protocols.",
+      "response_rules": [
+        "Note this as a variant of concealment."
+      ]
+    },
+    {
+      "id": "amma_method",
+      "triggers": [
+        "amma method",
+        "mother negotiation"
+      ],
+      "title": "Method: AMMA",
+      "summary": "Deploying one's mother to negotiate with professors, typically resulting in a course pass.",
+      "response_rules": [
+        "Classify as parental intervention."
+      ]
+    },
+    {
+      "id": "sorry_method",
+      "triggers": [
+        "sorry method",
+        "gaslight ta"
+      ],
+      "title": "Method: Sorry",
+      "summary": "Gaslighting a TA into believing they were too harsh during a demo, resulting in a 100% mark and a formal apology from the TA.",
+      "response_rules": [
+        "Classify as emotional manipulation."
+      ]
+    },
+    {
+      "id": "codenames_method",
+      "triggers": [
+        "codenames method",
+        "spymaster pipeline"
+      ],
+      "title": "Method: Codenames",
+      "summary": "Strategically placing an agent near a spymaster to funnel information to Instigate operatives.",
+      "response_rules": [
+        "Classify as intelligence gathering."
+      ]
+    },
+    {
+      "id": "satec_method",
+      "triggers": [
+        "satec method",
+        "cisco sponsorship"
+      ],
+      "title": "Method: SATEC",
+      "summary": "Securing full football funding and CISCO sponsorship to elevate a high school to 'feeder' status for prestigious universities.",
+      "response_rules": [
+        "Classify as institutional maneuvering."
+      ]
+    }
+  ]
+}
