@@ -176,8 +176,8 @@ def _quotes_from_payload(data: Any) -> dict[str, Quote]:
 
         if pre_pct is None and pre_price is not None and prev_close not in (None, 0.0):
             pre_pct = (pre_price - prev_close) / prev_close * 100.0
-        if post_pct is None and post_price is not None and prev_close not in (None, 0.0):
-            post_pct = (post_price - prev_close) / prev_close * 100.0
+        if post_pct is None and post_price is not None and reg_price not in (None, 0.0):
+            post_pct = (post_price - reg_price) / reg_price * 100.0
         if reg_pct is None and reg_price is not None and prev_close not in (None, 0.0):
             reg_pct = (reg_price - prev_close) / prev_close * 100.0
 

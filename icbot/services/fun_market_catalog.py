@@ -25,6 +25,7 @@ FUN_STOCK_CATALOG: tuple[FunStockDef, ...] = (
     FunStockDef("TGP", "The Graduates Project", 10, "misc", True, "Private Entity stock."),
     FunStockDef("CONT", "Continuity AI", 10, "misc", True, "Private Entity stock."),
     FunStockDef("BNZI", "Bonzai Stress Relief", 0, "unlisted", False, "Unlisted stock."),
+    FunStockDef("HVAC", "AI Hvac", 10, "capstone", False, "Capstone team stock."),
 )
 
 
