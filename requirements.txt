@@ -4,3 +4,6 @@ aiosqlite>=0.20.0
 tzdata
 aiohttp
 certifi
+beautifulsoup4
+matplotlib
+numpy
