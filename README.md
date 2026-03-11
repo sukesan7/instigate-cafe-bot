@@ -53,6 +53,8 @@ All slash commands fall under the highly-structured `/ic` root group to avoid ro
 - `/ic exams` — Track configured course exams.
 - `/ic notes <course>` — Search through and fetch Notion archives from predefined student markdown sites.
 - `/ic prof <name>` — Retrieves direct Professor ratings, difficulty bounds, and top tags from RateMyProfessors.
+- `/ic grades <course>` — Scrapes and displays university grade distributions per professor for a specific course.
+- `/ic resume` — Uses the Gemini AI to provide a technical review and ATS scan of your uploaded resume.
 
 ### Economy, Games, & Assets
 - `/ic profile [user]` — Check centralized net worth, cash holdings, and total locked equity.
@@ -72,6 +74,8 @@ A highly mature, paper-trading simulated market running on the **centralized eco
 #### Admin / Market Controls (Admin/Allowed Roles)
 - `/ic admin move <symbol> <delta> [reason]` — Move a stock price by a delta increment.
 - `/ic admin set <symbol> <value> [reason]` — Hard-reset an equity price.
+- `/ic admin llm_stop` — Pauses the LLM functionality (chatbot and resume tool).
+- `/ic admin llm_start` — Re-enables the LLM functionality.
 
 ### System & Info Diagnostics
 - `/ic botinfo` — View LLM runtime bounds, active tech stack, and internal modules.
@@ -102,7 +106,7 @@ The Job Board engine tracks endpoints strictly injected through `.env`:
 All jobs are run through ultra-aggressive filters dictating:
 1. Allowlisted Keywords (`SWE`, `Software`, `Hardware`, `Electrical`).
 2. Hard Denies against Mid-Senior configurations (`Analyst`, `Senior`, `Manager`).
-3. Position Bounds strictly limiting roles to `Intern`, `Co-op`, or `New Grad` nomenclature.
+3. Position Bounds optionally limiting roles using `JOBS_REQUIRE_EARLY_CAREER=true` (forces `Intern`, `Co-op`, or `New Grad` nomenclature). If `false` (default), standard mid-level engineering roles are accepted.
 
 ---
 
@@ -131,8 +135,10 @@ project-root/
 │  ├─ embeds.py
 │  ├─ permissions.py
 │  ├─ features/
+│  │  ├─ admin.py
 │  │  ├─ blackjack.py
 │  │  ├─ exams.py
+│  │  ├─ grades.py                  
 │  │  ├─ info.py                  
 │  │  ├─ invest.py                  
 │  │  ├─ jobs.py
@@ -141,6 +147,7 @@ project-root/
 │  │  ├─ prof.py                    
 │  │  ├─ profile.py                 
 │  │  ├─ report.py
+│  │  ├─ resume.py                  
 │  │  ├─ roulette.py                
 │  │  ├─ slots.py                   
 │  │  └─ sports.py                   
