@@ -11,13 +11,6 @@ def _has_allowed_role_id(member: discord.Member, settings: Settings) -> bool:
     return any(r.id in allowed for r in getattr(member, "roles", []))
 
 
-def _has_allowed_role_name(member: discord.Member, settings: Settings) -> bool:
-    # Optional legacy fallback
-    if not settings.allowed_roles:
-        return False
-    member_role_names = {r.name for r in getattr(member, "roles", [])}
-    return any(r in member_role_names for r in settings.allowed_roles)
-
 
 def is_admin_or_allowed(interaction: Interaction, settings: Settings) -> bool:
     member = interaction.user
@@ -30,10 +23,6 @@ def is_admin_or_allowed(interaction: Interaction, settings: Settings) -> bool:
 
     # Preferred: role IDs
     if _has_allowed_role_id(member, settings):
-        return True
-
-    # Optional fallback: role names
-    if _has_allowed_role_name(member, settings):
         return True
 
     return False
