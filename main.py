@@ -35,7 +35,7 @@ from icbot.features import roulette  # noqa: F401
 from icbot.features import slots  # noqa: F401
 from icbot.features import grades # noqa: F401
 from icbot.features import admin # noqa: F401
-
+from icbot.features import help # noqa: F401
 
 load_dotenv(override=True)
 settings = Settings.from_env()

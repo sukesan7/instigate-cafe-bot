@@ -123,14 +123,12 @@ async def _apply_sp500_move(settings, db, *, bot_id: int = 0, debug: bool = Fals
         if price <= 0:
             continue
 
-        # Calculate delta from percentage; minimum ±1 if the S&P moved at all
+        # Calculate delta from percentage; no minimum limit
         raw_delta = price * pct / 100.0
-        if pct > 0:
-            delta = max(1, int(round(raw_delta)))
-        elif pct < 0:
-            delta = min(-1, int(round(raw_delta)))
-        else:
-            continue  # 0% move, skip
+        delta = int(round(raw_delta))
+        
+        if delta == 0:
+            continue  # 0% move or too small to move even $1, skip
 
         try:
             await store.admin_move(
