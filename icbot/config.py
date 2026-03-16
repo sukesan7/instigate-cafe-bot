@@ -174,6 +174,8 @@ class Settings:
     gemini_model: str = "gemini-2.5-flash"
     gemini_resume_model: str = "gemini-2.5-pro"
     gemini_resume_prompt: str = ""
+    gemini_resume_prompt_hw: str = ""
+    gemini_resume_prompt_ele: str = ""
 
     # Jobs alerts (Greenhouse/Lever)
     jobs_poll_seconds: int = 600
@@ -304,6 +306,8 @@ class Settings:
         gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
         gemini_resume_model = os.getenv("GEMINI_RESUME_MODEL", "gemini-2.5-pro").strip() or "gemini-2.5-pro"
         gemini_resume_prompt = os.getenv("GEMINI_RESUME_PROMPT", "").strip()
+        gemini_resume_prompt_hw = os.getenv("GEMINI_RESUME_PROMPT_HW", "").strip()
+        gemini_resume_prompt_ele = os.getenv("GEMINI_RESUME_PROMPT_ELE", "").strip()
 
         jobs_poll_seconds = _to_int(os.getenv("JOBS_POLL_SECONDS", "600"), 600)
         greenhouse_boards = _to_str_list(os.getenv("GREENHOUSE_BOARDS", ""))
@@ -405,6 +409,8 @@ class Settings:
             gemini_model=gemini_model,
             gemini_resume_model=gemini_resume_model,
             gemini_resume_prompt=gemini_resume_prompt,
+            gemini_resume_prompt_hw=gemini_resume_prompt_hw,
+            gemini_resume_prompt_ele=gemini_resume_prompt_ele,
             jobs_poll_seconds=jobs_poll_seconds,
             greenhouse_boards=greenhouse_boards,
             lever_sites=lever_sites,

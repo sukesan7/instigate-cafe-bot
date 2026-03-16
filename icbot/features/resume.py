@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 import io
 import math
+from typing import Literal
 
 from icbot.app import ic
 from icbot.embeds import system as system_embed
@@ -12,7 +13,7 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 
 class ResumeReviewer:
     @staticmethod
-    async def review(interaction: discord.Interaction, attachment: discord.Attachment):
+    async def review(interaction: discord.Interaction, attachment: discord.Attachment, discipline: str):
         settings = getattr(interaction.client, "settings", None)
         if not settings or not settings.gemini_api_key:
             await interaction.followup.send("❌ Gemini API is not configured.", ephemeral=True)
@@ -52,7 +53,12 @@ class ResumeReviewer:
         model = getattr(settings, "gemini_resume_model", "gemini-2.5-pro")
         
         # 1. ATS Check
-        ats_prompt = "You are a strict ATS (Applicant Tracking System). Determine if the provided document is a valid resume (specifically for software engineering or related tech roles). Reply ONLY with 'PASS' if it is a valid resume, or 'FAIL' followed by a short reason if it is not."
+        if discipline == "HW":
+            ats_prompt = "You are a strict ATS (Applicant Tracking System). Determine if the provided document is a valid resume (specifically for hardware engineering roles). Reply ONLY with 'PASS' if it is a valid resume, or 'FAIL' followed by a short reason if it is not."
+        elif discipline == "ELE":
+            ats_prompt = "You are a strict ATS (Applicant Tracking System). Determine if the provided document is a valid resume (specifically for electrical engineering roles). Reply ONLY with 'PASS' if it is a valid resume, or 'FAIL' followed by a short reason if it is not."
+        else:
+            ats_prompt = "You are a strict ATS (Applicant Tracking System). Determine if the provided document is a valid resume (specifically for software engineering or related tech roles). Reply ONLY with 'PASS' if it is a valid resume, or 'FAIL' followed by a short reason if it is not."
         
         try:
             ats_res = await gemini_generate_text(
@@ -75,10 +81,27 @@ class ResumeReviewer:
             await interaction.followup.send(f"❌ Failed to reach Gemini for ATS scan ({type(e).__name__}): {e}", ephemeral=True)
             return
 
-        # 2. Senior SWE Review
-        review_prompt = getattr(settings, "gemini_resume_prompt", "")
-        if not review_prompt:
-            review_prompt = "You are a Senior Software Engineer reviewing a resume. Provide Overall Rating, Pros, Cons, and Actionable feedback."
+        # 2. Senior Review
+        if discipline == "HW":
+            review_prompt = getattr(settings, "gemini_resume_prompt_hw", "")
+            if not review_prompt:
+                base = getattr(settings, "gemini_resume_prompt", "")
+                if base:
+                    review_prompt = base.replace("Software Engineering", "Hardware Engineering").replace("SWE/CS", "HW").replace("SWE", "HW").replace("Software", "Hardware").replace("Computer Science", "Computer Engineering")
+                else:
+                    review_prompt = "You are a Senior Hardware Engineer reviewing a resume. Provide Overall Rating, Pros, Cons, and Actionable feedback."
+        elif discipline == "ELE":
+            review_prompt = getattr(settings, "gemini_resume_prompt_ele", "")
+            if not review_prompt:
+                base = getattr(settings, "gemini_resume_prompt", "")
+                if base:
+                    review_prompt = base.replace("Software Engineering", "Electrical Engineering").replace("SWE/CS", "EE").replace("SWE", "EE").replace("Software", "Electrical").replace("Computer Science", "Electrical Engineering")
+                else:
+                    review_prompt = "You are a Senior Electrical Engineer reviewing a resume. Provide Overall Rating, Pros, Cons, and Actionable feedback."
+        else:
+            review_prompt = getattr(settings, "gemini_resume_prompt", "")
+            if not review_prompt:
+                review_prompt = "You are a Senior Software Engineer reviewing a resume. Provide Overall Rating, Pros, Cons, and Actionable feedback."
             
         try:
             review_res = await gemini_generate_text(
@@ -102,7 +125,7 @@ class ResumeReviewer:
             
         embed = system_embed(
             settings,
-            title="📄 InstigateAI Resume Review",
+            title=f"📄 InstigateAI {discipline} Resume Review",
             summary=raw_text,
             footer_hint="Powered by InstigateAI"
         )
@@ -113,8 +136,12 @@ class ResumeReviewer:
 
 
 @ic.command(name="resume", description="Submit your resume for a InstigateAI review.")
-@app_commands.describe(file="Your resume (PDF, PNG, JPG)")
+@app_commands.describe(
+    discipline="The discipline of the resume (SWE, HW, ELE)",
+    file="Your resume (PDF, PNG, JPG)"
+)
 @app_commands.checks.cooldown(1, 1800, key=lambda i: i.user.id)
-async def resume_cmd(interaction: discord.Interaction, file: discord.Attachment):
+async def resume_cmd(interaction: discord.Interaction, discipline: Literal["SWE", "HW", "ELE"], file: discord.Attachment):
     await interaction.response.defer(thinking=True)
-    await ResumeReviewer.review(interaction, file)
+    await ResumeReviewer.review(interaction, file, discipline)
+
