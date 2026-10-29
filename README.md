@@ -13,6 +13,8 @@ A modular Discord bot built with Python and `discord.py` that combines:
 
 This codebase is structured to be easy to extend: **features** (slash commands), **tasks** (polling loops), **games** (engines), and **services** (API clients) are cleanly separated.
 
+THIS IS A TEST MESSAGE
+
 ---
 
 ## Highlights
