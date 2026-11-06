@@ -1,27 +1,40 @@
-# secrets
+# ==============================================================================
+# Secrets and Environment Variables
+# ==============================================================================
 .env
+.env.*
+.envrc
+!.env.example
 
-# python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.egg-info/
-dist/
-build/
-
-# venv
-.venv/
-venv/
-
-# OS / editor
-.vscode/
-.DS_Store
-Thumbs.db
-
-# databases / local state
+# ==============================================================================
+# SQLite Databases, WAL Journals, and Local State
+# ==============================================================================
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.db.bak
+ic_stock.db
+tmu_grades.db
 ic_stock-dev.db
-#ic_stock.db
+
+# ==============================================================================
+# Private Community Lore & Local Personality Files
+# ==============================================================================
+tools/lore.tmu_files.json
+tools/lore.json
+lore.tmu_files.json
+lore.json
+
+# ==============================================================================
+# Local Reports, Scrapes, and Scratch Files
+# ==============================================================================
+distribution.png
+tmu_raw.html
+scratch/
+assets/temp/
+
 
 # logs
 *.log
@@ -226,5 +239,3 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# server specific
-# lore.tmu_files.json

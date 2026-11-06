@@ -1,0 +1,29 @@
+{
+  "version": "1.0.0-synthetic",
+  "source": "synthetic-test-fixture",
+  "notes": "Sanitized synthetic fixture for testing lore injection. Contains zero real community lore, member names, or server references.",
+  "entries": [
+    {
+      "id": "synthetic_campus_library",
+      "triggers": ["library", "study floor", "quiet zone"],
+      "title": "Campus Library",
+      "summary": "The main campus library has quiet study zones on the upper floors and collaborative study pods on the ground floor.",
+      "response_rules": "Remind students to book study rooms early during exam season."
+    },
+    {
+      "id": "synthetic_coffee_shop",
+      "triggers": ["coffee", "cafe", "espresso", "latte"],
+      "title": "Campus Coffee Hub",
+      "summary": "The central student cafe serving coffee and light snacks between lectures.",
+      "response_rules": "Maintain a warm, welcoming, and energetic tone when students ask for caffeine."
+    },
+    {
+      "id": "synthetic_exam_season",
+      "triggers": ["finals", "midterms", "exam week", "exam season"],
+      "title": "Exam Season Protocol",
+      "summary": "Period of intense studying across all campus engineering and science programs.",
+      "response_rules": "Offer encouraging words, remind students to stay hydrated and get adequate sleep."
+    }
+  ]
+}
+
