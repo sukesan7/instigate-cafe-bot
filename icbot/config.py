@@ -237,6 +237,9 @@ class Settings:
     # Course Notes
     notes_sites: list[str] | None = None
 
+    # Lore
+    lore_path: str = ""
+
     # RateMyProfessors
     rmp_university: str = "Toronto Metropolitan University"
 
@@ -361,6 +364,7 @@ class Settings:
         db_path = os.getenv("DB_PATH", "ic_stock.db").strip() or "ic_stock.db"
         exams_tz = os.getenv("EXAMS_TZ", "America/Toronto").strip() or "America/Toronto"
         notes_sites = _to_str_list(os.getenv("NOTES_SITES", ""))
+        lore_path = os.getenv("LORE_PATH", "").strip()
         rmp_university = os.getenv("RMP_UNIVERSITY", "Toronto Metropolitan University").strip() or "Toronto Metropolitan University"
 
         # Default workday poll seconds to jobs poll seconds if unset
@@ -452,5 +456,6 @@ class Settings:
             db_path=db_path,
             exams_tz=exams_tz,
             notes_sites=notes_sites,
+            lore_path=lore_path,
             rmp_university=rmp_university,
         )

@@ -181,17 +181,23 @@ project-root/
 │     ├─ market_watch.py
 │     └─ ttc_alerts.py
 └─ tools/
+   ├─ lore.example.json
    ├─ lore_loader.py
-   └─ purge_global_commands.py
+   ├─ purge_global_commands.py
+   └─ scan_secrets.py
 ```
 
 ---
 
-## License
+## License & Attribution
 
+### Software Code License
+The source code of this repository is licensed under the [MIT License](LICENSE):
+
+```text
 MIT License
 
-Copyright (c) 2026 Instigator Cafe Bot
+Copyright (c) 2026 sukesan
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -210,5 +216,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
 
-Property of Instigate Cafe
+### Community Branding and Trademark
+The "Instigate Cafe" name, server logos, graphic assets, and private community lore packs (`tools/lore.*.json`) are the property of Instigate Cafe and its community maintainers. The MIT license grants permissions only to the software source code; it does not grant rights to use server trademarks, community identities, or proprietary member lore in external commercial or public deployments.
+
+### Third-Party Data & External Asset Attribution
+This bot integrates with external data services and educational materials. Contributors and operators should review [docs/publishing-checklist.md](docs/publishing-checklist.md) for full licensing boundaries:
+- **Course Notes:** Notion-hosted engineering and computer science course notes (authored by Jasper Cruz and Krish Patel) are student-authored educational materials linked as third-party resources. They are not covered by the MIT software license.
+- **RateMyProfessors:** Professor ratings and search results are retrieved from RateMyProfessors / Chewse Inc. for non-commercial student informational lookup.
+- **Transit Data:** GO Transit information is powered by the [Metrolinx Open Data API](https://www.metrolinx.com/en/about-us/open-data) under Metrolinx Open Data terms. TTC alerts are syndicated from public transit feeds.
+- **Financial Quotes:** Stock and market data queries are provided for informational and entertainment purposes only and do not constitute financial advice.

@@ -25,6 +25,7 @@ _CHAR_LIMIT_PAT = re.compile(r"under\s+(\d{2,5})\s*(?:chars|characters)\b", re.I
 _DEFAULT_LORE_PATHS = (
     "tools/lore.json",
     "tools/lore.tmu_files.json",
+    "tools/lore.example.json",
 )
 
 def _find_lore_path(settings: Settings) -> Optional[str]:

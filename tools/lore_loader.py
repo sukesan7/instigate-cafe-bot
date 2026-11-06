@@ -30,8 +30,10 @@ def _candidate_paths() -> list[Path]:
         [
             cwd / "tools" / "lore.tmu_files.json",
             cwd / "tools" / "lore.json",
+            cwd / "tools" / "lore.example.json",
             cwd / "lore.tmu_files.json",
             cwd / "lore.json",
+            cwd / "lore.example.json",
         ]
     )
 
@@ -41,6 +43,7 @@ def _candidate_paths() -> list[Path]:
         [
             here.parent / "lore.tmu_files.json",
             here.parent / "lore.json",
+            here.parent / "lore.example.json",
         ]
     )
 
