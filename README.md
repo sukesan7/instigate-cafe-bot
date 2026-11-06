@@ -130,6 +130,15 @@ project-root/
 ├─ .gitignore
 ├─ README.md
 ├─ main.py
+├─ docs/
+│  ├─ development-baseline.md
+│  ├─ publishing-checklist.md
+│  ├─ privacy/
+│  │  └─ data-map.md
+│  └─ audit/
+│     ├─ architecture_inventory.md
+│     ├─ feature_disposition.md
+│     └─ sensitive_artifact_audit.md
 ├─ icbot/
 │  ├─ app.py
 │  ├─ config.py
@@ -180,6 +189,10 @@ project-root/
 │     ├─ market_daily_report.py     
 │     ├─ market_watch.py
 │     └─ ttc_alerts.py
+├─ tests/
+│  ├─ fixtures/
+│  │  └─ synthetic_lore.json
+│  └─ test_privacy_model.py
 └─ tools/
    ├─ lore.example.json
    ├─ lore_loader.py
@@ -222,7 +235,8 @@ SOFTWARE.
 The "Instigate Cafe" name, server logos, graphic assets, and private community lore packs (`tools/lore.*.json`) are the property of Instigate Cafe and its community maintainers. The MIT license grants permissions only to the software source code; it does not grant rights to use server trademarks, community identities, or proprietary member lore in external commercial or public deployments.
 
 ### Third-Party Data & External Asset Attribution
-This bot integrates with external data services and educational materials. Contributors and operators should review [docs/publishing-checklist.md](docs/publishing-checklist.md) for full licensing boundaries:
+This bot integrates with external data services and educational materials. Contributors and operators should review [docs/publishing-checklist.md](docs/publishing-checklist.md) and [docs/privacy/data-map.md](docs/privacy/data-map.md) for full licensing boundaries:
+- **Privacy & Data Protection:** See [docs/privacy/data-map.md](docs/privacy/data-map.md) for the data-flow inventory, third-party disclosure boundaries (Google Gemini, Discord CDN), configurable retention settings, and the transactional deletion/anonymization model.
 - **Course Notes:** Notion-hosted engineering and computer science course notes (authored by Jasper Cruz and Krish Patel) are student-authored educational materials linked as third-party resources. They are not covered by the MIT software license.
 - **RateMyProfessors:** Professor ratings and search results are retrieved from RateMyProfessors / Chewse Inc. for non-commercial student informational lookup.
 - **Transit Data:** GO Transit information is powered by the [Metrolinx Open Data API](https://www.metrolinx.com/en/about-us/open-data) under Metrolinx Open Data terms. TTC alerts are syndicated from public transit feeds.
