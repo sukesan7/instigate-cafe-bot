@@ -133,6 +133,7 @@ project-root/
 ├─ docs/
 │  ├─ development-baseline.md
 │  ├─ publishing-checklist.md
+│  ├─ testing.md
 │  ├─ privacy/
 │  │  └─ data-map.md
 │  └─ audit/
@@ -189,10 +190,43 @@ project-root/
 │     ├─ market_daily_report.py     
 │     ├─ market_watch.py
 │     └─ ttc_alerts.py
+├─ pyproject.toml
+├─ scripts/
+│  └─ manual/
+│     ├─ README.md
+│     ├─ test_kh_notes.py
+│     ├─ test_notes.py
+│     ├─ test_rmp.py
+│     ├─ test_tmu.py
+│     └─ test_yf.py
 ├─ tests/
+│  ├─ __init__.py
+│  ├─ conftest.py
+│  ├─ helpers.py
 │  ├─ fixtures/
-│  │  └─ synthetic_lore.json
-│  └─ test_privacy_model.py
+│  │  ├─ gemini_generate_response.json
+│  │  ├─ greenhouse_jobs.json
+│  │  ├─ lever_jobs.json
+│  │  ├─ metrolinx_service_alerts.json
+│  │  ├─ notes_spa_bundle.js
+│  │  ├─ notes_spa_index.html
+│  │  ├─ rmp_prof_response.json
+│  │  ├─ rmp_school_response.json
+│  │  ├─ synthetic_lore.json
+│  │  ├─ tmu_grades_course.html
+│  │  ├─ workday_careers.html
+│  │  ├─ workday_cxs_jobs.json
+│  │  └─ yahoo_quotes_response.json
+│  ├─ unit/
+│  │  ├─ test_config.py
+│  │  ├─ test_game_engines.py
+│  │  ├─ test_network_guard.py
+│  │  ├─ test_permissions_and_embeds.py
+│  │  └─ test_privacy_model.py
+│  └─ integration/
+│     ├─ test_discord_mock_commands.py
+│     ├─ test_provider_contracts.py
+│     └─ test_storage_user_and_market.py
 └─ tools/
    ├─ lore.example.json
    ├─ lore_loader.py
