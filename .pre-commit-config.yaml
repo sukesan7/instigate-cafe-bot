@@ -1,0 +1,57 @@
+# Offline-capable local pre-commit quality & publication-safety hooks.
+# Uses repo: local hooks so checks run deterministically without cloning external hook repos
+# and never reformat untouched legacy runtime modules (icbot/, main.py) during Phase 2.
+
+repos:
+  - repo: local
+    hooks:
+      - id: block-forbidden-files
+        name: Block secrets, SQLite DBs, keys, and private lore packs
+        language: fail
+        entry: >-
+          Refusing commit of forbidden artifact (.env*, *.db/*.sqlite*, key material, or private lore.*.json).
+          Only .env.example, tools/lore.example.json, and tests/fixtures/synthetic_lore.json may be tracked.
+        files: (^|/)(\.env(\..*)?$|.*\.db(-wal|-shm)?$|.*\.sqlite3?$|.*\.pem$|.*\.key$|id_(rsa|ed25519).*$|lore\.(?!example\.)[^/]+\.json$)
+        exclude: ^(\.env\.example|tools/lore\.example\.json|tests/fixtures/synthetic_lore\.json)$
+
+      - id: scan-secrets-and-hygiene
+        name: Deterministic secret & .env.example hygiene scan
+        language: system
+        entry: python3 tools/scan_secrets.py --enforce-clean
+        pass_filenames: false
+        always_run: true
+
+      - id: block-private-key-blocks
+        name: Block PEM private key material
+        language: pygrep
+        entry: '-----BEGIN (?:[A-Z ]+)?PRIVATE KEY-----'
+        types: [text]
+        exclude: ^(tools/scan_secrets\.py|docs/|tests/fixtures/|\.pre-commit-config\.yaml$)
+
+      - id: check-merge-conflicts
+        name: Reject unresolved Git merge conflict markers
+        language: pygrep
+        entry: '^(<{7} |={7}$|>{7} )'
+        types: [text]
+        exclude: ^docs/
+
+      - id: check-syntax-ast-json-toml-yaml
+        name: Validate Python AST, JSON, TOML, and YAML syntax
+        language: system
+        entry: bash -c 'PY=$([ -x .venv/bin/python ] && echo .venv/bin/python || echo python3); exec "$PY" tools/check_syntax.py "$@"' --
+        files: \.(py|json|toml|yml|yaml)$
+        types: [file]
+
+      - id: ruff-check-scoped
+        name: Ruff lint (tests/, scripts/manual/, tools offline helpers)
+        language: system
+        entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" check "$@"' --
+        files: ^(tests|scripts/manual)/.*\.py$|^tools/(check_syntax|smoke_offline)\.py$
+        types: [python]
+
+      - id: ruff-format-check-scoped
+        name: Ruff format check (tests/, scripts/manual/, tools offline helpers)
+        language: system
+        entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" format --check "$@"' --
+        files: ^(tests|scripts/manual)/.*\.py$|^tools/(check_syntax|smoke_offline)\.py$
+        types: [python]
