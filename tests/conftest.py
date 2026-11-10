@@ -30,6 +30,8 @@ from tests.helpers import (
     FakeAiohttpResponse,
     FakeClient,
     FakeInteraction,
+    FakeMessage,
+    FakeTextChannel,
     FrozenClock,
     OfflineNetworkDisabledError,
     build_fake_member,
@@ -105,10 +107,18 @@ def _disable_outbound_network(request: pytest.FixtureRequest, monkeypatch: pytes
 
 
 def _reset_service_globals() -> None:
-    """Clear cached HTTP sessions, locks bound to closed loops, and in-memory TTL caches."""
+    """Clear cached HTTP sessions, locks bound to closed loops, and in-memory TTL/session caches."""
     if "icbot.features.notes" in sys.modules:
         mod = sys.modules["icbot.features.notes"]
         mod._NOTES_CACHE = (0.0, {})
+
+    if "icbot.features.blackjack" in sys.modules:
+        bj_mod = sys.modules["icbot.features.blackjack"]
+        bj_mod._sessions.sessions.clear()
+
+    if "icbot.tasks.job_alerts" in sys.modules:
+        jobs_mod = sys.modules["icbot.tasks.job_alerts"]
+        jobs_mod._MARK_SEEN_MODE = None
 
     for mod_name in (
         "icbot.services.yahoo_quotes",
@@ -274,6 +284,8 @@ def make_interaction(synthetic_settings: Settings, tmp_db: Database):
         role_ids: list[int] | None = None,
         guild: Any | None = None,
         command_name: str = "ic test",
+        message: FakeMessage | None = None,
+        client: FakeClient | None = None,
     ) -> FakeInteraction:
         eff_settings = settings or synthetic_settings
         eff_db = db if db is not None else tmp_db
@@ -281,13 +293,35 @@ def make_interaction(synthetic_settings: Settings, tmp_db: Database):
             administrator=administrator,
             role_ids=role_ids,
         )
-        client = FakeClient(settings=eff_settings, db=eff_db)
+        eff_client = client or FakeClient(settings=eff_settings, db=eff_db)
         return FakeInteraction(
             user=eff_user,
-            client=client,
+            client=eff_client,
             guild=guild,
             command_name=command_name,
+            message=message,
         )
+
+    return _factory
+
+
+@pytest.fixture
+def make_poller_bot(synthetic_settings: Settings, tmp_db: Database):
+    def _factory(*, settings: Settings | None = None, db: Database | None = None):
+        eff_settings = settings or synthetic_settings
+        eff_db = db if db is not None else tmp_db
+        bot = FakeClient(settings=eff_settings, db=eff_db)
+        channels: dict[int, FakeTextChannel] = {}
+        for attr in (
+            "job_alerts_channel_id",
+            "ttc_alerts_channel_id",
+            "go_alerts_channel_id",
+            "stock_channel_id",
+        ):
+            cid = int(getattr(eff_settings, attr, 0) or 0)
+            if cid and cid not in channels:
+                channels[cid] = bot.register_channel(FakeTextChannel(channel_id=cid, name=attr))
+        return bot, channels
 
     return _factory
 

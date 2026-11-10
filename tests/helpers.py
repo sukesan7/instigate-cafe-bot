@@ -65,8 +65,102 @@ class RecordedMessage:
     file: Any = None
 
 
+class FakeMessage:
+    """Offline stand-in for discord.Message recording message edits and view state."""
+
+    _next_id = 700_000_000_000_000_000
+
+    def __init__(
+        self,
+        *,
+        content: str | None = None,
+        embed: discord.Embed | None = None,
+        embeds: list[discord.Embed] | None = None,
+        view: Any = None,
+        file: Any = None,
+        client: Any = None,
+        channel: Any = None,
+        author: Any = None,
+    ):
+        type(self)._next_id += 1
+        self.id = type(self)._next_id
+        self.content = content
+        self.embed = embed
+        self.embeds = list(embeds or ([] if embed is None else [embed]))
+        self.view = view
+        self.file = file
+        self.channel = channel
+        self.author = author
+        self.edits: list[RecordedMessage] = []
+        self._state = SimpleNamespace(_get_client=(lambda _c=client: _c))
+
+    async def edit(
+        self,
+        *,
+        content: Any = None,
+        embed: discord.Embed | None = None,
+        embeds: list[discord.Embed] | None = None,
+        view: Any = None,
+        attachments: Any = None,
+    ) -> FakeMessage:
+        if content is not None:
+            self.content = str(content)
+        if embed is not None:
+            self.embed = embed
+            self.embeds = [embed]
+        elif embeds is not None:
+            self.embeds = list(embeds)
+            self.embed = self.embeds[0] if self.embeds else None
+        if view is not None:
+            self.view = view
+        self.edits.append(
+            RecordedMessage(
+                content=self.content,
+                embed=self.embed,
+                embeds=list(self.embeds),
+                view=self.view,
+            )
+        )
+        return self
+
+
+class FakeTextChannel:
+    """Offline stand-in for discord.TextChannel capturing bot poller announcements."""
+
+    def __init__(self, *, channel_id: int, name: str = "test-alerts"):
+        self.id = int(channel_id)
+        self.name = name
+        self.sent: list[RecordedMessage] = []
+
+    async def send(
+        self,
+        content: Any = None,
+        *,
+        embed: discord.Embed | None = None,
+        embeds: list[discord.Embed] | None = None,
+        view: Any = None,
+        file: Any = None,
+    ) -> FakeMessage:
+        rec = RecordedMessage(
+            content=str(content) if content is not None else None,
+            embed=embed,
+            embeds=list(embeds or ([] if embed is None else [embed])),
+            view=view,
+            file=file,
+        )
+        self.sent.append(rec)
+        return FakeMessage(
+            content=rec.content,
+            embed=rec.embed,
+            embeds=rec.embeds,
+            view=rec.view,
+            file=rec.file,
+            channel=self,
+        )
+
+
 class FakeResponse:
-    """Mimics discord.InteractionResponse including defer + single-response guards."""
+    """Mimics discord.InteractionResponse including defer, edit_message, and single-response guards."""
 
     def __init__(self, interaction: FakeInteraction):
         self._interaction = interaction
@@ -75,6 +169,7 @@ class FakeResponse:
         self.thinking = False
         self.ephemeral = False
         self.sent_messages: list[RecordedMessage] = []
+        self.edit_messages: list[RecordedMessage] = []
 
     def is_done(self) -> bool:
         return self._done
@@ -101,16 +196,39 @@ class FakeResponse:
             raise discord.InteractionResponded(self._interaction)  # type: ignore[arg-type]
         self._done = True
         self.ephemeral = ephemeral
-        self.sent_messages.append(
-            RecordedMessage(
-                content=str(content) if content is not None else None,
-                embed=embed,
-                embeds=list(embeds or ([] if embed is None else [embed])),
-                ephemeral=ephemeral,
-                view=view,
-                file=file,
-            )
+        rec = RecordedMessage(
+            content=str(content) if content is not None else None,
+            embed=embed,
+            embeds=list(embeds or ([] if embed is None else [embed])),
+            ephemeral=ephemeral,
+            view=view,
+            file=file,
         )
+        self.sent_messages.append(rec)
+        self._interaction._sync_original_message(rec)
+
+    async def edit_message(
+        self,
+        *,
+        content: Any = None,
+        embed: discord.Embed | None = None,
+        embeds: list[discord.Embed] | None = None,
+        view: Any = None,
+    ) -> None:
+        if self._done:
+            raise discord.InteractionResponded(self._interaction)  # type: ignore[arg-type]
+        self._done = True
+        rec = RecordedMessage(
+            content=str(content) if content is not None else None,
+            embed=embed,
+            embeds=list(embeds or ([] if embed is None else [embed])),
+            view=view,
+        )
+        self.edit_messages.append(rec)
+        if self._interaction.message is not None:
+            await self._interaction.message.edit(content=content, embed=embed, embeds=embeds, view=view)
+        else:
+            self._interaction._sync_original_message(rec)
 
 
 class FakeFollowup:
@@ -130,7 +248,7 @@ class FakeFollowup:
         view: Any = None,
         file: Any = None,
         wait: bool = False,
-    ) -> RecordedMessage:
+    ) -> FakeMessage:
         if not self._response.is_done():
             raise RuntimeError("Interaction followup.send() called before response.defer()/send_message()")
         msg = RecordedMessage(
@@ -142,21 +260,36 @@ class FakeFollowup:
             file=file,
         )
         self.messages.append(msg)
-        return msg
+        self._response._interaction._sync_original_message(msg)
+        return self._response._interaction._original_message
 
 
 class FakeClient:
-    """Minimal bot client exposing `.settings`, `.db`, and `.user` for commands."""
+    """Minimal bot client exposing `.settings`, `.db`, `.user`, and registered offline channels."""
 
     def __init__(self, *, settings: Any, db: Any | None = None):
         self.settings = settings
         self.db = db
         self.user = SimpleNamespace(id=999000000000000001, display_name="InstigatorTest")
         self.guilds: list[Any] = []
+        self._channels: dict[int, Any] = {}
+
+    def register_channel(self, channel: Any) -> Any:
+        self._channels[int(channel.id)] = channel
+        return channel
+
+    def get_channel(self, channel_id: int) -> Any | None:
+        return self._channels.get(int(channel_id))
+
+    async def fetch_channel(self, channel_id: int) -> Any:
+        ch = self._channels.get(int(channel_id))
+        if ch is None:
+            raise LookupError(f"Unknown synthetic channel_id={channel_id}")
+        return ch
 
 
 class FakeInteraction:
-    """Offline replacement for discord.Interaction usable directly with command callbacks."""
+    """Offline replacement for discord.Interaction usable with slash commands and UI Views."""
 
     def __init__(
         self,
@@ -166,18 +299,54 @@ class FakeInteraction:
         guild: Any | None = None,
         channel: Any | None = None,
         command_name: str = "ic test",
+        message: FakeMessage | None = None,
     ):
         self.user = user
         self.client = client
         self.guild = guild if guild is not None else SimpleNamespace(id=client.settings.guild_id, name="Test Guild")
         self.channel = channel if channel is not None else SimpleNamespace(id=client.settings.user_command_channel_id)
+        self.channel_id = getattr(self.channel, "id", None)
         self.command = SimpleNamespace(qualified_name=command_name)
         self.response = FakeResponse(self)
         self.followup = FakeFollowup(self.response)
+        self.message = message
+        self._original_message: FakeMessage | None = message
+
+    def _sync_original_message(self, rec: RecordedMessage) -> None:
+        if self._original_message is None:
+            self._original_message = FakeMessage(
+                content=rec.content,
+                embed=rec.embed,
+                embeds=rec.embeds,
+                view=rec.view,
+                file=rec.file,
+                client=self.client,
+                channel=self.channel,
+                author=self.client.user,
+            )
+        else:
+            self._original_message.content = rec.content
+            self._original_message.embed = rec.embed
+            self._original_message.embeds = list(rec.embeds)
+            self._original_message.view = rec.view
+            self._original_message.file = rec.file
+
+    async def original_response(self) -> FakeMessage:
+        if self._original_message is None:
+            self._original_message = FakeMessage(
+                client=self.client,
+                channel=self.channel,
+                author=self.client.user,
+            )
+        return self._original_message
 
     @property
     def all_replies(self) -> list[RecordedMessage]:
-        return list(self.response.sent_messages) + list(self.followup.messages)
+        return (
+            list(self.response.sent_messages)
+            + list(self.response.edit_messages)
+            + list(self.followup.messages)
+        )
 
     @property
     def last_reply(self) -> RecordedMessage:
@@ -323,12 +492,18 @@ class AiohttpMockRouter:
         prefix: bool = False,
         repeat: bool = True,
         handler: Callable[[RecordedHttpCall], FakeAiohttpResponse] | None = None,
+        exc: BaseException | type[BaseException] | None = None,
     ) -> None:
         method_up = method.upper()
         matcher = self._compile_matcher(pattern, prefix=prefix)
 
         if handler is not None:
             responder = handler
+        elif exc is not None:
+            def responder(call: RecordedHttpCall, _exc=exc) -> FakeAiohttpResponse:
+                if isinstance(_exc, type):
+                    raise _exc()
+                raise _exc
         else:
             if body is not None:
                 raw_bytes = body
