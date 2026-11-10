@@ -13,11 +13,7 @@ import urllib.request
 
 def main() -> None:
     try:
-        html = (
-            urllib.request.urlopen("https://jsprcrz.github.io/Notes/", timeout=10)
-            .read()
-            .decode("utf-8")
-        )
+        html = urllib.request.urlopen("https://jsprcrz.github.io/Notes/", timeout=10).read().decode("utf-8")
         js_match = re.search(r'"(/Notes/assets/index-[a-f0-9]+\.js)"', html)
         if not js_match:
             print("No JS file found.")
@@ -48,4 +44,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
