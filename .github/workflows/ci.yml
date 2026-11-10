@@ -1,0 +1,78 @@
+name: Offline Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Explicit offline safety defaults: no Discord token, no provider keys, no pollers, no deployment.
+env:
+  DISCORD_TOKEN: ""
+  GEMINI_API_KEY: ""
+  GO_API_KEY: ""
+  ODDS_API_KEY: ""
+  ALPHAVANTAGE_API_KEY: ""
+  TTC_MASTODON_ACCT: ""
+  LLM_ENABLED: "false"
+  MARKET_WATCH_ENABLED: "false"
+  MARKET_DAILY_REPORT_ENABLED: "false"
+  BTC_WATCH_ENABLED: "false"
+  JOBS_POLL_SECONDS: "0"
+  WORKDAY_POLL_SECONDS: "0"
+  JOBS_BOOTSTRAP_POST: "false"
+  TTC_BOOTSTRAP_POST_LATEST: "false"
+
+jobs:
+  quality:
+    name: Quality & Offline Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv and Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: Verify lockfile consistency
+        run: uv lock --check
+
+      - name: Install locked development environment
+        run: uv sync --frozen --dev
+
+      - name: Run deterministic secret and publish-safety scan
+        run: uv run python tools/scan_secrets.py --enforce-clean
+
+      - name: Validate and run offline pre-commit hooks
+        run: |
+          uv run pre-commit validate-config .pre-commit-config.yaml
+          uv run pre-commit run --all-files
+
+      - name: Check Ruff lint and formatting (scoped paths)
+        run: |
+          uv run ruff check tests scripts/manual tools/check_syntax.py tools/smoke_offline.py
+          uv run ruff format --check tests scripts/manual tools/check_syntax.py tools/smoke_offline.py
+
+      - name: Run incremental mypy gate on core modules
+        run: make typecheck PYTHON="uv run python" MYPY="uv run mypy"
+
+      - name: Run offline AST and zero-token import smoke check
+        run: uv run python tools/smoke_offline.py
+
+      - name: Run offline pytest suite with branch coverage
+        run: uv run pytest --cov=icbot --cov-report=term-missing -v
