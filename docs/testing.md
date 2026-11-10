@@ -23,6 +23,7 @@ Pytest configuration lives in [`pyproject.toml`](../pyproject.toml):
 | `live_smoke` | Opt-in manual live checks (never collected automatically) | [`scripts/manual/`](../scripts/manual/README.md) | Requires explicit owner consent + `ICBOT_ALLOW_LIVE_SMOKE=1` |
 
 > **Domain Invariant & Defect Matrix:** See [`docs/testing/invariant-matrix.md`](testing/invariant-matrix.md) for the complete catalog of verified invariants, HTTP error-family contracts across all 12 external clients, non-test code-audited risks, and tracked `ISSUE-2B-01` .. `ISSUE-2B-11` strict `xfail` locks.
+> **Tooling & Quality Gate Baseline:** See [`docs/tooling-baseline.md`](tooling-baseline.md) for the canonical `uv` packaging workflow, `Makefile` targets (`make check`), offline `.pre-commit-config.yaml` hooks, `.github/workflows/ci.yml`, and full Ruff/Mypy baseline metrics.
 
 ---
 
