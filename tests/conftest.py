@@ -65,31 +65,25 @@ def _disable_outbound_network(request: pytest.FixtureRequest, monkeypatch: pytes
         return orig_connect_ex(self, address)
 
     def _blocked_create_connection(address: Any, *args: Any, **kwargs: Any):
-        raise OfflineNetworkDisabledError(
-            f"socket.create_connection blocked in offline tests: {address!r}"
-        )
+        raise OfflineNetworkDisabledError(f"socket.create_connection blocked in offline tests: {address!r}")
 
     def _guarded_getaddrinfo(host: Any, port: Any, *args: Any, **kwargs: Any):
         if host in (None, "localhost", "127.0.0.1", "::1"):
             return orig_getaddrinfo(host, port, *args, **kwargs)
-        raise OfflineNetworkDisabledError(
-            f"Outbound DNS resolution blocked in offline tests: host={host!r}"
-        )
+        raise OfflineNetworkDisabledError(f"Outbound DNS resolution blocked in offline tests: host={host!r}")
 
     def _blocked_urlopen(url: Any, *args: Any, **kwargs: Any):
         target = getattr(url, "full_url", url)
-        raise OfflineNetworkDisabledError(
-            f"urllib.request.urlopen blocked in offline tests: {target!r}"
-        )
+        raise OfflineNetworkDisabledError(f"urllib.request.urlopen blocked in offline tests: {target!r}")
 
     def _blocked_http_connect(self: Any):
         host = getattr(self, "host", "unknown")
         port = getattr(self, "port", "?")
-        raise OfflineNetworkDisabledError(
-            f"http.client connection blocked in offline tests: {host}:{port}"
-        )
+        raise OfflineNetworkDisabledError(f"http.client connection blocked in offline tests: {host}:{port}")
 
-    async def _blocked_aiohttp_request(self: aiohttp.ClientSession, method: str, str_or_url: Any, **kwargs: Any):
+    async def _blocked_aiohttp_request(
+        self: aiohttp.ClientSession, method: str, str_or_url: Any, **kwargs: Any
+    ):
         raise OfflineNetworkDisabledError(
             f"Unmocked aiohttp {method} request blocked in offline tests: {str(str_or_url)!r}"
         )

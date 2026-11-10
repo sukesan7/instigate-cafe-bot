@@ -197,7 +197,9 @@ async def test_go_alerts_poller_checkpoint_advance_retention_reset_and_allowlist
     # Cycle 1: bootstrap checkpoint only
     await poll_and_post_go_alerts(bot)
     assert len(go_ch.sent) == 0
-    assert await tmp_db.fetchone("SELECT value FROM meta WHERE key='go_last_servicealert_code'") == ("SA-0001",)
+    assert await tmp_db.fetchone("SELECT value FROM meta WHERE key='go_last_servicealert_code'") == (
+        "SA-0001",
+    )
 
     # Cycle 2: repeat feed posts 0
     await poll_and_post_go_alerts(bot)
@@ -248,7 +250,9 @@ async def test_go_alerts_poller_checkpoint_advance_retention_reset_and_allowlist
     assert len(go_ch.sent) == 1
     assert "Signal failure" in (go_ch.sent[0].embed.description or "")
     # Checkpoint MUST advance past trailing minor SA-0003
-    assert await tmp_db.fetchone("SELECT value FROM meta WHERE key='go_last_servicealert_code'") == ("SA-0003",)
+    assert await tmp_db.fetchone("SELECT value FROM meta WHERE key='go_last_servicealert_code'") == (
+        "SA-0003",
+    )
 
     # Cycle 4: retention loss (SA-0003 missing from feed) re-baselines cleanly to newest without crash
     mock_aiohttp._routes.clear()
@@ -271,7 +275,9 @@ async def test_go_alerts_poller_checkpoint_advance_retention_reset_and_allowlist
     )
     await poll_and_post_go_alerts(bot)
     assert len(go_ch.sent) == 1
-    assert await tmp_db.fetchone("SELECT value FROM meta WHERE key='go_last_servicealert_code'") == ("SA-9000",)
+    assert await tmp_db.fetchone("SELECT value FROM meta WHERE key='go_last_servicealert_code'") == (
+        "SA-9000",
+    )
 
 
 async def test_ttc_poller_idempotency_chronological_order_and_retry_vs_429(
@@ -301,7 +307,9 @@ async def test_ttc_poller_idempotency_chronological_order_and_retry_vs_429(
     mock_aiohttp.get(
         statuses_url,
         prefix=True,
-        json_data=[{"id": "1002", "content": "<p>Normal service resumed.</p>", "url": "https://example.invalid/1002"}],
+        json_data=[
+            {"id": "1002", "content": "<p>Normal service resumed.</p>", "url": "https://example.invalid/1002"}
+        ],
     )
 
     # Cycle 1: resolves account id and checkpoints 1002 without posting
@@ -327,7 +335,11 @@ async def test_ttc_poller_idempotency_chronological_order_and_retry_vs_429(
         prefix=True,
         json_data=[
             {"id": "1004", "content": "<p>Good afternoon riders.</p>", "url": "https://example.invalid/1004"},
-            {"id": "1003", "content": "<p>Line 1: No service due to signal problem.</p>", "url": "https://example.invalid/1003"},
+            {
+                "id": "1003",
+                "content": "<p>Line 1: No service due to signal problem.</p>",
+                "url": "https://example.invalid/1003",
+            },
         ],
     )
     await poll_and_post_ttc(bot)
@@ -361,7 +373,10 @@ async def test_ttc_poller_idempotency_chronological_order_and_retry_vs_429(
         ("cancelled", {"exc": asyncio.CancelledError}),
         ("429_retry_after", {"status": 429, "headers": {"Retry-After": "12"}, "text": '{"error":"quota"}'}),
         ("5xx", {"status": 503, "text": "Service Unavailable"}),
-        ("malformed_json", {"status": 200, "body": b"{broken-json", "headers": {"Content-Type": "application/json"}}),
+        (
+            "malformed_json",
+            {"status": 200, "body": b"{broken-json", "headers": {"Content-Type": "application/json"}},
+        ),
         ("empty_or_missing", {"status": 200, "json_data": {"candidates": [{"finishReason": "SAFETY"}]}}),
     ],
 )
@@ -430,7 +445,9 @@ async def test_ttc_client_error_family_matrix(mock_aiohttp, mode: str, route_kwa
 
     # Also verify resolve_account_id 429 + missing accounts
     mock_aiohttp._routes.clear()
-    mock_aiohttp.get(f"{base}/api/v2/search", prefix=True, status=429, headers={"Retry-After": "5"}, text="429")
+    mock_aiohttp.get(
+        f"{base}/api/v2/search", prefix=True, status=429, headers={"Retry-After": "5"}, text="429"
+    )
     async with aiohttp.ClientSession() as session:
         with pytest.raises(TTCFetchError):
             await resolve_account_id(session, base, "TTCnotices")
@@ -516,10 +533,18 @@ async def test_workday_client_error_family_matrix(
     [
         ("timeout", {"exc": asyncio.TimeoutError}, asyncio.TimeoutError),
         ("cancelled", {"exc": asyncio.CancelledError}, asyncio.CancelledError),
-        ("429_retry_after", {"status": 429, "headers": {"Retry-After": "60"}, "text": "Too Many"}, RuntimeError),
+        (
+            "429_retry_after",
+            {"status": 429, "headers": {"Retry-After": "60"}, "text": "Too Many"},
+            RuntimeError,
+        ),
         ("5xx", {"status": 503, "text": "Upstream down"}, RuntimeError),
         ("malformed_json", {"status": 200, "text": "not-json"}, json.JSONDecodeError),
-        ("empty_or_missing", {"status": 200, "json_data": {"quoteResponse": {"result": [{"symbol": ""}]}}}, None),
+        (
+            "empty_or_missing",
+            {"status": 200, "json_data": {"quoteResponse": {"result": [{"symbol": ""}]}}},
+            None,
+        ),
     ],
 )
 async def test_yahoo_quotes_error_family_matrix(mock_aiohttp, mode: str, quote_kwargs: dict, expected_exc):
@@ -570,7 +595,11 @@ async def test_esplora_and_fng_error_family_matrix(mock_aiohttp, mode: str, rout
         ("429_retry_after", {"status": 429, "headers": {"Retry-After": "20"}, "text": "quota"}, OddsAPIError),
         ("5xx", {"status": 502, "text": "bad gateway"}, OddsAPIError),
         ("malformed_json", {"status": 200, "text": "{bad"}, json.JSONDecodeError),
-        ("empty_or_missing", {"status": 200, "json_data": [{"id": "1", "commence_time": "invalid-dt"}]}, None),
+        (
+            "empty_or_missing",
+            {"status": 200, "json_data": [{"id": "1", "commence_time": "invalid-dt"}]},
+            None,
+        ),
     ],
 )
 async def test_odds_api_client_error_family_and_cache(
@@ -638,10 +667,18 @@ async def test_notes_and_prof_error_resilience_and_cancellation(mock_aiohttp, mo
     [
         ("timeout", {"exc": asyncio.TimeoutError}, asyncio.TimeoutError),
         ("cancelled", {"exc": asyncio.CancelledError}, asyncio.CancelledError),
-        ("429_retry_after", {"status": 429, "headers": {"Retry-After": "5"}, "text": "slow"}, aiohttp.ClientResponseError),
+        (
+            "429_retry_after",
+            {"status": 429, "headers": {"Retry-After": "5"}, "text": "slow"},
+            aiohttp.ClientResponseError,
+        ),
         ("5xx", {"status": 500, "text": "err"}, aiohttp.ClientResponseError),
         ("empty_or_missing", {"status": 200, "text": "<html><body>No title heading</body></html>"}, None),
-        ("malformed_dist_json", {"status": 200, "text": '<html><h2>CPS109</h2><script>"distribution":[{bad]</script></html>'}, None),
+        (
+            "malformed_dist_json",
+            {"status": 200, "text": '<html><h2>CPS109</h2><script>"distribution":[{bad]</script></html>'},
+            None,
+        ),
     ],
 )
 async def test_grades_client_error_family_and_init_idempotency(

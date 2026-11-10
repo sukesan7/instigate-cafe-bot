@@ -241,7 +241,15 @@ class TestPrivacyModel(unittest.TestCase):
         cur.execute(
             "INSERT INTO exams (course_code, course_name, start_ts, location, notes, created_by, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("COE817", "Applied Cryptography", 1715000000, "ENG101", "Formula sheet allowed", self.user_a, 1700000000),
+            (
+                "COE817",
+                "Applied Cryptography",
+                1715000000,
+                "ENG101",
+                "Formula sheet allowed",
+                self.user_a,
+                1700000000,
+            ),
         )
 
         cur.execute(
@@ -317,4 +325,3 @@ class TestPrivacyModel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

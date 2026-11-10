@@ -303,8 +303,12 @@ class FakeInteraction:
     ):
         self.user = user
         self.client = client
-        self.guild = guild if guild is not None else SimpleNamespace(id=client.settings.guild_id, name="Test Guild")
-        self.channel = channel if channel is not None else SimpleNamespace(id=client.settings.user_command_channel_id)
+        self.guild = (
+            guild if guild is not None else SimpleNamespace(id=client.settings.guild_id, name="Test Guild")
+        )
+        self.channel = (
+            channel if channel is not None else SimpleNamespace(id=client.settings.user_command_channel_id)
+        )
         self.channel_id = getattr(self.channel, "id", None)
         self.command = SimpleNamespace(qualified_name=command_name)
         self.response = FakeResponse(self)
@@ -500,6 +504,7 @@ class AiohttpMockRouter:
         if handler is not None:
             responder = handler
         elif exc is not None:
+
             def responder(call: RecordedHttpCall, _exc=exc) -> FakeAiohttpResponse:
                 if isinstance(_exc, type):
                     raise _exc()
@@ -517,7 +522,9 @@ class AiohttpMockRouter:
 
             merged_headers = {**default_headers, **(headers or {})}
 
-            def responder(call: RecordedHttpCall, _s=status, _b=raw_bytes, _h=merged_headers) -> FakeAiohttpResponse:
+            def responder(
+                call: RecordedHttpCall, _s=status, _b=raw_bytes, _h=merged_headers
+            ) -> FakeAiohttpResponse:
                 return FakeAiohttpResponse(
                     url=call.url,
                     method=call.method,
@@ -526,9 +533,7 @@ class AiohttpMockRouter:
                     headers=_h,
                 )
 
-        self._routes.append(
-            _MockRoute(method=method_up, matcher=matcher, responder=responder, repeat=repeat)
-        )
+        self._routes.append(_MockRoute(method=method_up, matcher=matcher, responder=responder, repeat=repeat))
 
     def get(self, pattern: str | re.Pattern[str] | Callable[[str], bool], **kwargs: Any) -> None:
         self.add_route("GET", pattern, **kwargs)

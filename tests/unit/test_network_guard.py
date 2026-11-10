@@ -37,4 +37,3 @@ async def test_unmocked_aiohttp_request_is_blocked():
         with pytest.raises(OfflineNetworkDisabledError):
             async with session.get("https://example.invalid/unmocked"):
                 pass
-

@@ -178,5 +178,3 @@ def test_embed_enforces_discord_6000_total_char_limit(synthetic_settings: Settin
         fields=[(f"Name {i} " + "n" * 100, "v" * 900, False) for i in range(6)],
     )
     assert len(emb) <= 6000
-
-

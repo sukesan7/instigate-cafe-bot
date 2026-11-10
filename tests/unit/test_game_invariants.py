@@ -60,7 +60,7 @@ def test_blackjack_hand_totals_and_classifications(
 @pytest.mark.parametrize(
     ("ranks", "expected_total"),
     [
-        (["A", "6", "10"], 17),       # Hard 17 (values=[17, 27]) -> dealer must stand even under H17
+        (["A", "6", "10"], 17),  # Hard 17 (values=[17, 27]) -> dealer must stand even under H17
         (["A", "6", "10", "4"], 21),  # Hard 21 (values=[21, 31])
     ],
 )

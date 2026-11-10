@@ -17,9 +17,7 @@ pytestmark = pytest.mark.storage
 
 
 async def test_database_schema_creation_and_idempotent_init(tmp_db: Database):
-    rows = await tmp_db.fetchall(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    )
+    rows = await tmp_db.fetchall("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     tables = {r[0] for r in rows}
     expected = {
         "meta",
@@ -48,7 +46,9 @@ async def test_database_schema_creation_and_idempotent_init(tmp_db: Database):
 
 async def test_user_store_balances_and_daily_claim_cooldown(user_store: UserStore, frozen_time):
     uid = 800000000000000010
-    profile = await user_store.ensure_user(uid, display_name="TestStudent", avatar_url="https://example.invalid/a.png")
+    profile = await user_store.ensure_user(
+        uid, display_name="TestStudent", avatar_url="https://example.invalid/a.png"
+    )
     assert profile.balance == 1000
     assert profile.created_at == frozen_time.unix
 
@@ -107,7 +107,9 @@ async def test_fun_market_long_short_admin_and_leaderboard(
     assert moved.price == 125
     legacy_meta = await tmp_db.fetchone("SELECT value FROM meta WHERE key='stock_value'")
     assert legacy_meta == ("125",)
-    legacy_event = await tmp_db.fetchone("SELECT delta, new_value, reason FROM stock_events ORDER BY id DESC LIMIT 1")
+    legacy_event = await tmp_db.fetchone(
+        "SELECT delta, new_value, reason FROM stock_events ORDER BY id DESC LIMIT 1"
+    )
     assert legacy_event == (25, 125, "Midterm hype")
 
     # Portfolio unrealized PnL (+25 * 4 = +100, equity = 4*125 = 500, net worth = 600 + 500 = 1100)
@@ -155,4 +157,3 @@ async def test_fun_market_long_short_admin_and_leaderboard(
     # Overselling raises FunMarketError cleanly without partial mutation
     with pytest.raises(FunMarketError):
         await fun_market_store.sell_long(user_id=alice_id, symbol="IC", qty=99)
-

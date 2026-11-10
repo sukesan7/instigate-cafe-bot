@@ -43,10 +43,10 @@ class _FixedShoe:
     ("bet", "bet_type", "number", "spun_num", "expected_balance"),
     [
         (20, "straight", "00", -1, 1700),  # +700 net
-        (100, "red", None, 1, 1100),       # +100 net
-        (100, "red", None, 0, 900),        # green zero loses outside bet
-        (50, "dozen2", None, 14, 1100),    # +100 net
-        (50, "col3", None, 35, 950),       # 35 % 3 == 2 loses col3
+        (100, "red", None, 1, 1100),  # +100 net
+        (100, "red", None, 0, 900),  # green zero loses outside bet
+        (50, "dozen2", None, 14, 1100),  # +100 net
+        (50, "col3", None, 35, 950),  # 35 % 3 == 2 loses col3
     ],
 )
 async def test_roulette_command_settles_db_balance_accurately(
@@ -127,7 +127,9 @@ async def test_slots_command_settles_db_balance_and_payouts_table(
         await slots_cmd.callback(inter, bet=bet)
 
     assert expected_title in (inter.last_reply.embed.title or "")
-    assert await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (member.id,)) == (expected_balance,)
+    assert await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (member.id,)) == (
+        expected_balance,
+    )
 
     # Payouts help command returns ephemeral table without mutating balance
     pay_inter = make_interaction(user=member, command_name="ic casino payouts")
@@ -156,7 +158,9 @@ async def test_blackjack_natural_deal_win_bust_double_split_and_forfeit(
     assert isinstance(start_inter.last_reply.view, BlackjackTerminalView)
     assert _sessions.get(start_inter.guild.id, p1.id) is None
     assert await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (p1.id,)) == (1150,)
-    assert await tmp_db.fetchone("SELECT wins, hands_played FROM blackjack_users WHERE user_id=?", (p1.id,)) == (1, 1)
+    assert await tmp_db.fetchone(
+        "SELECT wins, hands_played FROM blackjack_users WHERE user_id=?", (p1.id,)
+    ) == (1, 1)
 
     # 2. Live Hit -> Stand win flow via BlackjackView buttons
     p2 = make_member(user_id=800000000000000211, display_name="BJPlayer")

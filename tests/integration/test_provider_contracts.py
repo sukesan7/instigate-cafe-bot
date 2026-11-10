@@ -249,9 +249,12 @@ async def test_yahoo_quotes_crumb_and_session_contract(mock_aiohttp):
     # If Yahoo responds 401/403 on quotes, crumb cache resets safely
     yq._CRUMB = "stale-crumb"
     mock_aiohttp._routes.clear()
-    mock_aiohttp.get("https://query2.finance.yahoo.com/v7/finance/quote", prefix=True, status=401, text="Unauthorized")
-    mock_aiohttp.get("https://query1.finance.yahoo.com/v7/finance/quote", prefix=True, status=401, text="Unauthorized")
+    mock_aiohttp.get(
+        "https://query2.finance.yahoo.com/v7/finance/quote", prefix=True, status=401, text="Unauthorized"
+    )
+    mock_aiohttp.get(
+        "https://query1.finance.yahoo.com/v7/finance/quote", prefix=True, status=401, text="Unauthorized"
+    )
     with pytest.raises(RuntimeError, match="Yahoo quote fetch failed"):
         await fetch_quotes(["SPY"])
     assert yq._CRUMB is None
-

@@ -94,4 +94,3 @@ def test_env_example_has_empty_secrets_and_disabled_pollers():
     assert kv["LLM_ENABLED"] == "false"
     assert kv["MARKET_WATCH_ENABLED"] == "false"
     assert kv["BTC_WATCH_ENABLED"] == "false"
-

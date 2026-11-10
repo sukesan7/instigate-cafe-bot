@@ -53,9 +53,7 @@ async def test_daily_and_profile_commands_offline(make_interaction, make_member,
     assert "$1,200" in inter3.response.sent_messages[0].embed.description
 
 
-async def test_notes_command_fetches_spa_then_uses_cache(
-    make_interaction, mock_aiohttp, frozen_time
-):
+async def test_notes_command_fetches_spa_then_uses_cache(make_interaction, mock_aiohttp, frozen_time):
     mock_aiohttp.get(
         "https://example.invalid/Notes/",
         text=load_fixture_text("notes_spa_index.html"),
@@ -136,4 +134,3 @@ async def test_exam_commands_rbac_add_list_and_remove(make_interaction, make_mem
     rm_inter = make_interaction(user=admin_user, command_name="ic exam remove")
     await exams_remove_cmd.callback(rm_inter, exam_id=1)
     assert "Removed exam ID 1." in rm_inter.last_reply.content
-
