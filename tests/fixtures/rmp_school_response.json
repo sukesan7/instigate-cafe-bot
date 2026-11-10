@@ -1,0 +1,17 @@
+{
+  "data": {
+    "newSearch": {
+      "schools": {
+        "edges": [
+          {
+            "node": {
+              "id": "U2Nob29sLTEyMzQ=",
+              "name": "Toronto Metropolitan University"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+

@@ -1,0 +1,16 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "text": "Synthetic model response for unit verification."
+          }
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ]
+}
+

@@ -1,0 +1,18 @@
+{
+  "total": 2,
+  "jobPostings": [
+    {
+      "title": "Software Engineering Co-op",
+      "externalPath": "/job/Toronto-ON/Software-Engineering-Co-op_R1001",
+      "locationsText": "Toronto, ON",
+      "jobPostingId": "R1001"
+    },
+    {
+      "title": "Firmware Engineer Intern",
+      "externalPath": "/en-US/AcmeCareers/job/Ottawa-ON/Firmware-Engineer-Intern_R1002",
+      "locationsText": "Ottawa, ON",
+      "jobPostingId": "R1002"
+    }
+  ]
+}
+

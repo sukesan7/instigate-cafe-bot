@@ -1,0 +1,29 @@
+[
+  {
+    "id": "lever-job-1001",
+    "text": "Embedded Systems Co-op",
+    "hostedUrl": "https://jobs.lever.co/examplesite/lever-job-1001",
+    "categories": {
+      "location": "Waterloo, ON",
+      "team": "Firmware",
+      "department": "Hardware Engineering",
+      "commitment": "Internship"
+    },
+    "createdAt": 1760530200000,
+    "descriptionPlain": "Synthetic embedded co-op posting."
+  },
+  {
+    "id": "lever-job-1002",
+    "text": "Senior Staff Counsel",
+    "hostedUrl": "https://jobs.lever.co/examplesite/lever-job-1002",
+    "categories": {
+      "location": "Remote",
+      "team": "Legal",
+      "department": "Operations",
+      "commitment": "Full-time"
+    },
+    "createdAt": 1760440000000,
+    "descriptionPlain": "Synthetic legal role."
+  }
+]
+

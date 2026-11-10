@@ -1,0 +1,49 @@
+{
+  "data": {
+    "newSearch": {
+      "teachers": {
+        "edges": [
+          {
+            "node": {
+              "id": "VGVhY2hlci0xMDAx",
+              "firstName": "Ada",
+              "lastName": "Lovelace",
+              "avgRating": 4.8,
+              "numRatings": 42,
+              "wouldTakeAgainPercent": 92.4,
+              "avgDifficulty": 2.9,
+              "department": "Electrical & Computer Engineering",
+              "teacherRatingTags": [
+                {
+                  "tagName": "CARING",
+                  "tagCount": 14
+                },
+                {
+                  "tagName": "CLEAR GRADING CRITERIA",
+                  "tagCount": 21
+                },
+                {
+                  "tagName": "RESPECTED",
+                  "tagCount": 9
+                }
+              ],
+              "ratings": {
+                "edges": [
+                  {
+                    "node": {
+                      "class": "ELE888",
+                      "helpfulRating": 5,
+                      "difficultyRating": 3,
+                      "comment": "Clear lectures and helpful office hours."
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+

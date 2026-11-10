@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ELE888 - Synthetic Course Grades</title>
+  </head>
+  <body>
+    <main>
+      <h2>ELE888 - Intelligent Systems</h2>
+
+      <div class="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start">
+        <div class="font-bold">All Professors</div>
+        <p>2020-2025</p>
+        <span data-slot="badge">Avg: B</span>
+        <span data-slot="badge">Common: B+</span>
+        <span class="bg-accent">100 student</span>
+      </div>
+
+      <div class="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start">
+        <div class="font-bold">Prof. Ada Lovelace</div>
+        <p>Fall 2025</p>
+        <span data-slot="badge">Avg: B+</span>
+        <span data-slot="badge">Common: A-</span>
+        <span class="bg-accent">45 student</span>
+      </div>
+
+      <script>
+        window.__COURSE_DATA__ = {
+          "aggregate": {
+            "distribution":[{"letterGrade":"C","count":30},{"letterGrade":"B","count":40},{"letterGrade":"A","count":30}]
+          },
+          "prof": {
+            "distribution":[{"letterGrade":"B","count":15},{"letterGrade":"A-","count":20},{"letterGrade":"A+","count":10}]
+          }
+        };
+      </script>
+    </main>
+  </body>
+</html>
+

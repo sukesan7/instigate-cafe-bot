@@ -1,0 +1,36 @@
+{
+  "quoteResponse": {
+    "result": [
+      {
+        "symbol": "SPY",
+        "marketState": "PRE",
+        "regularMarketPreviousClose": 500.0,
+        "regularMarketPrice": 500.0,
+        "regularMarketChange": 0.0,
+        "regularMarketChangePercent": 0.0,
+        "preMarketPrice": 505.0,
+        "preMarketChange": 5.0,
+        "preMarketChangePercent": 1.0
+      },
+      {
+        "symbol": "QQQ",
+        "marketState": "POST",
+        "regularMarketPreviousClose": 420.0,
+        "regularMarketPrice": 425.0,
+        "regularMarketChange": 5.0,
+        "regularMarketChangePercent": 1.190476,
+        "postMarketPrice": 430.0,
+        "postMarketChange": 5.0
+      },
+      {
+        "symbol": "^VIX",
+        "marketState": "REGULAR",
+        "regularMarketPreviousClose": 18.0,
+        "regularMarketPrice": 21.6,
+        "regularMarketChange": 3.6
+      }
+    ],
+    "error": null
+  }
+}
+

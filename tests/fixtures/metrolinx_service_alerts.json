@@ -1,0 +1,36 @@
+{
+  "Metadata": {
+    "TimeStamp": "2026-11-01 08:30:00",
+    "ErrorCode": "200",
+    "ErrorMessage": "OK"
+  },
+  "Messages": {
+    "Message": [
+      {
+        "Code": "SA-0001",
+        "Status": "INIT",
+        "PostedDateTime": "2026-11-01 08:30:00",
+        "SubjectEnglish": "Synthetic signal delay on Lakeshore West",
+        "BodyEnglish": "Expect 10 minute delays between Oakville and Union.",
+        "Category": "Service Alert",
+        "SubCategory": "Signal",
+        "Lines": [
+          {
+            "Code": "LW"
+          }
+        ],
+        "Stops": [
+          {
+            "Name": "Union Station"
+          }
+        ],
+        "Trips": [
+          {
+            "TripNumber": "101"
+          }
+        ]
+      }
+    ]
+  }
+}
+
