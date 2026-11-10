@@ -243,5 +243,5 @@ The following command contracts are specified for implementation in future phase
 ### 8.2 `/ic privacy delete`
 - **Scope:** Prompts user with a confirmation modal explaining the irreversible deletion of their profile, economy balance, and casino stats, plus the anonymization of trade history.
 - **Action:** Executes the two-tier atomic transaction specified in Section 5.2.
-- **Verification:** Verified offline in [`tests/test_privacy_model.py`](file:///home/sukesan/dev/discord/campus-bot/tests/test_privacy_model.py).
+- **Verification:** Verified offline in [`tests/unit/test_privacy_model.py`](file:///home/sukesan/dev/discord/campus-bot/tests/unit/test_privacy_model.py).
 
