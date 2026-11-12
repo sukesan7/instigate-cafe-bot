@@ -9,7 +9,7 @@ from typing import Any
 
 import aiohttp
 
-from icbot.errors import ProviderError, redact_secrets
+from icbot.errors import ProviderError, parse_retry_after, redact_secrets
 
 log = logging.getLogger(__name__)
 
@@ -100,7 +100,12 @@ class OddsAPIClient:
                 text = await resp.text()
                 if resp.status >= 400:
                     safe_text = redact_secrets(text[:400], (self.api_key,))
-                    raise OddsAPIError(f"Odds API error {resp.status}: {safe_text}")
+                    retry_after = parse_retry_after(resp.headers.get("Retry-After"))
+                    raise OddsAPIError(
+                        f"Odds API error {resp.status}: {safe_text}",
+                        status=resp.status,
+                        retry_after=retry_after,
+                    )
 
                 data = await resp.json()
         finally:

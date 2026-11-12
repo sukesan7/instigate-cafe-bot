@@ -9,6 +9,7 @@ import pytest
 
 from icbot.config import (
     MAX_SNOWFLAKE,
+    POLL_INTERVAL_BOUNDS,
     AcademicsConfig,
     CapabilityStatus,
     CareersConfig,
@@ -16,6 +17,7 @@ from icbot.config import (
     EconomyConfig,
     FinancialAlertsConfig,
     GeminiConfig,
+    SchedulerConfig,
     Settings,
     SportsConfig,
     StorageConfig,
@@ -151,6 +153,10 @@ def test_from_components_round_trips_all_nine_subconfigs():
         sports_rss_ufc="https://example.invalid/ufc.rss",
         sports_rss_boxing="https://example.invalid/boxing.rss",
     )
+    scheduler_cfg = SchedulerConfig(
+        task_startup_jitter_seconds=7.5,
+        task_max_backoff_seconds=900.0,
+    )
 
     settings = Settings.from_components(
         discord=discord_cfg,
@@ -162,6 +168,7 @@ def test_from_components_round_trips_all_nine_subconfigs():
         transit=transit_cfg,
         financial=financial_cfg,
         sports=sports_cfg,
+        scheduler=scheduler_cfg,
     )
 
     assert settings.discord == discord_cfg
@@ -173,6 +180,7 @@ def test_from_components_round_trips_all_nine_subconfigs():
     assert settings.transit == transit_cfg
     assert settings.financial == financial_cfg
     assert settings.sports == sports_cfg
+    assert settings.scheduler == scheduler_cfg
     assert settings.sports_rss_urls("NBA") == ["https://example.invalid/nba.rss"]
     assert settings.effective_workday_poll_seconds == 450
 
@@ -215,6 +223,17 @@ def test_load_validated_accepts_empty_dev_environment():
         ({"MARKET_DAILY_REPORT_TIME": "25:99"}, "market_daily_report_time"),
         ({"MARKET_DAILY_REPORT_TIME": "1630"}, "market_daily_report_time"),
         ({"JOBS_POLL_SECONDS": "-5"}, "jobs_poll_seconds"),
+        ({"JOBS_POLL_SECONDS": "30"}, "jobs_poll_seconds"),
+        ({"WORKDAY_POLL_SECONDS": "30"}, "workday_poll_seconds"),
+        ({"TTC_POLL_SECONDS": "29"}, "ttc_poll_seconds"),
+        ({"TTC_POLL_SECONDS": "86401"}, "ttc_poll_seconds"),
+        ({"GO_POLL_SECONDS": "59"}, "go_poll_seconds"),
+        ({"MARKET_WATCH_POLL_SECONDS": "9"}, "market_watch_poll_seconds"),
+        ({"BTC_WATCH_POLL_SECONDS": "29"}, "btc_watch_poll_seconds"),
+        ({"TASK_STARTUP_JITTER_SECONDS": "-1"}, "task_startup_jitter_seconds"),
+        ({"TASK_STARTUP_JITTER_SECONDS": "301"}, "task_startup_jitter_seconds"),
+        ({"TASK_MAX_BACKOFF_SECONDS": "29"}, "task_max_backoff_seconds"),
+        ({"TASK_MAX_BACKOFF_SECONDS": "86401"}, "task_max_backoff_seconds"),
         ({"WORKDAY_TIMEOUT_SECONDS": "0"}, "workday_timeout_seconds"),
         ({"LLM_COOLDOWN_SECONDS": "-1"}, "llm_cooldown_seconds"),
         ({"LLM_MAX_MESSAGES": "0"}, "llm_max_messages"),
@@ -371,3 +390,25 @@ def test_capabilities_report_degradation_and_warnings_without_leaking_secrets():
     assert token not in rendered
     assert gemini_key not in rendered
     assert "synth-odds-key-111" not in rendered
+
+
+def test_poll_interval_bounds_and_scheduler_zero_opt_out():
+    zero_ok = Settings.from_env(
+        strict=True,
+        environ={
+            "JOBS_POLL_SECONDS": "0",
+            "WORKDAY_POLL_SECONDS": "0",
+            "TASK_STARTUP_JITTER_SECONDS": "0",
+            "TASK_MAX_BACKOFF_SECONDS": "120",
+        },
+    )
+    assert zero_ok.jobs_poll_seconds == 0
+    assert zero_ok.workday_poll_seconds == 0
+    assert zero_ok.task_startup_jitter_seconds == 0.0
+    assert zero_ok.task_max_backoff_seconds == 120.0
+
+    assert POLL_INTERVAL_BOUNDS["jobs_poll_seconds"].clamp(0) == 0
+    assert POLL_INTERVAL_BOUNDS["jobs_poll_seconds"].clamp(10) == 60
+    assert POLL_INTERVAL_BOUNDS["workday_poll_seconds"].clamp(0, inherited=300) == 300
+    assert POLL_INTERVAL_BOUNDS["ttc_poll_seconds"].clamp(5) == 30
+    assert POLL_INTERVAL_BOUNDS["ttc_poll_seconds"].clamp(200000) == 86400

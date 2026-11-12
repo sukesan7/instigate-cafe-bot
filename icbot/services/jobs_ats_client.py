@@ -10,7 +10,7 @@ from typing import Any
 
 import aiohttp
 
-from icbot.errors import ProviderError, redact_secrets
+from icbot.errors import ProviderError, parse_retry_after, redact_secrets
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +76,12 @@ async def fetch_greenhouse_jobs(
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout_seconds)) as r:
             if r.status != 200:
                 text = await r.text()
-                raise ProviderError(f"Greenhouse HTTP {r.status}: {redact_secrets(text[:200])}")
+                retry_after = parse_retry_after(r.headers.get("Retry-After"))
+                raise ProviderError(
+                    f"Greenhouse HTTP {r.status}: {redact_secrets(text[:200])}",
+                    status=r.status,
+                    retry_after=retry_after,
+                )
             data = await r.json()
     except ProviderError:
         raise
@@ -149,7 +154,12 @@ async def fetch_lever_jobs(
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout_seconds)) as r:
             if r.status != 200:
                 text = await r.text()
-                raise ProviderError(f"Lever HTTP {r.status}: {redact_secrets(text[:200])}")
+                retry_after = parse_retry_after(r.headers.get("Retry-After"))
+                raise ProviderError(
+                    f"Lever HTTP {r.status}: {redact_secrets(text[:200])}",
+                    status=r.status,
+                    retry_after=retry_after,
+                )
             data = await r.json()
     except ProviderError:
         raise

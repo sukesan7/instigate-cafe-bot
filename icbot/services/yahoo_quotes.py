@@ -9,7 +9,7 @@ from typing import Any
 
 import aiohttp
 
-from icbot.errors import ProviderError, redact_secrets
+from icbot.errors import ProviderError, parse_retry_after, redact_secrets
 
 """Yahoo Finance quote fetcher.
 
@@ -164,7 +164,12 @@ async def _refresh_crumb(session: aiohttp.ClientSession, debug: bool) -> str:
         if r.status != 200:
             txt = await r.text(errors="ignore")
             safe_txt = redact_secrets(txt[:200])
-            raise ProviderError(f"crumb fetch failed: status={r.status} body={safe_txt!r}")
+            retry_after = parse_retry_after(r.headers.get("Retry-After"))
+            raise ProviderError(
+                f"crumb fetch failed: status={r.status} body={safe_txt!r}",
+                status=r.status,
+                retry_after=retry_after,
+            )
         crumb = (await r.text(errors="ignore")).strip()
         if not crumb or "unauthorized" in crumb.lower():
             raise ProviderError(f"crumb invalid: {redact_secrets(crumb[:80])!r}")
@@ -273,6 +278,7 @@ async def _fetch_quotes_chunk(
 
     last_status = 0
     last_body = ""
+    last_retry_after: float | None = None
 
     for url in YF_QUOTE_ENDPOINTS:
         async with active_session.get(url, params=params, headers=headers) as r:
@@ -283,6 +289,7 @@ async def _fetch_quotes_chunk(
                     print(f"[YF] quote ok via {url} (crumb)")
                 return _quotes_from_payload(data)
 
+            last_retry_after = parse_retry_after(r.headers.get("Retry-After")) or last_retry_after
             txt = await r.text(errors="ignore")
             last_body = redact_secrets(txt[:200])
             if debug:
@@ -297,7 +304,11 @@ async def _fetch_quotes_chunk(
                     _CRUMB = None
                     _CRUMB_EXP_TS = 0.0
 
-    raise ProviderError(f"Yahoo quote fetch failed (last_status={last_status}, body={last_body!r})")
+    raise ProviderError(
+        f"Yahoo quote fetch failed (last_status={last_status}, body={last_body!r})",
+        status=last_status or None,
+        retry_after=last_retry_after,
+    )
 
 
 async def fetch_quotes(
@@ -332,6 +343,7 @@ async def fetch_quotes(
         )
 
     out: dict[str, Quote] = {}
+    last_err: Exception | None = None
     for i in range(0, len(uniq), MAX_SYMBOLS_PER_REQUEST):
         chunk = uniq[i : i + MAX_SYMBOLS_PER_REQUEST]
         try:
@@ -350,10 +362,13 @@ async def fetch_quotes(
             TypeError,
             ValueError,
         ) as e:
+            last_err = e
             # Best-effort: keep the rest of the chunks; caller can decide if partial is ok.
             if debug:
                 print(
                     f"[YF] chunk fetch failed: {redact_secrets(repr(e))} chunk={chunk[:5]}...(+{max(0, len(chunk) - 5)})"
                 )
             continue
+    if not out and last_err is not None:
+        raise last_err
     return out

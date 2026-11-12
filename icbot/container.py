@@ -9,7 +9,9 @@ clients that do not subclass ``CampusBot``.
 from __future__ import annotations
 
 import contextlib
+import random
 import sqlite3
+import ssl
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -100,6 +102,28 @@ _FALLBACK_NOTES_CACHE = NotesCache()
 _FALLBACK_RSS_CACHE = RssCache()
 
 
+def _build_go_connector(settings: Settings) -> aiohttp.TCPConnector:
+    """Build a scoped ``TCPConnector`` only when custom GO TLS settings are active."""
+    verify = bool(getattr(settings, "go_ssl_verify", True))
+    if not verify:
+        return aiohttp.TCPConnector(ssl=False)
+
+    cafile = str(getattr(settings, "go_ca_bundle_path", "") or "").strip()
+    try:
+        if cafile:
+            ssl_ctx = ssl.create_default_context(cafile=cafile)
+        else:
+            try:
+                import certifi  # type: ignore[import-untyped]
+
+                ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            except (ImportError, OSError, ssl.SSLError, ValueError):
+                ssl_ctx = ssl.create_default_context()
+    except (OSError, ssl.SSLError, ValueError):
+        ssl_ctx = ssl.create_default_context()
+    return aiohttp.TCPConnector(ssl=ssl_ctx)
+
+
 class ServiceContainer:
     """Process-scoped dependency container attached cleanly to ``CampusBot.services``."""
 
@@ -110,8 +134,12 @@ class ServiceContainer:
         db: Database | None = None,
         clock: Callable[[], float] | None = None,
         monotonic_clock: Callable[[], float] | None = None,
+        sleep_fn: Callable[[float], Awaitable[None]] | None = None,
+        jitter_rng: random.Random | None = None,
         http_session: aiohttp.ClientSession | None = None,
         owns_http_session: bool | None = None,
+        go_http_session: aiohttp.ClientSession | None = None,
+        owns_go_http_session: bool | None = None,
         notes_cache: NotesCache | None = None,
         rss_cache: RssCache | None = None,
         yahoo_crumb: YahooCrumbCache | None = None,
@@ -134,12 +162,20 @@ class ServiceContainer:
         self.monotonic_clock: Callable[[], float] = (
             monotonic_clock if monotonic_clock is not None else _default_monotonic
         )
+        self.sleep_fn: Callable[[float], Awaitable[None]] | None = sleep_fn
+        self.jitter_rng: random.Random | None = jitter_rng
 
         self.http_session: aiohttp.ClientSession | None = http_session
         if owns_http_session is None:
             self.owns_http_session = http_session is None
         else:
             self.owns_http_session = bool(owns_http_session)
+
+        self.go_http_session: aiohttp.ClientSession | None = go_http_session
+        if owns_go_http_session is None:
+            self.owns_go_http_session = go_http_session is None
+        else:
+            self.owns_go_http_session = bool(owns_go_http_session)
 
         self.guild_settings: GuildSettingsStore | None = (
             GuildSettingsStore(db, clock=self.clock) if db is not None else None
@@ -171,7 +207,10 @@ class ServiceContainer:
         db: Database | None = None,
         clock: Callable[[], float] | None = None,
         monotonic_clock: Callable[[], float] | None = None,
+        sleep_fn: Callable[[float], Awaitable[None]] | None = None,
+        jitter_rng: random.Random | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        go_http_session: aiohttp.ClientSession | None = None,
         gemini_generate_fn: Callable[..., Awaitable[str]] | None = None,
         fetch_quotes_fn: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         fetch_fear_greed_fn: Callable[..., Awaitable[Any]] | None = None,
@@ -185,8 +224,12 @@ class ServiceContainer:
             db=eff_db,
             clock=clock,
             monotonic_clock=monotonic_clock,
+            sleep_fn=sleep_fn,
+            jitter_rng=jitter_rng,
             http_session=http_session,
             owns_http_session=http_session is None,
+            go_http_session=go_http_session,
+            owns_go_http_session=go_http_session is None,
             gemini_generate_fn=gemini_generate_fn,
             fetch_quotes_fn=fetch_quotes_fn,
             fetch_fear_greed_fn=fetch_fear_greed_fn,
@@ -216,6 +259,27 @@ class ServiceContainer:
         self.owns_http_session = True
         return self.http_session
 
+    async def ensure_go_http_session(self, settings: Settings | None = None) -> aiohttp.ClientSession | None:
+        """Create a dedicated GO Transit HTTP session only when custom TLS settings require one."""
+        eff_settings = settings or self.settings
+        verify = bool(getattr(eff_settings, "go_ssl_verify", True))
+        cafile = str(getattr(eff_settings, "go_ca_bundle_path", "") or "").strip()
+        if verify and not cafile:
+            return None
+        if self.go_http_session is not None and not self.go_http_session.closed:
+            return self.go_http_session
+        connector = _build_go_connector(eff_settings)
+        try:
+            self.go_http_session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=aiohttp.ClientTimeout(total=18),
+            )
+        except Exception:
+            await connector.close()
+            raise
+        self.owns_go_http_session = True
+        return self.go_http_session
+
     async def close(self) -> None:
         """Release container-owned HTTP resources and reset volatile caches."""
         self.yahoo_crumb.clear()
@@ -224,6 +288,11 @@ class ServiceContainer:
             self.http_session = None
             if not session.closed:
                 await session.close()
+        if self.owns_go_http_session and self.go_http_session is not None:
+            go_session = self.go_http_session
+            self.go_http_session = None
+            if not go_session.closed:
+                await go_session.close()
 
     def user_store(self, settings: Settings | None = None, *, db: Database | None = None) -> UserStore:
         eff_settings = settings or self.settings

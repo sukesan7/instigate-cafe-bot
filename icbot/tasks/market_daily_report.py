@@ -410,7 +410,36 @@ async def build_market_report_embed(
 # ------------------------------------------------------------------------------
 
 
-async def post_daily_market_report(bot: discord.Client) -> None:
+async def _finalize_daily_report_post(
+    bot: discord.Client,
+    settings,
+    db,
+    *,
+    today: str,
+    debug: bool,
+    container: ServiceContainer,
+    secrets: tuple[str, ...],
+) -> None:
+    """Persist daily report checkpoint and trigger S&P 500 auto-move safely."""
+    await _set_meta(db, "daily_report_last_date", today)
+    try:
+        bot_id = bot.user.id if bot.user else 0
+        await _apply_sp500_move(settings, db, bot_id=bot_id, debug=debug, services=container)
+    except (
+        aiohttp.ClientError,
+        TimeoutError,
+        RuntimeError,
+        FunMarketError,
+        aiosqlite.Error,
+        sqlite3.Error,
+        ValueError,
+        TypeError,
+    ) as e:
+        if debug:
+            print(f"[DAILY] auto-move error: {format_exception_safe(e, secrets)}")
+
+
+async def post_daily_market_report(bot: discord.Client, *, raise_on_error: bool = False) -> None:
     """Post the daily market summary (intended to run once/day)."""
     settings = getattr(bot, "settings", None)
     db = getattr(bot, "db", None)
@@ -474,31 +503,23 @@ async def post_daily_market_report(bot: discord.Client) -> None:
     ) as e:
         if debug:
             print(f"[DAILY] build embed failed: {format_exception_safe(e, secrets)}")
+        if raise_on_error:
+            raise
         return
 
     try:
         await ch.send(embed=embed)
-        await _set_meta(db, "daily_report_last_date", today)
         if debug:
             print(f"[DAILY] posted ok for {today}")
-
-        # Auto-move fun-market stocks by S&P 500 daily %
-        try:
-            bot_id = bot.user.id if bot.user else 0
-            await _apply_sp500_move(settings, db, bot_id=bot_id, debug=debug, services=container)
-        except (
-            aiohttp.ClientError,
-            TimeoutError,
-            RuntimeError,
-            FunMarketError,
-            aiosqlite.Error,
-            sqlite3.Error,
-            ValueError,
-            TypeError,
-        ) as e:
-            if debug:
-                print(f"[DAILY] auto-move error: {format_exception_safe(e, secrets)}")
-
+        await _finalize_daily_report_post(
+            bot,
+            settings,
+            db,
+            today=today,
+            debug=debug,
+            container=container,
+            secrets=secrets,
+        )
         return
 
     except discord.Forbidden:
@@ -527,9 +548,17 @@ async def post_daily_market_report(bot: discord.Client) -> None:
         try:
             for chunk in chunks:
                 await ch.send(chunk)
-            await _set_meta(db, "daily_report_last_date", today)
             if debug:
                 print(f"[DAILY] posted text ok for {today}")
+            await _finalize_daily_report_post(
+                bot,
+                settings,
+                db,
+                today=today,
+                debug=debug,
+                container=container,
+                secrets=secrets,
+            )
         except (
             discord.DiscordException,
             aiosqlite.Error,
@@ -540,6 +569,8 @@ async def post_daily_market_report(bot: discord.Client) -> None:
         ) as e:
             if debug:
                 print(f"[DAILY] send failed (forbidden fallback): {format_exception_safe(e, secrets)}")
+            if raise_on_error:
+                raise
 
     except (
         discord.DiscordException,
@@ -551,3 +582,5 @@ async def post_daily_market_report(bot: discord.Client) -> None:
     ) as e:
         if debug:
             print(f"[DAILY] send failed: {format_exception_safe(e, secrets)}")
+        if raise_on_error:
+            raise

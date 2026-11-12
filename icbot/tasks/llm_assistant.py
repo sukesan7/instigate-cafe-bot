@@ -392,7 +392,12 @@ async def _extract_first_image(
     return None
 
 
-async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message) -> bool:
+async def maybe_handle_llm_mention(
+    bot: discord.Client,
+    message: discord.Message,
+    *,
+    raise_on_error: bool = False,
+) -> bool:
     """If the message mentions the bot, generate an LLM reply and post it.
 
     Returns True if handled.
@@ -583,6 +588,8 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
         # Keep failure quiet; don't spam the channel.
         if bool(getattr(settings, "llm_debug", False)):
             print(f"[LLM] gemini error: {format_exception_safe(e, settings.secret_values())}")
+        if raise_on_error:
+            raise
         return False
     except asyncio.CancelledError:
         raise
@@ -599,4 +606,6 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
     ) as e:
         if bool(getattr(settings, "llm_debug", False)):
             print(f"[LLM] unexpected error: {format_exception_safe(e, settings.secret_values())}")
+        if raise_on_error:
+            raise
         return False

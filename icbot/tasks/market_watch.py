@@ -108,7 +108,7 @@ def _parse_ticker_list(raw: Any) -> list[str]:
     return []
 
 
-async def poll_and_post_market_watch(bot: discord.Client) -> None:
+async def poll_and_post_market_watch(bot: discord.Client, *, raise_on_error: bool = False) -> None:
     settings = getattr(bot, "settings", None)
     db = getattr(bot, "db", None)
     if settings is None or db is None:
@@ -169,6 +169,8 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
     except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
         if debug:
             print(f"[MARKET] fetch error: {format_exception_safe(e, secrets)}")
+        if raise_on_error:
+            raise
         return
 
     q_spy = quotes.get("SPY")
@@ -343,8 +345,12 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
                 print(
                     f"[MARKET] ERROR: forbidden + plain-text send failed: {format_exception_safe(e, secrets)}"
                 )
+            if raise_on_error:
+                raise
         return
     except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
         if debug:
             print(f"[MARKET] ERROR: send failed: {format_exception_safe(e, secrets)}")
+        if raise_on_error:
+            raise
         return

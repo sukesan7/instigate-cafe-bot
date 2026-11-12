@@ -1,8 +1,9 @@
-"""CampusBot lifecycle, command tree orchestration, and gateway safeguard.
+"""CampusBot lifecycle, command tree orchestration, task supervision, and gateway safeguard.
 
 Centralizes Discord client construction, one-time ``setup_hook()`` initialization,
 controlled slash-command registration/sync, reconnect-safe ``on_ready()``,
-cancellable background task tracking, and clean shutdown / startup rollback.
+unified background/event task supervision, shared HTTP session management, and
+clean shutdown / startup rollback.
 """
 
 from __future__ import annotations
@@ -12,9 +13,7 @@ import logging
 import math
 import sqlite3
 from collections.abc import Callable, Coroutine, Sequence
-from datetime import UTC, datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiohttp
 import aiosqlite
@@ -29,10 +28,15 @@ from icbot.errors import BotError, format_exception_safe, safe_error_summary
 from icbot.guild_config import GuildSettingsStore
 from icbot.permissions import is_admin_or_allowed
 from icbot.registry import register_ic_commands
+from icbot.scheduler import (
+    TaskHealth,
+    TaskSupervisor,
+    build_default_task_specs,
+    invoke_poller_callable,
+    parse_hhmm,
+    seconds_until_next_local_time,
+)
 from icbot.services import btc_esplora, crypto_fng, yahoo_quotes
-from icbot.services.fun_market import FunMarketError
-from icbot.services.go_client import GOFetchError
-from icbot.services.ttc_client import TTCFetchError
 from icbot.tasks.btc_watch import poll_and_post_btc_watch
 from icbot.tasks.go_alerts import poll_and_post_go_alerts
 from icbot.tasks.job_alerts import poll_and_post_jobs
@@ -79,32 +83,12 @@ def _fmt_csv(items: list[str], *, limit: int = 12) -> str:
 
 
 def _parse_hhmm(raw: str, default_h: int = 16, default_m: int = 30) -> tuple[int, int]:
-    cleaned = (raw or "").strip()
-    if not cleaned:
-        return default_h, default_m
-    try:
-        if ":" in cleaned:
-            h, m = cleaned.split(":", 1)
-            return int(h), int(m)
-        if len(cleaned) == 4 and cleaned.isdigit():
-            return int(cleaned[:2]), int(cleaned[2:])
-    except (TypeError, ValueError) as exc:
-        log.debug("Invalid HHMM value %r: %s", raw, exc)
-    return default_h, default_m
+    return parse_hhmm(raw, default_h=default_h, default_m=default_m)
 
 
-def _seconds_until_next(hh: int, mm: int, tz_name: str) -> float:
-    """Return seconds until next local ``(hh:mm)`` occurrence in ``tz_name``."""
-    try:
-        tz = ZoneInfo(tz_name)
-        now = datetime.now(tz)
-    except (ZoneInfoNotFoundError, KeyError, ValueError):
-        now = datetime.now(UTC)
-
-    target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    if now >= target:
-        target = target + timedelta(days=1)
-    return max(1.0, (target - now).total_seconds())
+def _seconds_until_next(hh: int, mm: int, tz_name: str, *, now_unix: float | None = None) -> float:
+    """Return DST-accurate seconds until next local ``(hh:mm)`` occurrence in ``tz_name``."""
+    return seconds_until_next_local_time(hh, mm, tz_name, now_unix=now_unix)
 
 
 async def ic_channel_gate(
@@ -263,15 +247,72 @@ class CampusBot(commands.Bot):
         self._llm_last_reply: dict[int, float] = self.services.llm_last_reply
         self._jobs_bad_sources: set[str] = self.services.jobs_bad_sources
         self._workday_bad_sources: set[str] = self.services.workday_bad_sources
-        self._background_tasks: dict[str, asyncio.Task[None]] = {}
+        self.supervisor: TaskSupervisor = self._build_supervisor()
+        self.supervisor.reconcile()
 
     def _secrets(self) -> tuple[str, ...]:
         return self.settings.secret_values()
 
+    def _build_supervisor(self) -> TaskSupervisor:
+        sup = TaskSupervisor(
+            settings_getter=lambda: self.settings,
+            is_closed=self.is_closed,
+            wait_until_ready=self.wait_until_ready,
+            secrets_getter=self._secrets,
+            clock=self.services.clock,
+            sleep_fn=self.services.sleep_fn,
+            jitter_rng=self.services.jitter_rng,
+            llm_killed_getter=lambda: bool(self.services.llm_killed or self._llm_killed),
+        )
+
+        defaults: dict[str, Callable[..., Coroutine[Any, Any, Any]]] = {
+            "poll_and_post_ttc": poll_and_post_ttc,
+            "poll_and_post_go_alerts": poll_and_post_go_alerts,
+            "poll_and_post_jobs": poll_and_post_jobs,
+            "poll_and_post_workday_jobs": poll_and_post_workday_jobs,
+            "poll_and_post_market_watch": poll_and_post_market_watch,
+            "poll_and_post_btc_watch": poll_and_post_btc_watch,
+            "post_daily_market_report": post_daily_market_report,
+        }
+
+        def _make_runner(symbol_name: str) -> Callable[[], Coroutine[Any, Any, Any]]:
+            default_fn = defaults[symbol_name]
+
+            async def _run() -> Any:
+                fn = globals().get(symbol_name, default_fn)
+                return await invoke_poller_callable(fn, self, raise_on_error=True)
+
+            return _run
+
+        sup.register_many(
+            build_default_task_specs(
+                run_ttc=_make_runner("poll_and_post_ttc"),
+                run_go=_make_runner("poll_and_post_go_alerts"),
+                run_jobs=_make_runner("poll_and_post_jobs"),
+                run_workday=_make_runner("poll_and_post_workday_jobs"),
+                run_market_watch=_make_runner("poll_and_post_market_watch"),
+                run_btc_watch=_make_runner("poll_and_post_btc_watch"),
+                run_daily_report=_make_runner("post_daily_market_report"),
+            )
+        )
+        return sup
+
     @property
     def background_tasks(self) -> dict[str, asyncio.Task[None]]:
         """Shallow snapshot of currently tracked background scheduler tasks."""
-        return dict(self._background_tasks)
+        return self.supervisor.active_tasks
+
+    def task_health(self) -> dict[str, TaskHealth]:
+        """Return redacted snapshots of all supervised background and event tasks."""
+        return self.supervisor.health_snapshot()
+
+    def reconcile_tasks(self, settings: Settings | None = None) -> dict[str, asyncio.Task[None]]:
+        """Re-evaluate capability gates and start/stop background tasks live."""
+        if settings is not None:
+            self.settings = settings
+            self.services.settings = settings
+            return self.supervisor.reconcile(settings)
+        return self.supervisor.reconcile(self.settings)
 
     @property
     def target_sync_guild(self) -> discord.Object | None:
@@ -286,6 +327,7 @@ class CampusBot(commands.Bot):
             killed = bool(row and str(row[0]) == "1")
             self._llm_killed = killed
             self.services.llm_killed = killed
+            self.supervisor.sync_event_states()
             if killed:
                 log.info("[BOOT] Loaded persisted llm_killed=True state from DB.")
         except (aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as exc:
@@ -295,11 +337,8 @@ class CampusBot(commands.Bot):
             )
 
     async def _init_http_sessions(self) -> None:
-        if self.http_session is None or self.http_session.closed:
-            self.http_session = await self.services.ensure_http_session()
-        await yahoo_quotes.init_session()
-        await btc_esplora.init_session()
-        await crypto_fng.init_session()
+        self.http_session = await self.services.ensure_http_session()
+        await self.services.ensure_go_http_session(self.settings)
 
     async def _close_http_sessions(self) -> None:
         self.http_session = None
@@ -503,87 +542,11 @@ class CampusBot(commands.Bot):
         self.commands_synced = True
         return synced
 
-    def _spawn_task(self, name: str, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-        existing = self._background_tasks.get(name)
-        if existing is not None and not existing.done():
-            coro.close()
-            return existing
-
-        task = asyncio.create_task(coro, name=f"icbot:{name}")
-        self._background_tasks[name] = task
-
-        def _on_done(finished: asyncio.Task[None]) -> None:
-            if self._background_tasks.get(name) is finished:
-                self._background_tasks.pop(name, None)
-            if finished.cancelled():
-                return
-            exc = finished.exception()
-            if exc is not None:
-                log.error(
-                    "Background task %s terminated with exception: %s",
-                    name,
-                    format_exception_safe(exc, self._secrets()),
-                )
-
-        task.add_done_callback(_on_done)
-        return task
-
     def _start_background_tasks(self) -> None:
-        settings = self.settings
-
-        if getattr(settings, "ttc_alerts_channel_id", 0):
-            self._spawn_task("ttc", self._ttc_loop())
-
-        go_channel = int(
-            getattr(settings, "go_alerts_channel_id", 0) or getattr(settings, "ttc_alerts_channel_id", 0) or 0
-        )
-        go_key = str(getattr(settings, "go_api_key", "") or "").strip()
-        if go_channel and go_key:
-            self._spawn_task("go", self._go_loop())
-        elif go_channel and not go_key:
-            log.info("[GO] enabled via channel without GO_API_KEY; skipping GO poller.")
-
-        if isinstance(settings, Settings):
-            jobs_channel_id = int(settings.job_alerts_channel_id or 0)
-        else:
-            jobs_channel_id = int(
-                getattr(settings, "job_alerts_channel_id", 0) or getattr(settings, "jobs_channel_id", 0) or 0
-            )
-        if jobs_channel_id:
-            self._spawn_task("jobs", self._jobs_loop())
-        else:
-            log.info("[JOBS] no jobs channel id set; skipping ATS jobs poller.")
-
-        workday_sites = getattr(settings, "workday_sites", None) or []
-        if jobs_channel_id and workday_sites:
-            self._spawn_task("workday", self._workday_loop())
-        elif workday_sites:
-            log.warning("[WORKDAY] workday_sites set without jobs channel id; skipping Workday poller.")
-
-        mw_enabled = bool(getattr(settings, "market_watch_enabled", False))
-        mw_channel = int(getattr(settings, "market_watch_channel_id", 0) or 0) or int(
-            getattr(settings, "stock_channel_id", 0) or 0
-        )
-        if mw_enabled and mw_channel:
-            self._spawn_task("market_watch", self._market_loop())
-        elif mw_enabled and not mw_channel:
-            log.warning("[MARKET] enabled without channel_id configured; skipping market watch.")
-
-        if bool(getattr(settings, "market_daily_report_enabled", False)):
-            self._spawn_task("daily_market_report", self._daily_market_report_loop())
-
-        if bool(getattr(settings, "btc_watch_enabled", False)):
-            self._spawn_task("btc_watch", self._btc_watch_loop())
+        self.supervisor.start(self.settings)
 
     async def _cancel_background_tasks(self) -> None:
-        tasks = list(self._background_tasks.values())
-        self._background_tasks.clear()
-        if not tasks:
-            return
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await self.supervisor.stop_all()
 
     async def _cleanup_runtime(self) -> None:
         self.setup_complete = False
@@ -637,35 +600,47 @@ class CampusBot(commands.Bot):
 
     async def on_message(self, message: discord.Message, /) -> None:
         """Route explicit ``@bot`` mentions to the LLM assistant; dispatch prefix commands only if defined."""
-        try:
-            if self.user is not None and self.user in (message.mentions or []):
-                await maybe_handle_llm_mention(self, message)
-            elif (
-                bool(getattr(self.settings, "llm_debug", False))
-                and self.user is not None
-                and getattr(message, "reference", None) is not None
-                and message.author
-                and not message.author.bot
-            ):
-                mentioned_ids = [u.id for u in (message.mentions or [])]
-                if self.user.id in mentioned_ids:
-                    log.debug("[LLM] reply contains explicit bot mention via reply toggle.")
-        except (
-            discord.DiscordException,
-            aiohttp.ClientError,
-            TimeoutError,
-            OSError,
-            RuntimeError,
-            ValueError,
-            TypeError,
-            AttributeError,
-            LookupError,
-        ) as exc:
-            if bool(getattr(self.settings, "llm_debug", False)):
-                log.debug(
-                    "[LLM] on_message handler error: %s",
-                    format_exception_safe(exc, self._secrets()),
-                )
+        if self.user is not None and self.user in (message.mentions or []):
+            self.supervisor.sync_event_states()
+            self.supervisor.record_event_start("llm_assistant")
+            try:
+                fn = globals().get("maybe_handle_llm_mention", maybe_handle_llm_mention)
+                handled = await invoke_poller_callable(fn, self, message, raise_on_error=True)
+            except asyncio.CancelledError:
+                self.supervisor.sync_event_states()
+                raise
+            except (
+                discord.DiscordException,
+                aiohttp.ClientError,
+                TimeoutError,
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                LookupError,
+            ) as exc:
+                self.supervisor.record_event_error("llm_assistant", exc)
+                if bool(getattr(self.settings, "llm_debug", False)):
+                    log.debug(
+                        "[LLM] on_message handler error: %s",
+                        format_exception_safe(exc, self._secrets()),
+                    )
+            else:
+                if handled is False:
+                    self.supervisor.sync_event_states()
+                else:
+                    self.supervisor.record_event_success("llm_assistant")
+        elif (
+            bool(getattr(self.settings, "llm_debug", False))
+            and self.user is not None
+            and getattr(message, "reference", None) is not None
+            and message.author
+            and not message.author.bot
+        ):
+            mentioned_ids = [u.id for u in (message.mentions or [])]
+            if self.user.id in mentioned_ids:
+                log.debug("[LLM] reply contains explicit bot mention via reply toggle.")
 
         if self.commands:
             await self.process_commands(message)
@@ -676,211 +651,6 @@ class CampusBot(commands.Bot):
             await self._cleanup_runtime()
         finally:
             await super().close()
-
-    async def _ttc_loop(self) -> None:
-        """Background poller that posts TTC alerts into TTC_ALERTS_CHANNEL_ID."""
-        await self.wait_until_ready()
-        while not self.is_closed():
-            try:
-                await poll_and_post_ttc(self)
-            except asyncio.CancelledError:
-                raise
-            except (
-                discord.DiscordException,
-                aiohttp.ClientError,
-                TimeoutError,
-                aiosqlite.Error,
-                sqlite3.Error,
-                TTCFetchError,
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                LookupError,
-            ) as exc:
-                log.warning("[TTC] loop error: %s", format_exception_safe(exc, self._secrets()))
-            await asyncio.sleep(max(30, int(getattr(self.settings, "ttc_poll_seconds", 120) or 120)))
-
-    async def _go_loop(self) -> None:
-        """Background poller for GO Transit Service Alerts."""
-        await self.wait_until_ready()
-        while not self.is_closed():
-            try:
-                await poll_and_post_go_alerts(self)
-            except asyncio.CancelledError:
-                raise
-            except (
-                discord.DiscordException,
-                aiohttp.ClientError,
-                TimeoutError,
-                aiosqlite.Error,
-                sqlite3.Error,
-                GOFetchError,
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                LookupError,
-            ) as exc:
-                log.warning("[GO] loop error: %s", format_exception_safe(exc, self._secrets()))
-            await asyncio.sleep(max(60, int(getattr(self.settings, "go_poll_seconds", 180) or 180)))
-
-    async def _jobs_loop(self) -> None:
-        """Background poller that posts job alerts into the configured jobs channel."""
-        await self.wait_until_ready()
-        poll_s_init = int(getattr(settings := self.settings, "jobs_poll_seconds", 600) or 600)
-        log.info("[JOBS] loop started (poll=%ss)", poll_s_init)
-
-        while not self.is_closed():
-            cycle_start = self.services.clock()
-            try:
-                log.debug("[JOBS] cycle begin")
-                await poll_and_post_jobs(self)
-                log.debug("[JOBS] cycle end (elapsed=%.1fs)", self.services.clock() - cycle_start)
-            except asyncio.CancelledError:
-                log.debug("[JOBS] loop cancelled")
-                raise
-            except (
-                discord.DiscordException,
-                aiohttp.ClientError,
-                TimeoutError,
-                aiosqlite.Error,
-                sqlite3.Error,
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                LookupError,
-            ) as exc:
-                log.warning("[JOBS] loop error: %s", format_exception_safe(exc, self._secrets()))
-
-            poll_s = max(60, int(getattr(settings, "jobs_poll_seconds", 600) or 600))
-            await asyncio.sleep(poll_s)
-
-    async def _workday_loop(self) -> None:
-        """Background poller for Workday sites (posts into the configured jobs channel)."""
-        await self.wait_until_ready()
-        poll_s0 = int(
-            getattr(self.settings, "workday_poll_seconds", 0)
-            or getattr(self.settings, "jobs_poll_seconds", 600)
-            or 600
-        )
-        log.info("[WORKDAY] loop started (poll=%ss)", poll_s0)
-
-        while not self.is_closed():
-            cycle_start = self.services.clock()
-            try:
-                log.debug("[WORKDAY] cycle begin")
-                await poll_and_post_workday_jobs(self)
-                log.debug("[WORKDAY] cycle end (elapsed=%.1fs)", self.services.clock() - cycle_start)
-            except asyncio.CancelledError:
-                log.debug("[WORKDAY] loop cancelled")
-                raise
-            except (
-                discord.DiscordException,
-                aiohttp.ClientError,
-                TimeoutError,
-                aiosqlite.Error,
-                sqlite3.Error,
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                LookupError,
-            ) as exc:
-                log.warning("[WORKDAY] loop error: %s", format_exception_safe(exc, self._secrets()))
-
-            poll_s = max(
-                60,
-                int(
-                    getattr(self.settings, "workday_poll_seconds", 0)
-                    or getattr(self.settings, "jobs_poll_seconds", 600)
-                    or 600
-                ),
-            )
-            await asyncio.sleep(poll_s)
-
-    async def _market_loop(self) -> None:
-        """Background poller that posts market volatility alerts."""
-        await self.wait_until_ready()
-        while not self.is_closed():
-            try:
-                await poll_and_post_market_watch(self)
-            except asyncio.CancelledError:
-                raise
-            except (
-                discord.DiscordException,
-                aiohttp.ClientError,
-                TimeoutError,
-                aiosqlite.Error,
-                sqlite3.Error,
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                LookupError,
-            ) as exc:
-                log.warning("[MARKET] loop error: %s", format_exception_safe(exc, self._secrets()))
-            await asyncio.sleep(max(10, int(getattr(self.settings, "market_watch_poll_seconds", 300) or 300)))
-
-    async def _daily_market_report_loop(self) -> None:
-        """Posts a daily market recap at a scheduled local time (e.g. 16:30 America/Toronto)."""
-        await self.wait_until_ready()
-        while not self.is_closed():
-            try:
-                if not bool(getattr(self.settings, "market_daily_report_enabled", False)):
-                    await asyncio.sleep(300)
-                    continue
-
-                hh, mm = _parse_hhmm(
-                    str(getattr(self.settings, "market_daily_report_time", "16:30") or "16:30")
-                )
-                tz_name = str(
-                    getattr(self.settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"
-                )
-                await asyncio.sleep(_seconds_until_next(hh, mm, tz_name))
-                await post_daily_market_report(self)
-                await asyncio.sleep(60)
-            except asyncio.CancelledError:
-                raise
-            except (
-                discord.DiscordException,
-                aiohttp.ClientError,
-                TimeoutError,
-                aiosqlite.Error,
-                sqlite3.Error,
-                FunMarketError,
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                LookupError,
-            ) as exc:
-                log.warning("[DAILY] loop error: %s", format_exception_safe(exc, self._secrets()))
-                await asyncio.sleep(120)
-
-    async def _btc_watch_loop(self) -> None:
-        """Polls watched BTC addresses and posts alerts on movement."""
-        await self.wait_until_ready()
-        while not self.is_closed():
-            try:
-                await poll_and_post_btc_watch(self)
-            except asyncio.CancelledError:
-                raise
-            except (
-                discord.DiscordException,
-                aiohttp.ClientError,
-                TimeoutError,
-                aiosqlite.Error,
-                sqlite3.Error,
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                LookupError,
-            ) as exc:
-                log.warning("[BTC] loop error: %s", format_exception_safe(exc, self._secrets()))
-            await asyncio.sleep(max(30, int(getattr(self.settings, "btc_watch_poll_seconds", 300) or 300)))
 
 
 def create_bot(

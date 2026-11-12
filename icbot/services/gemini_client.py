@@ -8,7 +8,7 @@ from typing import Any
 
 import aiohttp
 
-from icbot.errors import ProviderError, redact_secrets
+from icbot.errors import ProviderError, parse_retry_after, redact_secrets
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,7 @@ class GeminiError(ProviderError):
     message: str
     status: int
     details: str = ""
+    retry_after: float | None = None
 
     def __str__(self) -> str:  # pragma: no cover
         base = f"GeminiError(status={self.status}): {self.message}"
@@ -115,7 +116,13 @@ async def gemini_generate_text(
                 text = await resp.text()
                 if status < 200 or status >= 300:
                     safe_details = redact_secrets(text[:2000], secrets)
-                    raise GeminiError("non-2xx response", status=status, details=safe_details)
+                    retry_after = parse_retry_after(resp.headers.get("Retry-After"))
+                    raise GeminiError(
+                        "non-2xx response",
+                        status=status,
+                        details=safe_details,
+                        retry_after=retry_after,
+                    )
 
                 try:
                     payload = await resp.json()

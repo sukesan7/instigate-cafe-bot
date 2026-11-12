@@ -213,17 +213,26 @@ async def _resolve_channel(bot: discord.Client, channel_id: int):
 async def _scoped_go_session(
     shared_session: aiohttp.ClientSession | None,
     settings,
+    *,
+    go_session: aiohttp.ClientSession | None = None,
 ):
     verify = bool(getattr(settings, "go_ssl_verify", True))
     cafile = str(getattr(settings, "go_ca_bundle_path", "") or "").strip()
-    if verify and not cafile and shared_session is not None and not shared_session.closed:
+    if not verify or cafile:
+        if go_session is not None and not go_session.closed:
+            yield go_session
+            return
+    elif shared_session is not None and not shared_session.closed:
         yield shared_session
         return
-    async with aiohttp.ClientSession(connector=_make_go_connector(settings)) as session:
+    async with aiohttp.ClientSession(
+        connector=_make_go_connector(settings),
+        timeout=aiohttp.ClientTimeout(total=18),
+    ) as session:
         yield session
 
 
-async def poll_and_post_go_alerts(bot: discord.Client) -> None:
+async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool = False) -> None:
     """Poll GO Transit Service Alerts and post to a channel."""
     settings = getattr(bot, "settings", None)
     db = getattr(bot, "db", None)
@@ -263,21 +272,28 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
         print("[GO] cannot resolve channel")
         return
 
-    # Fetch with small retry on transient issues
+    # Fetch with small retry on standalone calls; supervised calls delegate retry/backoff to TaskSupervisor
     msgs: list[GOMessage] = []
     last_err: BaseException | None = None
-    async with _scoped_go_session(container.http_session, settings) as session:
-        for attempt in range(3):
+    max_attempts = 1 if raise_on_error else 3
+    async with _scoped_go_session(
+        container.http_session, settings, go_session=container.go_http_session
+    ) as session:
+        for attempt in range(max_attempts):
             try:
                 msgs = await fetch_service_alerts(session, api_base, access_key, timeout_seconds=18)
                 last_err = None
                 break
             except (TimeoutError, aiohttp.ClientError, GOFetchError) as e:
                 last_err = e
+                if raise_on_error or attempt + 1 >= max_attempts:
+                    break
                 await asyncio.sleep(1.5 * (attempt + 1))
 
     if last_err is not None:
         print(f"[GO] fetch failed: {format_exception_safe(last_err, secrets)}")
+        if raise_on_error:
+            raise last_err
         return
 
     if not msgs:
@@ -344,6 +360,8 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
                     break
                 except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
                     print(f"[GO] post failed: {format_exception_safe(e, secrets)}")
+                    if raise_on_error:
+                        raise
                     break
             _ = posted
 
@@ -359,7 +377,6 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
     if last_code not in codes:
         if debug:
             print("[GO] WARNING: last checkpoint not found in feed; treating as bootstrap.")
-        await _set_meta(db, "go_last_servicealert_code", newest.code)
         if bootstrap_post_latest:
             for m in reversed(msgs_sorted):
                 major = _is_major(m)
@@ -380,7 +397,11 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
                     break
                 except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
                     print(f"[GO] post failed: {format_exception_safe(e, secrets)}")
+                    if raise_on_error:
+                        raise
+                    await _set_meta(db, "go_last_servicealert_code", newest.code)
                     return
+        await _set_meta(db, "go_last_servicealert_code", newest.code)
         return
 
     # Normal operation: post messages after the checkpoint (oldest -> newest)
@@ -392,11 +413,9 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
         if not started:
             continue
 
-        # IMPORTANT: advance checkpoint even if you don't post (prevents getting stuck)
-        await _set_meta(db, "go_last_servicealert_code", m.code)
-
         major = _is_major(m)
         if poll_level == "major" and not major:
+            await _set_meta(db, "go_last_servicealert_code", m.code)
             continue
 
         level = "MAJOR" if major else "INFO"
@@ -413,4 +432,7 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
             await channel.send(embed=embed)  # type: ignore[call-arg]
         except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
             print(f"[GO] post failed: {format_exception_safe(e, secrets)}")
+            if raise_on_error:
+                raise
             return
+        await _set_meta(db, "go_last_servicealert_code", m.code)

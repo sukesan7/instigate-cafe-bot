@@ -1,6 +1,6 @@
 # Instigate Cafe Bot — Bot Lifecycle, Command Registry & Gateway Safeguard
 
-This document specifies the Phase 3A startup, command synchronization, reconnection, and shutdown architecture implemented across [`main.py`](../../main.py), [`icbot/bot.py`](../../icbot/bot.py), and [`icbot/registry.py`](../../icbot/registry.py).
+This document specifies the Phase 3A/3C startup, command synchronization, reconnection, task supervision, and shutdown architecture implemented across [`main.py`](../../main.py), [`icbot/bot.py`](../../icbot/bot.py), [`icbot/scheduler.py`](../../icbot/scheduler.py), and [`icbot/registry.py`](../../icbot/registry.py). See also [`docs/architecture/task-supervision.md`](./task-supervision.md) for the scheduler state machine, backoff/DST semantics, and multi-replica lease design.
 
 ## 1. Zero Import-Time Side Effects
 
@@ -24,14 +24,14 @@ main()
   └─ create_bot(settings) -> CampusBot
        ├─ setup_hook()  [Idempotent, once per live runtime]
        │    ├─ 1. await db.init() + load persisted llm_killed meta flag
-       │    ├─ 2. Initialize bot.http_session + yahoo_quotes/btc_esplora/crypto_fng sessions
-       │    ├─ 3. Log sanitized non-secret configuration summary
+       │    ├─ 2. Initialize single shared bot.http_session (+ conditional go_http_session for custom TLS)
+       │    ├─ 3. Log sanitized non-secret configuration summary + capability statuses
        │    ├─ 4. Register /ic tree (override=True; never clear_commands)
        │    ├─ 5. Execute controlled initial sync (guild or global; non-fatal on Discord sync error)
-       │    ├─ 6. Spawn background poller tasks once (each calls await self.wait_until_ready())
+       │    ├─ 6. Start TaskSupervisor across all capability-gated loops (waiting for ready + jitter)
        │    └─ On failure before completion: roll back tasks, HTTP sessions, and DB handle cleanly
        ├─ on_ready()    [Reconnect-safe: increments ready_count & logs only]
-       └─ close()       [Cancels & awaits tasks, closes HTTP sessions + service sessions + db + super().close()]
+       └─ close()       [Cancels & awaits TaskSupervisor, closes shared HTTP sessions + db + super().close()]
 ```
 
 ## 4. Guild Development Sync vs Controlled Global Sync

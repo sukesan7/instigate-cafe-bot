@@ -74,7 +74,7 @@ async def fetch_course_data(
     if session is not None and not session.closed:
         html = await _fetch_grades_html(url, headers, session)
     else:
-        async with aiohttp.ClientSession() as tmp_session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as tmp_session:
             html = await _fetch_grades_html(url, headers, tmp_session)
 
     if html is None:

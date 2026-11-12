@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from icbot.errors import ProviderError, redact_secrets
+from icbot.errors import ProviderError, parse_retry_after, redact_secrets
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,12 @@ async def fetch_service_alerts(
             if resp.status != 200:
                 safe_url = redact_secrets(url, secrets)
                 safe_text = redact_secrets(text[:300], secrets)
-                raise GOFetchError(f"HTTP {resp.status} via GET {safe_url} :: {safe_text}")
+                retry_after = parse_retry_after(resp.headers.get("Retry-After"))
+                raise GOFetchError(
+                    f"HTTP {resp.status} via GET {safe_url} :: {safe_text}",
+                    status=resp.status,
+                    retry_after=retry_after,
+                )
             try:
                 payload = await resp.json(content_type=None)
             except (aiohttp.ContentTypeError, json.JSONDecodeError, ValueError) as e:

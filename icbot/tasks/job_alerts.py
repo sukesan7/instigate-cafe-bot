@@ -12,7 +12,7 @@ import aiohttp
 import aiosqlite
 import discord
 
-from icbot.container import get_container
+from icbot.container import ServiceContainer, get_container
 from icbot.embeds import job_alert as job_alert_embed
 from icbot.errors import format_exception_safe
 from icbot.services.jobs_ats_client import JobPosting, fetch_greenhouse_jobs, fetch_lever_jobs
@@ -83,7 +83,10 @@ async def _scoped_jobs_session(session: aiohttp.ClientSession | None):
     if session is not None and not session.closed:
         yield session
         return
-    async with aiohttp.ClientSession(headers={"User-Agent": "InstigateCafeBot/1.0"}) as created:
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=12),
+        headers={"User-Agent": "InstigateCafeBot/1.0"},
+    ) as created:
         yield created
 
 
@@ -365,6 +368,8 @@ def _pick_bootstrap_sample_workday(
 
 
 def _looks_like_not_found(err: Exception) -> bool:
+    if getattr(err, "status", None) == 404:
+        return True
     s = repr(err)
     return "HTTP 404" in s or " 404" in s or "Job not found" in s or "Document not found" in s
 
@@ -394,6 +399,7 @@ async def _mark_seen(
     jobs: Sequence[_JobRecord],
     *,
     clock: Callable[[], float] | None = None,
+    container: ServiceContainer | None = None,
 ) -> None:
     global _MARK_SEEN_MODE
     now = _now_unix(clock)
@@ -401,8 +407,10 @@ async def _mark_seen(
     if not jobs:
         return
 
-    # Try extended once; if it fails (missing columns), fall back to basic permanently.
-    if _MARK_SEEN_MODE in (None, "extended"):
+    mode = container.jobs_mark_seen_mode if container is not None else _MARK_SEEN_MODE
+
+    # Try extended once; if it fails (missing columns), fall back to basic cleanly.
+    if mode in (None, "extended"):
         try:
             stmts_ext = [
                 (
@@ -424,10 +432,16 @@ async def _mark_seen(
                 for j in jobs
             ]
             await db.execute_many(stmts_ext)
-            _MARK_SEEN_MODE = "extended"
+            if container is not None:
+                container.jobs_mark_seen_mode = "extended"
+            else:
+                _MARK_SEEN_MODE = "extended"
             return
         except (aiosqlite.Error, sqlite3.Error):
-            _MARK_SEEN_MODE = "basic"
+            if container is not None:
+                container.jobs_mark_seen_mode = "basic"
+            else:
+                _MARK_SEEN_MODE = "basic"
 
     # Basic insert (compatible with older schema)
     stmts = [
@@ -474,7 +488,7 @@ def _pick_bootstrap_sample(
     return picked
 
 
-async def poll_and_post_jobs(bot: discord.Client) -> None:
+async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = False) -> None:
     settings = getattr(bot, "settings", None)
     db = getattr(bot, "db", None)
     if settings is None or db is None:
@@ -490,13 +504,19 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
     if channel is None:
         return
 
-    gh = list(
+    gh_raw = (
         getattr(settings, "greenhouse_boards", None)
-        or getattr(settings, "greenhouse_board_tokens", None)
-        or []
+        if hasattr(settings, "greenhouse_boards")
+        else getattr(settings, "greenhouse_board_tokens", None)
     )
+    gh = list(gh_raw or [])
     gh = [t for t in gh if isinstance(t, str) and t.strip() and t.strip() not in ("\\", "\\\\")]
-    lv = list(getattr(settings, "lever_sites", None) or getattr(settings, "lever_site_tokens", None) or [])
+    lv_raw = (
+        getattr(settings, "lever_sites", None)
+        if hasattr(settings, "lever_sites")
+        else getattr(settings, "lever_site_tokens", None)
+    )
+    lv = list(lv_raw or [])
     lv = [t for t in lv if isinstance(t, str) and t.strip() and t.strip() not in ("\\", "\\\\")]
     if not gh and not lv:
         return
@@ -520,6 +540,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
         else None
     )
 
+    transient_errors: list[BaseException] = []
     async with _scoped_jobs_session(open_session) as session:
         all_jobs: list[JobPosting] = []
 
@@ -539,6 +560,8 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
             except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
                 if _looks_like_not_found(e):
                     bad_sources.add(src_key)
+                else:
+                    transient_errors.append(e)
                 print(f"[JOBS] greenhouse fetch failed: {format_exception_safe(e, secrets)}")
 
         for site in lv:
@@ -557,9 +580,13 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
             except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
                 if _looks_like_not_found(e):
                     bad_sources.add(src_key)
+                else:
+                    transient_errors.append(e)
                 print(f"[JOBS] lever fetch failed: {format_exception_safe(e, secrets)}")
 
     if not all_jobs:
+        if raise_on_error and transient_errors:
+            raise transient_errors[0]
         print("[JOBS] fetched 0 postings (all sources empty or invalid).")
         return
 
@@ -578,7 +605,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
         # ---- First time we ever see this source ----
         if not has_any:
             if not bootstrap_post:
-                await _mark_seen(db, jobs, clock=container.clock)
+                await _mark_seen(db, jobs, clock=container.clock, container=container)
                 print(f"[JOBS] baseline checkpointed {len(jobs)} jobs for {source} (no bootstrap post).")
                 continue
 
@@ -609,7 +636,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 posts_left -= 1
                 posted_total += 1
 
-            await _mark_seen(db, jobs, clock=container.clock)
+            await _mark_seen(db, jobs, clock=container.clock, container=container)
             if sample:
                 print(f"[JOBS] bootstrap posted {len(sample)} and checkpointed {len(jobs)} for {source}.")
             else:
@@ -633,7 +660,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 kw_deny=kw_deny,
                 require_early_career=require_early_career,
             ):
-                await _mark_seen(db, [j], clock=container.clock)
+                await _mark_seen(db, [j], clock=container.clock, container=container)
                 continue
 
             cats = _classify(j.text_blob) or ["General"]
@@ -649,7 +676,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                     source=j.source,
                 )
             )
-            await _mark_seen(db, [j], clock=container.clock)
+            await _mark_seen(db, [j], clock=container.clock, container=container)
 
             posts_left -= 1
             posted_total += 1

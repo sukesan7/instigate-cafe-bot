@@ -51,6 +51,8 @@ PROCESS_ONLY_KEYS: frozenset[str] = frozenset(
         "market_watch_poll_seconds",
         "btc_watch_poll_seconds",
         "btc_esplora_base_url",
+        "task_startup_jitter_seconds",
+        "task_max_backoff_seconds",
     }
 )
 

@@ -20,7 +20,7 @@ async def _scoped_http_session(session: aiohttp.ClientSession | None):
     if session is not None and not session.closed:
         yield session
         return
-    async with aiohttp.ClientSession() as created:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as created:
         yield created
 
 
@@ -91,7 +91,7 @@ async def _resolve_channel(bot: discord.Client, channel_id: int) -> discord.abc.
         return None
 
 
-async def poll_and_post_ttc(bot: discord.Client) -> None:
+async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False) -> None:
     """
     Poll Mastodon API for TTC notices and auto-post into TTC_ALERTS_CHANNEL_ID.
 
@@ -148,15 +148,18 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
                 ValueError,
             ) as e:
                 print(f"[TTC] resolve account id failed: {format_exception_safe(e, secrets)}")
+                if raise_on_error:
+                    raise
                 return
 
         last_id = await _get_meta(db, "ttc_last_status_id")
         last_id = last_id.strip() or ""
 
-        # Fetch with small retry on transient issues
+        # Fetch with small retry on standalone calls; supervised calls delegate retry/backoff to TaskSupervisor
         items: list[TTCItem] = []
         last_err: BaseException | None = None
-        for attempt in range(3):
+        max_attempts = 1 if raise_on_error else 3
+        for attempt in range(max_attempts):
             try:
                 items = await fetch_account_status_items(
                     session,
@@ -172,14 +175,20 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
                 break
             except (TimeoutError, aiohttp.ClientError) as e:
                 last_err = e
+                if raise_on_error or attempt + 1 >= max_attempts:
+                    break
                 await asyncio.sleep(1.5 * (attempt + 1))
             except TTCFetchError as e:
                 # These are usually config/rate-limit issues; no point retrying rapidly
                 print(f"[TTC] fetch failed: {format_exception_safe(e, secrets)}")
+                if raise_on_error:
+                    raise
                 return
 
         if last_err is not None:
             print(f"[TTC] fetch failed: {format_exception_safe(last_err, secrets)}")
+            if raise_on_error:
+                raise last_err
             return
 
         if debug:
@@ -223,6 +232,8 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
                         break
                     except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
                         print(f"[TTC] post failed: {format_exception_safe(e, secrets)}")
+                        if raise_on_error:
+                            raise
                         break
 
                 # even if nothing matched, still checkpoint to prevent spam on restart
@@ -240,10 +251,9 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
         for it in items_oldest_first:
             major = _is_major(it)
 
-            # IMPORTANT: advance checkpoint even if you don't post (prevents getting stuck)
-            await _set_meta(db, "ttc_last_status_id", it.guid)
-
             if poll_level == "major" and not major:
+                # Advance checkpoint past filtered items so we don't re-scan them next cycle.
+                await _set_meta(db, "ttc_last_status_id", it.guid)
                 continue
 
             level = "MAJOR" if major else "INFO"
@@ -259,4 +269,7 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
                 await channel.send(embed=embed)  # type: ignore[call-arg]
             except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
                 print(f"[TTC] post failed: {format_exception_safe(e, secrets)}")
+                if raise_on_error:
+                    raise
                 return
+            await _set_meta(db, "ttc_last_status_id", it.guid)

@@ -71,7 +71,7 @@ def _fmt_btc(v: float | None) -> str:
     return f"{sign}{v:.8f} BTC"
 
 
-async def poll_and_post_btc_watch(bot: discord.Client) -> None:
+async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool = False) -> None:
     """Post alerts when watched BTC addresses see new transactions."""
     settings = getattr(bot, "settings", None)
     db = getattr(bot, "db", None)
@@ -124,13 +124,17 @@ async def poll_and_post_btc_watch(bot: discord.Client) -> None:
         else None
     )
 
+    any_fetch_ok = False
+    last_fetch_err: BaseException | None = None
     for addr in addresses[:50]:  # hard cap for safety
         try:
             if container.fetch_address_txs_fn is not None:
                 txs = await container.fetch_address_txs_fn(addr, base_url=base_url, limit=5)
             else:
                 txs = await fetch_address_txs(addr, base_url=base_url, limit=5, session=open_session)
+            any_fetch_ok = True
         except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError, KeyError) as e:
+            last_fetch_err = e
             if debug:
                 print(f"[BTC] fetch failed addr={_short_addr(addr)} err={format_exception_safe(e, secrets)}")
             continue
@@ -187,6 +191,8 @@ async def poll_and_post_btc_watch(bot: discord.Client) -> None:
                 ) as e:
                     if debug:
                         print(f"[BTC] send failed (forbidden fallback): {format_exception_safe(e, secrets)}")
+                    if raise_on_error:
+                        raise
                     return
             except (
                 discord.DiscordException,
@@ -198,4 +204,9 @@ async def poll_and_post_btc_watch(bot: discord.Client) -> None:
             ) as e:
                 if debug:
                     print(f"[BTC] send failed: {format_exception_safe(e, secrets)}")
+                if raise_on_error:
+                    raise
                 return
+
+    if raise_on_error and not any_fetch_ok and last_fetch_err is not None:
+        raise last_fetch_err

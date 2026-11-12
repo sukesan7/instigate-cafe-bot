@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import aiohttp
 from yarl import URL
 
-from icbot.errors import ProviderError, redact_secrets
+from icbot.errors import ProviderError, parse_retry_after, redact_secrets
 
 log = logging.getLogger(__name__)
 
@@ -261,7 +261,7 @@ def _extract_jobs_from_payload(payload: dict[str, Any], site: WorkdaySite) -> li
     return jobs
 
 
-async def _request_json(
+async def _request_json_meta(
     session: aiohttp.ClientSession,
     method: str,
     url: str,
@@ -269,7 +269,7 @@ async def _request_json(
     headers: dict[str, str],
     timeout_seconds: int,
     json_body: dict[str, Any] | None = None,
-) -> tuple[int, dict[str, Any]]:
+) -> tuple[int, dict[str, Any], float | None]:
     kwargs: dict[str, Any] = {
         "headers": headers,
         "timeout": aiohttp.ClientTimeout(total=timeout_seconds),
@@ -279,10 +279,31 @@ async def _request_json(
 
     async with session.request(method, url, **kwargs) as r:
         raw = await r.text(errors="ignore")
+        retry_after = parse_retry_after(r.headers.get("Retry-After"))
         try:
-            return r.status, json.loads(raw)
+            return r.status, json.loads(raw), retry_after
         except (json.JSONDecodeError, TypeError, ValueError):
-            return r.status, {"_raw": raw}
+            return r.status, {"_raw": raw}, retry_after
+
+
+async def _request_json(
+    session: aiohttp.ClientSession,
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout_seconds: int,
+    json_body: dict[str, Any] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    status, payload, _retry = await _request_json_meta(
+        session,
+        method,
+        url,
+        headers=headers,
+        timeout_seconds=timeout_seconds,
+        json_body=json_body,
+    )
+    return status, payload
 
 
 async def fetch_workday_jobs(
@@ -336,7 +357,7 @@ async def fetch_workday_jobs(
         body = {"appliedFacets": {}, "limit": limit, "offset": offset, "searchText": ""}
 
         # Try POST JSON first
-        st_post, payload_post = await _request_json(
+        st_post, payload_post, ra_post = await _request_json_meta(
             session, "POST", api_url, headers=headers, timeout_seconds=timeout_seconds, json_body=body
         )
         if st_post == 200 and isinstance(payload_post, dict):
@@ -345,7 +366,7 @@ async def fetch_workday_jobs(
         else:
             # Fallback GET with searchText present + Workday-safe limit
             get_url = _add_or_replace_query(api_url, offset=str(offset), limit=str(limit), searchText="")
-            st_get, payload_get = await _request_json(
+            st_get, payload_get, ra_get = await _request_json_meta(
                 session,
                 "GET",
                 get_url,
@@ -356,9 +377,12 @@ async def fetch_workday_jobs(
                 safe_url = redact_secrets(get_url)
                 safe_post = redact_secrets(_snippet(payload_post))
                 safe_get = redact_secrets(_snippet(payload_get))
+                retry_after = ra_get if ra_get is not None else ra_post
                 raise ProviderError(
                     f"Workday HTTP {st_get} via GET {safe_url} :: "
-                    f"POST_JSON:{st_post}:{safe_post} | GET:{st_get}:{safe_get}"
+                    f"POST_JSON:{st_post}:{safe_post} | GET:{st_get}:{safe_get}",
+                    status=st_get,
+                    retry_after=retry_after,
                 )
             batch = _extract_jobs_from_payload(payload_get, site)
             jobs.extend(batch)

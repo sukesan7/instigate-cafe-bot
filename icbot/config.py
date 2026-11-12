@@ -287,6 +287,61 @@ class FinancialAlertsConfig:
 
 
 @dataclass(frozen=True)
+class PollIntervalBounds:
+    """Inclusive safe operating bounds for periodic background pollers."""
+
+    min_seconds: int
+    max_seconds: int
+    allow_zero: bool = False
+    default_seconds: int = 120
+
+    def is_valid(self, value: int) -> bool:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return False
+        if self.allow_zero and value == 0:
+            return True
+        return self.min_seconds <= value <= self.max_seconds
+
+    def clamp(self, value: int, *, inherited: int | None = None) -> int:
+        v = int(value)
+        if v <= 0 and inherited is not None and inherited > 0:
+            v = int(inherited)
+        if self.allow_zero and v == 0:
+            return 0
+        if v <= 0:
+            v = self.default_seconds
+        return max(self.min_seconds, min(v, self.max_seconds))
+
+
+POLL_INTERVAL_BOUNDS: dict[str, PollIntervalBounds] = {
+    "ttc_poll_seconds": PollIntervalBounds(
+        min_seconds=30, max_seconds=86400, allow_zero=False, default_seconds=120
+    ),
+    "go_poll_seconds": PollIntervalBounds(
+        min_seconds=60, max_seconds=86400, allow_zero=False, default_seconds=180
+    ),
+    "jobs_poll_seconds": PollIntervalBounds(
+        min_seconds=60, max_seconds=86400, allow_zero=True, default_seconds=600
+    ),
+    "workday_poll_seconds": PollIntervalBounds(
+        min_seconds=60, max_seconds=86400, allow_zero=True, default_seconds=600
+    ),
+    "market_watch_poll_seconds": PollIntervalBounds(
+        min_seconds=10, max_seconds=86400, allow_zero=False, default_seconds=60
+    ),
+    "btc_watch_poll_seconds": PollIntervalBounds(
+        min_seconds=30, max_seconds=86400, allow_zero=False, default_seconds=300
+    ),
+}
+
+
+@dataclass(frozen=True)
+class SchedulerConfig:
+    task_startup_jitter_seconds: float = 15.0
+    task_max_backoff_seconds: float = 1800.0
+
+
+@dataclass(frozen=True)
 class SportsConfig:
     odds_api_key: str = ""
     sports_rss_nba: str = ""
@@ -438,6 +493,8 @@ class Settings:
     # Dev & Runtime Safeguard
     force_guild_resync: bool = False
     allow_gateway: bool = False
+    task_startup_jitter_seconds: float = 15.0
+    task_max_backoff_seconds: float = 1800.0
 
     # Economy
     daily_claim_amount: int = 100
@@ -636,6 +693,13 @@ class Settings:
             sports_rss_boxing=self.sports_rss_boxing,
         )
 
+    @property
+    def scheduler(self) -> SchedulerConfig:
+        return SchedulerConfig(
+            task_startup_jitter_seconds=self.task_startup_jitter_seconds,
+            task_max_backoff_seconds=self.task_max_backoff_seconds,
+        )
+
     @classmethod
     def from_components(
         cls,
@@ -649,6 +713,7 @@ class Settings:
         transit: TransitConfig | None = None,
         financial: FinancialAlertsConfig | None = None,
         sports: SportsConfig | None = None,
+        scheduler: SchedulerConfig | None = None,
     ) -> Settings:
         """Assemble a composite ``Settings`` instance from typed sub-configs."""
         d = discord or DiscordConfig()
@@ -660,6 +725,7 @@ class Settings:
         t = transit or TransitConfig()
         f = financial or FinancialAlertsConfig()
         sp = sports or SportsConfig()
+        sc = scheduler or SchedulerConfig()
         return cls(
             token=d.token,
             guild_id=d.guild_id,
@@ -673,6 +739,8 @@ class Settings:
             embed_footer_text=d.embed_footer_text,
             force_guild_resync=d.force_guild_resync,
             allow_gateway=d.allow_gateway,
+            task_startup_jitter_seconds=sc.task_startup_jitter_seconds,
+            task_max_backoff_seconds=sc.task_max_backoff_seconds,
             odds_api_key=sp.odds_api_key,
             sports_rss_nba=sp.sports_rss_nba,
             sports_rss_nfl=sp.sports_rss_nfl,
@@ -812,7 +880,11 @@ class Settings:
 
         go_chan = int(self.go_alerts_channel_id or 0) or int(self.ttc_alerts_channel_id or 0)
         mw_chan = int(self.market_watch_channel_id or 0) or int(self.stock_channel_id or 0)
-        dr_chan = int(self.market_daily_report_channel_id or 0) or int(self.stock_channel_id or 0)
+        dr_chan = (
+            int(self.market_daily_report_channel_id or 0)
+            or int(self.market_watch_channel_id or 0)
+            or int(self.stock_channel_id or 0)
+        )
         btc_chan = (
             int(self.btc_watch_channel_id or 0)
             or int(self.market_watch_channel_id or 0)
@@ -1020,17 +1092,36 @@ class Settings:
             _err("grades_db_path", "grades_db_path must not be empty.")
 
         # Bounds
-        poll_fields = (
-            ("ttc_poll_seconds", self.ttc_poll_seconds),
-            ("go_poll_seconds", self.go_poll_seconds),
-            ("jobs_poll_seconds", self.jobs_poll_seconds),
-            ("workday_poll_seconds", self.workday_poll_seconds),
-            ("market_watch_poll_seconds", self.market_watch_poll_seconds),
-            ("btc_watch_poll_seconds", self.btc_watch_poll_seconds),
-        )
-        for fname, val in poll_fields:
-            if val < 0:
-                _err(fname, f"{fname} must be >= 0 (got {val}).")
+        for fname, bounds in POLL_INTERVAL_BOUNDS.items():
+            val = getattr(self, fname)
+            if not bounds.is_valid(val):
+                zero_note = "0 (disabled) or " if bounds.allow_zero else ""
+                _err(
+                    fname,
+                    (
+                        f"{fname} must be {zero_note}between {bounds.min_seconds} and "
+                        f"{bounds.max_seconds} seconds (got {val})."
+                    ),
+                )
+
+        if (
+            not math.isfinite(self.task_startup_jitter_seconds)
+            or self.task_startup_jitter_seconds < 0.0
+            or self.task_startup_jitter_seconds > 300.0
+        ):
+            _err(
+                "task_startup_jitter_seconds",
+                "task_startup_jitter_seconds must be between 0 and 300 seconds.",
+            )
+        if (
+            not math.isfinite(self.task_max_backoff_seconds)
+            or self.task_max_backoff_seconds < 30.0
+            or self.task_max_backoff_seconds > 86400.0
+        ):
+            _err(
+                "task_max_backoff_seconds",
+                "task_max_backoff_seconds must be between 30 and 86400 seconds.",
+            )
 
         if self.workday_timeout_seconds < 1:
             _err("workday_timeout_seconds", "workday_timeout_seconds must be >= 1.")
@@ -1337,6 +1428,12 @@ class Settings:
 
         force_guild_resync = _parse_bool_field("FORCE_GUILD_RESYNC", "force_guild_resync", False)
         allow_gateway = _parse_bool_field("ICBOT_ALLOW_GATEWAY", "allow_gateway", False)
+        task_startup_jitter_seconds = _parse_float_field(
+            "TASK_STARTUP_JITTER_SECONDS", "task_startup_jitter_seconds", 15.0
+        )
+        task_max_backoff_seconds = _parse_float_field(
+            "TASK_MAX_BACKOFF_SECONDS", "task_max_backoff_seconds", 1800.0
+        )
 
         daily_claim_amount = _parse_int_field("DAILY_CLAIM_AMOUNT", "daily_claim_amount", 100)
 
@@ -1477,6 +1574,8 @@ class Settings:
             workday_timeout_seconds=workday_timeout_seconds,
             force_guild_resync=force_guild_resync,
             allow_gateway=allow_gateway,
+            task_startup_jitter_seconds=task_startup_jitter_seconds,
+            task_max_backoff_seconds=task_max_backoff_seconds,
             daily_claim_amount=daily_claim_amount,
             bj_starting_bankroll=bj_starting_bankroll,
             bj_dealer_hits_soft_17=bj_dealer_hits_soft_17,

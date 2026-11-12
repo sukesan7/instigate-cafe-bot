@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import aiohttp
 
-from icbot.errors import ProviderError
+from icbot.errors import ProviderError, parse_retry_after
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -63,7 +63,12 @@ async def resolve_account_id(
 
     async with session.get(url, params=params, timeout=timeout, headers=headers) as resp:
         if resp.status == 429:
-            raise TTCFetchError("Rate limited resolving account id (429). Increase TTC_POLL_SECONDS.")
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"))
+            raise TTCFetchError(
+                "Rate limited resolving account id (429). Increase TTC_POLL_SECONDS.",
+                status=resp.status,
+                retry_after=retry_after,
+            )
         resp.raise_for_status()
         data = await resp.json(content_type=None)
 
@@ -126,11 +131,22 @@ async def fetch_account_status_items(
 
     async with session.get(url, params=params, timeout=timeout, headers=headers) as resp:
         if resp.status == 401 or resp.status == 403:
-            raise TTCFetchError(f"Instance forbids statuses API ({resp.status}). Try another base instance.")
+            raise TTCFetchError(
+                f"Instance forbids statuses API ({resp.status}). Try another base instance.",
+                status=resp.status,
+            )
         if resp.status == 404:
-            raise TTCFetchError("Account statuses not found (404). Account id may be wrong.")
+            raise TTCFetchError(
+                "Account statuses not found (404). Account id may be wrong.",
+                status=resp.status,
+            )
         if resp.status == 429:
-            raise TTCFetchError("Rate limited fetching statuses (429). Increase TTC_POLL_SECONDS.")
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"))
+            raise TTCFetchError(
+                "Rate limited fetching statuses (429). Increase TTC_POLL_SECONDS.",
+                status=resp.status,
+                retry_after=retry_after,
+            )
         resp.raise_for_status()
         data = await resp.json(content_type=None)
 

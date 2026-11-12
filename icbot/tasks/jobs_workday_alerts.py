@@ -20,6 +20,7 @@ from icbot.services.jobs_workday_client import WorkdaySite, fetch_workday_jobs, 
 from icbot.tasks.job_alerts import (
     _classify,
     _has_seen,
+    _looks_like_not_found,
     _mark_seen,
     _pick_bootstrap_sample_workday,
     _resolve_sendable_channel,
@@ -106,7 +107,7 @@ async def _scoped_workday_session(
         yield created
 
 
-async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
+async def poll_and_post_workday_jobs(bot: discord.Client, *, raise_on_error: bool = False) -> None:
     """Poll Workday sites and post new matching jobs into the jobs channel.
 
     - Uses the SAME `job_seen` table as Greenhouse/Lever so dedupe is unified.
@@ -147,6 +148,8 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
     timeout_seconds = int(getattr(settings, "workday_timeout_seconds", 12) or 12)
 
     posted = 0
+    succeeded_sites = 0
+    last_transient_err: BaseException | None = None
     bad_sources = container.workday_bad_sources
     existing_bad = getattr(bot, "_workday_bad_sources", None)
     if isinstance(existing_bad, set) and existing_bad is not bad_sources:
@@ -182,9 +185,20 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                 ValueError,
                 TypeError,
             ) as e:
-                bad_sources.add(src)
+                # Only blacklist permanent misconfiguration / 404 sources, never transient timeouts or 429/5xx.
+                is_permanent = (
+                    _looks_like_not_found(e)
+                    or "heuristic failed" in str(e).lower()
+                    or (isinstance(e, ValueError) and not isinstance(e, json.JSONDecodeError))
+                )
+                if is_permanent:
+                    bad_sources.add(src)
+                else:
+                    last_transient_err = e
                 print(f"[JOBS] workday fetch failed ({site.label}): {format_exception_safe(e, secrets)}")
                 continue
+
+            succeeded_sites += 1
 
             # Refresh cache if the discovered/used URL works
             try:
@@ -203,7 +217,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
             # Baseline behavior: avoid spamming old jobs on first-ever run per source
             if not await _source_has_any(db, src):
                 if not bootstrap_post:
-                    await _mark_seen(db, jobs, clock=container.clock)
+                    await _mark_seen(db, jobs, clock=container.clock, container=container)
                     print(f"[JOBS] baseline checkpointed {len(jobs)} jobs for {src} (no bootstrap post).")
                     continue
 
@@ -230,7 +244,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                     await channel.send(embed=emb)
                     posted += 1
 
-                await _mark_seen(db, jobs, clock=container.clock)
+                await _mark_seen(db, jobs, clock=container.clock, container=container)
 
                 if sample:
                     print(
@@ -262,7 +276,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                     kw_deny=kw_deny,
                     require_early_career=require_early_career,
                 ):
-                    await _mark_seen(db, [j], clock=container.clock)
+                    await _mark_seen(db, [j], clock=container.clock, container=container)
                     continue
 
                 cats = _classify(j.text_blob) or ["General"]
@@ -279,7 +293,10 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                 await channel.send(embed=emb)
                 posted += 1
                 posts_left -= 1
-                await _mark_seen(db, [j], clock=container.clock)
+                await _mark_seen(db, [j], clock=container.clock, container=container)
+
+    if raise_on_error and succeeded_sites == 0 and last_transient_err is not None:
+        raise last_transient_err
 
     if posted:
         print(f"[JOBS] workday cycle complete: posted={posted}")

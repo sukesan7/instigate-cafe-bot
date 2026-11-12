@@ -6,7 +6,7 @@ from typing import Any
 
 import aiohttp
 
-from icbot.errors import ProviderError, redact_secrets
+from icbot.errors import ProviderError, parse_retry_after, redact_secrets
 
 """Crypto Fear & Greed Index (alternative.me).
 
@@ -67,7 +67,12 @@ async def fetch_fear_greed(*, session: aiohttp.ClientSession | None = None) -> F
         if r.status != 200:
             txt = await r.text(errors="ignore")
             safe_txt = redact_secrets(txt[:200])
-            raise ProviderError(f"fng fetch failed status={r.status} body={safe_txt!r}")
+            retry_after = parse_retry_after(r.headers.get("Retry-After"))
+            raise ProviderError(
+                f"fng fetch failed status={r.status} body={safe_txt!r}",
+                status=r.status,
+                retry_after=retry_after,
+            )
         data = await r.json()
 
     items = (data or {}).get("data") or []

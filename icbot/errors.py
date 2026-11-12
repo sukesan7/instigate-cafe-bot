@@ -8,7 +8,10 @@ with deterministic secret redaction for logs and user-facing error summaries.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+import time
+from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
 REDACTED = "[REDACTED]"
 
@@ -64,7 +67,20 @@ class ProviderError(BotError, RuntimeError):
     """Raised when an external HTTP or API integration fails cleanly.
 
     Inherits ``RuntimeError`` for backwards compatibility with legacy callers and tests.
+    Optionally carries ``status`` (HTTP status code) and ``retry_after`` (seconds)
+    so supervised pollers can apply RFC-compliant backoff without coupling to transport classes.
     """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        status: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.retry_after = retry_after
 
 
 class InsufficientBalanceError(BotError, RuntimeError):
@@ -118,6 +134,84 @@ def safe_error_summary(
     if max_len > 3 and len(msg) > max_len:
         msg = msg[: max_len - 1].rstrip() + "…"
     return msg
+
+
+def parse_retry_after(raw: str | int | float | None, *, now: float | None = None) -> float | None:
+    """Parse HTTP ``Retry-After`` (delta-seconds or IMF-fixdate) into non-negative seconds."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        val = float(raw)
+        if val != val or val in (float("inf"), float("-inf")):
+            return None
+        return max(0.0, val)
+
+    text = str(raw).strip()
+    if not text:
+        return None
+
+    try:
+        val = float(text)
+    except ValueError:
+        pass
+    else:
+        if val != val or val in (float("inf"), float("-inf")):
+            return None
+        return max(0.0, val)
+
+    try:
+        dt = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    now_ts = float(time.time() if now is None else now)
+    now_dt = datetime.fromtimestamp(now_ts, tz=UTC)
+    return max(0.0, (dt - now_dt).total_seconds())
+
+
+def extract_http_error_info(
+    exc: BaseException, *, now: float | None = None
+) -> tuple[int | None, float | None]:
+    """Extract ``(status, retry_after_seconds)`` from provider, aiohttp, or Discord exceptions."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        status_raw = getattr(cur, "status", None)
+        status = int(status_raw) if isinstance(status_raw, int) and not isinstance(status_raw, bool) else None
+
+        retry_raw = getattr(cur, "retry_after", None)
+        retry_after = parse_retry_after(retry_raw, now=now)
+
+        if retry_after is None:
+            headers = getattr(cur, "headers", None)
+            if isinstance(headers, Mapping):
+                for key in ("Retry-After", "retry-after"):
+                    if key in headers:
+                        retry_after = parse_retry_after(headers[key], now=now)
+                        if retry_after is not None:
+                            break
+            response = getattr(cur, "response", None)
+            resp_headers = getattr(response, "headers", None)
+            if retry_after is None and isinstance(resp_headers, Mapping):
+                for key in ("Retry-After", "retry-after"):
+                    if key in resp_headers:
+                        retry_after = parse_retry_after(resp_headers[key], now=now)
+                        if retry_after is not None:
+                            break
+
+        if status is not None or retry_after is not None:
+            return status, retry_after
+
+        next_exc = getattr(cur, "original", None)
+        if not isinstance(next_exc, BaseException):
+            next_exc = cur.__cause__ or cur.__context__
+        cur = next_exc if isinstance(next_exc, BaseException) else None
+
+    return None, None
 
 
 def format_exception_safe(

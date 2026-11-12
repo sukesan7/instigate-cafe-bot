@@ -20,6 +20,10 @@ async def llm_stop_cmd(interaction: discord.Interaction):
     container = get_container(interaction.client)
     container.llm_killed = True
     cast(Any, interaction.client)._llm_killed = True
+    supervisor = getattr(interaction.client, "supervisor", None)
+    sync_fn = getattr(supervisor, "sync_event_states", None)
+    if callable(sync_fn):
+        sync_fn()
 
     # Store state in DB for persistence across restarts
     db = container.db or getattr(interaction.client, "db", None)
@@ -44,6 +48,10 @@ async def llm_start_cmd(interaction: discord.Interaction):
     container = get_container(interaction.client)
     container.llm_killed = False
     cast(Any, interaction.client)._llm_killed = False
+    supervisor = getattr(interaction.client, "supervisor", None)
+    sync_fn = getattr(supervisor, "sync_event_states", None)
+    if callable(sync_fn):
+        sync_fn()
 
     # Clear state in DB
     db = container.db or getattr(interaction.client, "db", None)

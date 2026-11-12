@@ -184,7 +184,7 @@ async def _scoped_http_session(session: aiohttp.ClientSession | None):
     if session is not None and not session.closed:
         yield session
         return
-    async with aiohttp.ClientSession() as temp_session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as temp_session:
         yield temp_session
 
 

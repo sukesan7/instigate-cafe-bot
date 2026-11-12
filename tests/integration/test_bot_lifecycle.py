@@ -25,8 +25,12 @@ def _make_lifecycle_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "guild_id": 900000000000000001,
         "user_command_channel_id": 900000000000000020,
         "ttc_alerts_channel_id": 900000000000000030,
+        "ttc_mastodon_base": "https://mastodon.example.invalid",
+        "ttc_mastodon_acct": "TTCnotices",
         "job_alerts_channel_id": 900000000000000040,
+        "greenhouse_boards": ["acme"],
         "db_path": str(tmp_path / "lifecycle.db"),
+        "task_startup_jitter_seconds": 0.0,
         "allow_gateway": False,
     }
     defaults.update(overrides)
@@ -95,9 +99,10 @@ async def test_setup_hook_initializes_once_and_repeated_on_ready_is_reconnect_sa
     assert sync_targets == [900000000000000001]
     assert clear_calls == 0
     assert bot.http_session is not None and not bot.http_session.closed
-    assert yahoo_quotes._SESSION is not None and not yahoo_quotes._SESSION.closed
-    assert btc_esplora._SESSION is not None and not btc_esplora._SESSION.closed
-    assert crypto_fng._SESSION is not None and not crypto_fng._SESSION.closed
+    assert bot.services.http_session is bot.http_session
+    assert yahoo_quotes._SESSION is None
+    assert btc_esplora._SESSION is None
+    assert crypto_fng._SESSION is None
     assert set(bot.background_tasks.keys()) == {"ttc", "jobs"}
 
     # Tasks must wait_until_ready() inside their body before executing poller cycles
@@ -127,13 +132,8 @@ async def test_setup_hook_initializes_once_and_repeated_on_ready_is_reconnect_sa
     await asyncio.sleep(0.05)
     assert poller_runs >= 2
 
-    owned_sessions = [
-        bot.http_session,
-        yahoo_quotes._SESSION,
-        btc_esplora._SESSION,
-        crypto_fng._SESSION,
-    ]
-    assert all(s is not None and not s.closed for s in owned_sessions)
+    owned_session = bot.http_session
+    assert owned_session is not None and not owned_session.closed
 
     await bot.close()
 
@@ -142,8 +142,9 @@ async def test_setup_hook_initializes_once_and_repeated_on_ready_is_reconnect_sa
     assert bot.setup_complete is False
     assert bot.background_tasks == {}
     assert all(task.done() and task.cancelled() for task in initial_tasks.values())
-    assert all(s is not None and s.closed for s in owned_sessions)
+    assert owned_session.closed is True
     assert bot.http_session is None
+    assert bot.services.http_session is None
     assert yahoo_quotes._SESSION is None
     assert btc_esplora._SESSION is None
     assert crypto_fng._SESSION is None
@@ -289,6 +290,8 @@ async def test_startup_failure_rolls_back_tasks_sessions_and_db(
     assert len(created_tasks) == 2
     assert all(task.done() and task.cancelled() for task in created_tasks)
     assert bot.http_session is None
+    assert bot.services.http_session is None
+    assert bot.services.go_http_session is None
     assert yahoo_quotes._SESSION is None
     assert btc_esplora._SESSION is None
     assert crypto_fng._SESSION is None
@@ -391,6 +394,7 @@ async def test_all_seven_background_tasks_wait_until_ready_and_cancel_cleanly(
         market_daily_report_enabled=True,
         btc_watch_enabled=True,
         btc_watch_channel_id=900000000000000060,
+        btc_watch_addresses=["bc1qsyntheticlifecycle00000000000"],
     )
     bot = create_bot(settings, register_commands=False, sync_commands=False)
 
@@ -441,6 +445,9 @@ async def test_all_seven_background_tasks_wait_until_ready_and_cancel_cleanly(
     for key in ("ttc", "go", "jobs", "workday", "market_watch", "btc"):
         assert poller_hits[key] >= 1
 
+    health = bot.task_health()
+    assert expected_tasks | {"llm_assistant"} == set(health.keys())
+
     await bot.close()
     assert bot.background_tasks == {}
     assert all(task.done() and task.cancelled() for task in tasks_snapshot.values())
@@ -455,26 +462,29 @@ async def test_partial_http_session_failure_rolls_back_and_allows_clean_retry(
         tmp_path,
         ttc_alerts_channel_id=0,
         job_alerts_channel_id=0,
+        go_ssl_verify=False,
     )
     db = Database(settings.db_path)
     bot = create_bot(settings, db=db, register_commands=False, sync_commands=False)
 
-    orig_btc_init = btc_esplora.init_session
+    orig_go_init = bot.services.ensure_go_http_session
     should_fail = True
 
-    async def _flaky_btc_init():
+    async def _flaky_go_init(eff_settings=None):
         if should_fail:
-            raise OSError("injected esplora session init failure")
-        return await orig_btc_init()
+            raise OSError("injected go session init failure")
+        return await orig_go_init(eff_settings)
 
-    monkeypatch.setattr(btc_esplora, "init_session", _flaky_btc_init)
+    monkeypatch.setattr(bot.services, "ensure_go_http_session", _flaky_go_init)
 
-    with pytest.raises(OSError, match="injected esplora session init failure"):
+    with pytest.raises(OSError, match="injected go session init failure"):
         await bot.setup_hook()
 
-    # Already-opened http_session, yahoo_quotes._SESSION, and db must all be rolled back cleanly
+    # Already-opened shared http_session and db must all be rolled back cleanly
     assert bot.setup_complete is False
     assert bot.http_session is None
+    assert bot.services.http_session is None
+    assert bot.services.go_http_session is None
     assert yahoo_quotes._SESSION is None
     assert btc_esplora._SESSION is None
     assert crypto_fng._SESSION is None
@@ -486,11 +496,18 @@ async def test_partial_http_session_failure_rolls_back_and_allows_clean_retry(
     assert bot.setup_complete is True
     assert db.is_closed is False
     assert bot.http_session is not None and not bot.http_session.closed
-    assert yahoo_quotes._SESSION is not None and not yahoo_quotes._SESSION.closed
-    assert btc_esplora._SESSION is not None and not btc_esplora._SESSION.closed
-    assert crypto_fng._SESSION is not None and not crypto_fng._SESSION.closed
+    assert bot.services.http_session is bot.http_session
+    assert bot.services.go_http_session is not None and not bot.services.go_http_session.closed
+    assert yahoo_quotes._SESSION is None
+    assert btc_esplora._SESSION is None
+    assert crypto_fng._SESSION is None
 
+    shared_sess = bot.http_session
+    go_sess = bot.services.go_http_session
     await bot.close()
+    assert shared_sess.closed is True
+    assert go_sess.closed is True
+    assert bot.services.go_http_session is None
 
 
 async def test_command_tree_on_error_handles_cooldown_checkfailure_and_unexpected_error(

@@ -5,6 +5,7 @@ import discord
 from icbot.app import ic
 from icbot.container import resolve_guild_settings
 from icbot.embeds import system as system_embed
+from icbot.errors import redact_secrets
 
 
 @ic.command(name="serverinfo", description="Display server information.")
@@ -103,8 +104,26 @@ async def botinfo(interaction: discord.Interaction):
     fields = [
         ("LLM Engine", f"Powered by **{llm_model}**", False),
         ("Integration Readiness", "\n".join(cap_lines) or "Standard offline features active", False),
-        ("Source", "Internal Instigate Cafe Repository", False),
     ]
+    task_health_fn = getattr(interaction.client, "task_health", None)
+    if callable(task_health_fn):
+        health_map = task_health_fn()
+        if isinstance(health_map, dict) and health_map:
+            secrets = settings.secret_values()
+            t_lines = [
+                redact_secrets(
+                    th.to_summary_line()
+                    if hasattr(th, "to_summary_line")
+                    else f"• `{getattr(th, 'name', 'task')}`: **{getattr(th, 'state', 'unknown')}**",
+                    secrets,
+                )
+                for th in health_map.values()
+            ]
+            rendered_tasks = "\n".join(t_lines)
+            if len(rendered_tasks) > 1020:
+                rendered_tasks = rendered_tasks[:1019].rstrip() + "…"
+            fields.append(("Background Tasks", rendered_tasks, False))
+    fields.append(("Source", "Internal Instigate Cafe Repository", False))
 
     embed = system_embed(
         settings, title="Bot Information", summary=summary, fields=fields, footer_hint="Bot Information"
