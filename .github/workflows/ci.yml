@@ -63,13 +63,13 @@ jobs:
           uv run pre-commit validate-config .pre-commit-config.yaml
           uv run pre-commit run --all-files
 
-      - name: Check Ruff lint and formatting (scoped paths)
+      - name: Check Ruff lint and formatting
         run: |
-          uv run ruff check tests scripts/manual tools/check_syntax.py tools/smoke_offline.py
-          uv run ruff format --check tests scripts/manual tools/check_syntax.py tools/smoke_offline.py
+          uv run ruff check .
+          uv run ruff format --check .
 
-      - name: Run incremental mypy gate on core modules
-        run: make typecheck PYTHON="uv run python" MYPY="uv run mypy"
+      - name: Run mypy type check
+        run: uv run mypy .
 
       - name: Run offline AST and zero-token import smoke check
         run: uv run python tools/smoke_offline.py

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -81,7 +82,7 @@ def _safe_float(v: Any) -> float | None:
         return None
     try:
         return float(v)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -154,7 +155,7 @@ async def _get_crumb(session: aiohttp.ClientSession, debug: bool) -> str:
 
 def _quotes_from_payload(data: Any) -> dict[str, Quote]:
     out: dict[str, Quote] = {}
-    results = (((data or {}).get("quoteResponse") or {}).get("result") or [])
+    results = ((data or {}).get("quoteResponse") or {}).get("result") or []
     for item in results:
         sym = str(item.get("symbol") or "").strip()
         if not sym:
@@ -258,9 +259,18 @@ async def fetch_quotes(symbols: list[str], *, debug: bool = False) -> dict[str, 
         try:
             part = await _fetch_quotes_chunk(chunk, debug=debug)
             out.update(part)
-        except Exception as e:
+        except (
+            aiohttp.ClientError,
+            TimeoutError,
+            json.JSONDecodeError,
+            RuntimeError,
+            AttributeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as e:
             # Best-effort: keep the rest of the chunks; caller can decide if partial is ok.
             if debug:
-                print(f"[YF] chunk fetch failed: {e!r} chunk={chunk[:5]}...(+{max(0, len(chunk)-5)})")
+                print(f"[YF] chunk fetch failed: {e!r} chunk={chunk[:5]}...(+{max(0, len(chunk) - 5)})")
             continue
     return out

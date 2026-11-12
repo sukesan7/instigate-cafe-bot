@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import discord
 from discord import Interaction
+
 from icbot.config import Settings
 
 
@@ -9,7 +11,6 @@ def _has_allowed_role_id(member: discord.Member, settings: Settings) -> bool:
         return False
     allowed = set(settings.allowed_role_ids)
     return any(r.id in allowed for r in getattr(member, "roles", []))
-
 
 
 def is_admin_or_allowed(interaction: Interaction, settings: Settings) -> bool:
@@ -22,7 +23,4 @@ def is_admin_or_allowed(interaction: Interaction, settings: Settings) -> bool:
         return True
 
     # Preferred: role IDs
-    if _has_allowed_role_id(member, settings):
-        return True
-
-    return False
+    return bool(_has_allowed_role_id(member, settings))

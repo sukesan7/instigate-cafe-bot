@@ -53,10 +53,6 @@ async def test_daily_cooldown_exact_second_boundaries(user_store: UserStore, fro
     assert bal2 == 1200
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-01: UserStore.subtract_balance uses unlocked SELECT-before-UPDATE TOCTOU, allowing concurrent overdrafts. Planned fix: Phase 4.",
-)
 async def test_parallel_subtract_balance_prevents_overdraft_race(user_store: UserStore, frozen_time):
     uid = 800000000000000102
     await user_store.ensure_user(uid, display_name="RaceDebit")
@@ -74,10 +70,6 @@ async def test_parallel_subtract_balance_prevents_overdraft_race(user_store: Use
     assert await user_store.get_balance(uid) == 300
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-02: UserStore.claim_daily uses unlocked SELECT-before-UPDATE TOCTOU, allowing concurrent double-claims. Planned fix: Phase 4.",
-)
 async def test_parallel_claim_daily_awards_exactly_once(user_store: UserStore, frozen_time):
     uid = 800000000000000103
     await user_store.ensure_user(uid, display_name="RaceDaily")
@@ -96,10 +88,6 @@ async def test_parallel_claim_daily_awards_exactly_once(user_store: UserStore, f
 
 
 @pytest.mark.parametrize("bad_amount", [0, -1, -500])
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-03: UserStore.subtract_balance / add_balance do not reject <= 0 amounts; negative subtract credits funds. Planned fix: Phase 4.",
-)
 async def test_user_store_rejects_non_positive_amounts(user_store: UserStore, bad_amount: int):
     uid = 800000000000000104
     await user_store.ensure_user(uid, display_name="NegAmount")
@@ -111,10 +99,6 @@ async def test_user_store_rejects_non_positive_amounts(user_store: UserStore, ba
     assert await user_store.get_balance(uid) == 1000
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-04: Concurrent UserStore.ensure_user on a new user_id raises sqlite3.IntegrityError on duplicate INSERT. Planned fix: Phase 4.",
-)
 async def test_parallel_ensure_user_registration_is_idempotent(user_store: UserStore):
     uid = 800000000000000105
     p1, p2 = await asyncio.gather(
@@ -125,10 +109,6 @@ async def test_parallel_ensure_user_registration_is_idempotent(user_store: UserS
     assert p2.user_id == uid
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-10: BlackjackStore.apply_delta_and_stats performs non-atomic read-modify-write and drops concurrent settlements. Planned fix: Phase 4.",
-)
 async def test_parallel_blackjack_apply_delta_preserves_all_updates(tmp_db: Database):
     store = BlackjackStore(tmp_db, starting_bankroll=1000)
     uid = 800000000000000106

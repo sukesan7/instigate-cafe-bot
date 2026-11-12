@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Iterable, Tuple, Union, Optional
+from collections.abc import Iterable
+
 import discord
 
 from icbot.config import Settings
@@ -17,17 +18,21 @@ _MAX_TITLE = 256
 _MAX_DESC = 4096
 _MAX_FIELD_NAME = 256
 _MAX_FIELD_VALUE = 1024
+_MAX_FIELDS = 25
+_MAX_TOTAL = 6000
 
-Field = Union[Tuple[str, str], Tuple[str, str, bool]]
+Field = tuple[str, str] | tuple[str, str, bool]
 
 
-def _truncate(s: Optional[str], limit: int) -> Optional[str]:
+def _truncate(s: str | None, limit: int) -> str | None:
     if s is None:
         return None
+    if limit <= 0:
+        return ""
     s = str(s)
     if len(s) <= limit:
         return s
-    return s[: max(0, limit - 1)] + "…"
+    return s[: limit - 1] + "…"
 
 
 def _footer_text(settings: Settings, kind: str, footer_hint: str | None) -> str:
@@ -55,14 +60,20 @@ def _base_embed(
     footer_hint: str | None = None,
 ) -> discord.Embed:
     title = _truncate(title, _MAX_TITLE) or " "
-    description = _truncate(description, _MAX_DESC)
     subtitle = (subtitle or "").strip()
 
     if subtitle:
+        prefix = f"*{subtitle}*"
         if description:
-            description = f"*{subtitle}*\n\n{description}"
+            body_budget = _MAX_DESC - len(prefix) - 2
+            if body_budget > 0:
+                description = f"{prefix}\n\n{_truncate(description, body_budget)}"
+            else:
+                description = _truncate(prefix, _MAX_DESC)
         else:
-            description = f"*{subtitle}*"
+            description = _truncate(prefix, _MAX_DESC)
+    else:
+        description = _truncate(description, _MAX_DESC)
 
     e = discord.Embed(
         title=title,
@@ -91,6 +102,8 @@ def _base_embed(
 
 def _add_fields(e: discord.Embed, fields: Iterable[Field]) -> None:
     for item in fields:
+        if len(e.fields) >= _MAX_FIELDS:
+            break
         if not item:
             continue
 
@@ -103,8 +116,18 @@ def _add_fields(e: discord.Embed, fields: Iterable[Field]) -> None:
         if value is None:
             continue
 
-        name_s = _truncate(str(name), _MAX_FIELD_NAME) or " "
-        value_s = _truncate(str(value), _MAX_FIELD_VALUE) or " "
+        remaining = _MAX_TOTAL - len(e)
+        if remaining <= 1:
+            break
+
+        name_s = _truncate(str(name), min(_MAX_FIELD_NAME, remaining)) or " "
+        value_budget = min(_MAX_FIELD_VALUE, remaining - len(name_s))
+        if value_budget <= 0:
+            break
+
+        value_s = _truncate(str(value), value_budget) or " "
+        if len(name_s) + len(value_s) > remaining:
+            break
         e.add_field(name=name_s, value=value_s, inline=bool(inline))
 
 
@@ -196,8 +219,6 @@ def ttc_alert(
     return e
 
 
-
-
 def go_alert(
     settings: Settings,
     *,
@@ -230,18 +251,19 @@ def go_alert(
     _add_fields(e, fields)
     return e
 
+
 def job_alert(
     settings: Settings,
     *,
     # Backwards compatible inputs:
     title_text: str | None = None,
-    title: str | None = None,                 # some callers use title=
+    title: str | None = None,  # some callers use title=
     company: str | None = None,
     location: str | None = None,
     source: str | None = None,
     url: str | None = None,
-    tags: list[str] | None = None,            # preferred name
-    categories: list[str] | None = None,      # alias for tags (some callers use categories=)
+    tags: list[str] | None = None,  # preferred name
+    categories: list[str] | None = None,  # alias for tags (some callers use categories=)
     footer_hint: str | None = None,
 ) -> discord.Embed:
     """
@@ -252,6 +274,7 @@ def job_alert(
       Company, Location, Tags as fields
       Apply: clean markdown link
     """
+
     def _display_label(raw: str) -> str:
         raw = (raw or "").strip()
         if not raw:
@@ -295,4 +318,3 @@ def job_alert(
 
     _add_fields(e, fields)
     return e
-

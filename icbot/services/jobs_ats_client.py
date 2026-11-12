@@ -1,27 +1,32 @@
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class JobPosting:
     """Normalized job posting across multiple ATS providers."""
-    source: str           # e.g. "greenhouse:stripe" or "lever:palantir"
-    external_id: str      # provider job id
-    company: str          # label (board token / site)
+
+    source: str  # e.g. "greenhouse:stripe" or "lever:palantir"
+    external_id: str  # provider job id
+    company: str  # label (board token / site)
     title: str
     location: str
     url: str
     posted_unix: int
-    text_blob: str        # title + team/dept + location (for filtering)
+    text_blob: str  # title + team/dept + location (for filtering)
 
 
 def _now_unix() -> int:
-    return int(datetime.now(tz=timezone.utc).timestamp())
+    return int(datetime.now(tz=UTC).timestamp())
 
 
 def _parse_iso8601_to_unix(value: Any) -> int:
@@ -42,9 +47,9 @@ def _parse_iso8601_to_unix(value: Any) -> int:
             s = s[:-1] + "+00:00"
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         return int(dt.timestamp())
-    except Exception:
+    except (ValueError, TypeError):
         return _now_unix()
 
 
@@ -68,8 +73,8 @@ async def fetch_greenhouse_jobs(
                 text = await r.text()
                 raise RuntimeError(f"Greenhouse HTTP {r.status}: {text[:200]}")
             data = await r.json()
-    except Exception as e:
-        raise RuntimeError(f"Greenhouse fetch failed ({board_token}): {e!r}")
+    except (aiohttp.ClientError, TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
+        raise RuntimeError(f"Greenhouse fetch failed ({board_token}): {e!r}") from e
 
     jobs = data.get("jobs", []) if isinstance(data, dict) else []
     out: list[JobPosting] = []
@@ -85,12 +90,11 @@ async def fetch_greenhouse_jobs(
             url_job = str(j.get("absolute_url") or j.get("url") or "").strip()
 
             depts = []
-            for d in (j.get("departments") or []):
+            for d in j.get("departments") or []:
                 if isinstance(d, dict) and d.get("name"):
                     depts.append(str(d["name"]).strip())
             dept_s = ", ".join([d for d in depts if d])
 
-            content = str(j.get("content") or "")
             posted_unix = _parse_iso8601_to_unix(j.get("updated_at") or j.get("created_at"))
             blob = " ".join([title, dept_s, loc]).strip()
 
@@ -109,7 +113,8 @@ async def fetch_greenhouse_jobs(
                     text_blob=blob,
                 )
             )
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            log.debug("Skipping malformed Greenhouse job (%s): %s", board_token, exc)
             continue
 
     out.sort(key=lambda x: x.posted_unix, reverse=True)
@@ -138,8 +143,8 @@ async def fetch_lever_jobs(
                 text = await r.text()
                 raise RuntimeError(f"Lever HTTP {r.status}: {text[:200]}")
             data = await r.json()
-    except Exception as e:
-        raise RuntimeError(f"Lever fetch failed ({site}): {e!r}")
+    except (aiohttp.ClientError, TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
+        raise RuntimeError(f"Lever fetch failed ({site}): {e!r}") from e
 
     jobs = data if isinstance(data, list) else []
     out: list[JobPosting] = []
@@ -160,12 +165,6 @@ async def fetch_lever_jobs(
             else:
                 team = dept = commitment = ""
 
-            content = ""
-            if j.get("descriptionPlain"):
-                content = str(j.get("descriptionPlain") or "")
-            elif j.get("description"):
-                content = str(j.get("description") or "")
-
             posted_unix = _parse_iso8601_to_unix(j.get("createdAt"))
             blob = " ".join([title, team, dept, commitment, loc]).strip()
 
@@ -184,7 +183,8 @@ async def fetch_lever_jobs(
                     text_blob=blob,
                 )
             )
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            log.debug("Skipping malformed Lever job (%s): %s", site, exc)
             continue
 
     out.sort(key=lambda x: x.posted_unix, reverse=True)

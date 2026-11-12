@@ -138,10 +138,6 @@ async def test_interaction_single_response_protocol(make_interaction):
         await inter3.response.edit_message(content="twice")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-09: _base_embed prepends subtitle after 4096-char truncation, overflowing Discord 4096-char description cap. Planned fix: Phase 4.",
-)
 def test_embed_description_with_subtitle_enforces_discord_4096_limit(synthetic_settings: Settings):
     emb = embeds.system(
         synthetic_settings,
@@ -152,10 +148,6 @@ def test_embed_description_with_subtitle_enforces_discord_4096_limit(synthetic_s
     assert len(emb.description or "") <= 4096
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-09: _add_fields does not cap embeds at Discord's 25-field maximum. Planned fix: Phase 4.",
-)
 def test_embed_enforces_discord_25_field_limit(synthetic_settings: Settings):
     emb = embeds.system(
         synthetic_settings,
@@ -166,10 +158,6 @@ def test_embed_enforces_discord_25_field_limit(synthetic_settings: Settings):
     assert len(emb.fields) <= 25
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-09: embed builders do not enforce Discord's 6000 combined character limit. Planned fix: Phase 4.",
-)
 def test_embed_enforces_discord_6000_total_char_limit(synthetic_settings: Settings):
     emb = embeds.system(
         synthetic_settings,

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 import discord
 
 from icbot.app import ic
@@ -10,12 +13,10 @@ from icbot.tasks.market_daily_report import (
 
 
 def _now_stamp(tz_name: str) -> str:
-    from datetime import datetime
     try:
-        from zoneinfo import ZoneInfo
         return datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M")
-    except Exception:
-        return datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    except (ZoneInfoNotFoundError, KeyError, ValueError):
+        return datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
 @ic.command(name="report", description="Generate the market report right now.")

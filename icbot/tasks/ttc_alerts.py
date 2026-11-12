@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Optional
+import sqlite3
 
 import aiohttp
+import aiosqlite
 import discord
 
 from icbot.embeds import ttc_alert as ttc_alert_embed
 from icbot.services.ttc_client import TTCFetchError, TTCItem, fetch_account_status_items, resolve_account_id
-
 
 _MAJOR_PATTERNS = [
     # "Hard" major-disruption signals
@@ -39,7 +39,6 @@ _MAJOR_PATTERNS = [
     r"\bsignal\s+problem\b",
     r"\bshuttle\b",
     r"\bbypass\b",
-
     # "Soft" major-disruption signals (these show up a lot in the live feed)
     r"\bdelay\b",
     r"\bdelays\b",
@@ -69,13 +68,13 @@ async def _set_meta(db, key: str, value: str) -> None:
     await db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
 
-async def _resolve_channel(bot: discord.Client, channel_id: int) -> Optional[discord.abc.Messageable]:
+async def _resolve_channel(bot: discord.Client, channel_id: int) -> discord.abc.Messageable | None:
     ch = bot.get_channel(channel_id)
     if ch is not None:
         return ch  # type: ignore[return-value]
     try:
         return await bot.fetch_channel(channel_id)  # type: ignore[return-value]
-    except Exception:
+    except (discord.DiscordException, LookupError, ValueError):
         return None
 
 
@@ -125,7 +124,14 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
             try:
                 account_id = await resolve_account_id(session, api_base, acct)
                 await _set_meta(db, "ttc_account_id", account_id)
-            except Exception as e:
+            except (
+                TTCFetchError,
+                aiohttp.ClientError,
+                TimeoutError,
+                aiosqlite.Error,
+                sqlite3.Error,
+                ValueError,
+            ) as e:
                 print(f"[TTC] resolve account id failed: {e!r}")
                 return
 
@@ -134,7 +140,7 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
 
         # Fetch with small retry on transient issues
         items: list[TTCItem] = []
-        last_err: Optional[BaseException] = None
+        last_err: BaseException | None = None
         for attempt in range(3):
             try:
                 items = await fetch_account_status_items(
@@ -149,7 +155,7 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
                 )
                 last_err = None
                 break
-            except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            except (TimeoutError, aiohttp.ClientError) as e:
                 last_err = e
                 await asyncio.sleep(1.5 * (attempt + 1))
             except TTCFetchError as e:
@@ -163,13 +169,15 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
 
         if debug:
             major_ct = sum(1 for it in items if _is_major(it))
-            since_preview = (last_id[-8:] if last_id else 'none')
+            since_preview = last_id[-8:] if last_id else "none"
             print(
                 f"[TTC] poll: fetched={len(items)} major={major_ct} "
                 f"level={poll_level} include_replies={include_replies} since_id={since_preview}"
             )
-            if len(items) > 0 and poll_level == 'major' and major_ct == 0:
-                print("[TTC] NOTE: items fetched but none matched MAJOR patterns; set TTC_ALERT_LEVEL=all to see them.")
+            if len(items) > 0 and poll_level == "major" and major_ct == 0:
+                print(
+                    "[TTC] NOTE: items fetched but none matched MAJOR patterns; set TTC_ALERT_LEVEL=all to see them."
+                )
 
         if not items:
             return
@@ -198,7 +206,7 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
                         await channel.send(embed=embed)  # type: ignore[call-arg]
                         posted = True
                         break
-                    except Exception as e:
+                    except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
                         print(f"[TTC] post failed: {e!r}")
                         break
 
@@ -234,6 +242,6 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
 
             try:
                 await channel.send(embed=embed)  # type: ignore[call-arg]
-            except Exception as e:
+            except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
                 print(f"[TTC] post failed: {e!r}")
                 return

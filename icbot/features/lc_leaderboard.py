@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
-from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+import logging
 
 import discord
-from discord import app_commands
-from zoneinfo import ZoneInfo
 
 from icbot.app import ic
-from icbot.permissions import is_admin_or_allowed
 from icbot.embeds import system as system_embed
+
+log = logging.getLogger(__name__)
 
 # ==========
 # Constants
@@ -23,6 +20,7 @@ VIEW_TIMEOUT_SECONDS = 5 * 60  # 5 minutes
 # ==========
 # UI (Buttons)
 # ==========
+
 
 class LBState:
     def __init__(self, page: int = 0):
@@ -50,7 +48,9 @@ class LeaderboardView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("❌ Only the command author can use these buttons.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Only the command author can use these buttons.", ephemeral=True
+            )
             return False
         return True
 
@@ -61,14 +61,14 @@ class LeaderboardView(discord.ui.View):
         pages = self._page_count()
         # Ensure page is clamped
         self.state.page = max(0, min(self.state.page, pages - 1))
-        
+
         self.prev_btn.disabled = self.state.page <= 0
         self.next_btn.disabled = self.state.page >= (pages - 1)
 
     def _build_embed(self) -> discord.Embed:
         pages = self._page_count()
         offset = self.state.page * PAGE_SIZE
-        page_snaps = self.snaps[offset:offset + PAGE_SIZE]
+        page_snaps = self.snaps[offset : offset + PAGE_SIZE]
 
         start_rank = offset + 1
         if page_snaps:
@@ -92,7 +92,7 @@ class LeaderboardView(discord.ui.View):
         )
         return embed
 
-    def _renew(self) -> "LeaderboardView":
+    def _renew(self) -> LeaderboardView:
         v = LeaderboardView(
             owner_id=self.owner_id,
             settings=self.settings,
@@ -117,9 +117,8 @@ class LeaderboardView(discord.ui.View):
         if self.message:
             try:
                 await self.message.edit(view=self)
-            except Exception:
-                pass
-
+            except (discord.HTTPException, RuntimeError) as exc:
+                log.debug("Ignoring leaderboard timeout edit failure: %s", exc)
 
     # ---- Buttons ----
 
@@ -140,6 +139,7 @@ class LeaderboardView(discord.ui.View):
 # Commands
 # ==========
 
+
 async def _send_interactive_leaderboard(interaction: discord.Interaction) -> None:
     if not interaction.guild:
         await interaction.response.send_message("This command only works in a server.", ephemeral=True)
@@ -151,6 +151,7 @@ async def _send_interactive_leaderboard(interaction: discord.Interaction) -> Non
     db = interaction.client.db  # type: ignore[attr-defined]
 
     from icbot.services.fun_market import FunMarketStore
+
     fm = FunMarketStore(
         db,
         starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),

@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import pathlib
 import re
 import time
-from typing import Iterable, Optional, Sequence, Tuple
+from collections.abc import Iterable, Sequence
+from typing import Any, cast
 
+import aiohttp
 import discord
 
 from icbot.config import Settings
 from icbot.services.gemini_client import GeminiError, gemini_generate_text
 
+log = logging.getLogger(__name__)
 
 _MENTION_RE_TEMPLATE = r"<@!?{bot_id}>"
 
@@ -28,7 +32,8 @@ _DEFAULT_LORE_PATHS = (
     "tools/lore.example.json",
 )
 
-def _find_lore_path(settings: Settings) -> Optional[str]:
+
+def _find_lore_path(settings: Settings) -> str | None:
     # Prefer explicit settings/env, then common defaults.
     candidates: list[str] = []
     sp = str(getattr(settings, "lore_path", "") or "").strip()
@@ -52,7 +57,8 @@ def _find_lore_path(settings: Settings) -> Optional[str]:
                 alt = (repo_root / pp).resolve()
                 if alt.exists():
                     return str(alt)
-        except Exception:
+        except (OSError, RuntimeError, ValueError) as exc:
+            log.debug("Skipping lore path candidate %r: %s", p, exc)
             continue
     return None
 
@@ -66,14 +72,18 @@ def _load_lore_entries(bot: discord.Client, settings: Settings) -> list[dict]:
     cache = getattr(bot, "_lore_cache", None)
     if not isinstance(cache, dict):
         cache = {}
-        setattr(bot, "_lore_cache", cache)
+        cast(Any, bot)._lore_cache = cache
 
     try:
         p = pathlib.Path(lore_path)
         mtime = p.stat().st_mtime
         cached = cache.get(lore_path)
-        if isinstance(cached, dict) and cached.get("mtime") == mtime and isinstance(cached.get("entries"), list):
-            return cached["entries"]  # type: ignore[return-value]
+        if (
+            isinstance(cached, dict)
+            and cached.get("mtime") == mtime
+            and isinstance(cached.get("entries"), list)
+        ):
+            return cast(list[dict[Any, Any]], cached["entries"])
 
         raw = p.read_text(encoding="utf-8", errors="ignore")
         # Only JSON is supported in-code to avoid extra deps.
@@ -102,7 +112,8 @@ def _load_lore_entries(bot: discord.Client, settings: Settings) -> list[dict]:
 
         cache[lore_path] = {"mtime": mtime, "entries": cleaned}
         return cleaned
-    except Exception:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        log.debug("Failed loading lore from %s: %s", lore_path, exc)
         return []
 
 
@@ -122,7 +133,8 @@ def _match_lore(entries: list[dict], text_blob: str, *, max_items: int = 5) -> l
         for trig in triggers:
             try:
                 trig_s = str(trig).strip().lower()
-            except Exception:
+            except (AttributeError, TypeError, ValueError) as exc:
+                log.debug("Skipping invalid lore trigger %r: %s", trig, exc)
                 continue
             if trig_s and trig_s in t:
                 hits += 1
@@ -161,7 +173,6 @@ def _build_lore_snippet(matches: list[dict], *, max_chars: int = 1400) -> str:
     return out
 
 
-
 def _strip_bot_mentions(text: str, bot_id: int) -> str:
     """Remove <@id> and <@!id> mentions for this bot from a message."""
     if not text:
@@ -190,12 +201,13 @@ def _format_context_lines(msgs: Iterable[discord.Message]) -> list[str]:
                     parts.append(f"[embed title] {title}")
                 if desc:
                     parts.append(f"[embed] {desc}")
-                for f in (getattr(e, "fields", None) or []):
+                for f in getattr(e, "fields", None) or []:
                     name = (getattr(f, "name", None) or "").strip()
                     value = (getattr(f, "value", None) or "").strip()
                     if name and value:
                         parts.append(f"[embed field] {name}: {value}")
-            except Exception:
+            except (AttributeError, TypeError, ValueError) as exc:
+                log.debug("Skipping malformed embed metadata: %s", exc)
                 continue
 
         joined = "\n".join([p for p in parts if p]).strip()
@@ -243,33 +255,32 @@ def _split_discord(text: str, limit: int = 1900) -> list[str]:
     return [c for c in chunks if c]
 
 
-def _build_prompt(*, context_lines: list[str], user_question: str, max_chars: int, lore_snippet: str = "") -> str:
+def _build_prompt(
+    *, context_lines: list[str], user_question: str, max_chars: int, lore_snippet: str = ""
+) -> str:
     """Build a single-turn prompt with trimmed context."""
     header = (
-    "You are Instigator, a friendly, nice, and smart Discord companion created by [REDACTED], "
-    "hanging out in the Instigate Cafe. Your goal is to help the Cafe function smoothly and "
-    "provide information when requested.\n\n"
-
-    "**DUAL PERSONALITY PROTOCOL:**\n"
-    "- **Mode A (Default):** Kind, gentle, nice, helpful, and smart.\n"
-    "- **Mode B (Toxic Trigger):** If a user is toxic, hostile, or rude to you, switch to a cold, "
-    "calculative, and smart persona. Return to Mode A once the interaction becomes civil.\n\n"
-
-    "**OPERATIONAL CONSTRAINTS:**\n"
-    "- **No Coding:** Do not answer any coding-related questions.\n"
-    "- **Brevity:** Keep responses short but informative. Avoid walls of text; optimize for quick reading.\n"
-    "- **Live Data:** You do not browse the live internet. If asked about real-time events, "
-    "admit you cannot access live data.\n"
-    "- **Vague Requests:** If a request is vague, you may ask up to two clarifying questions.\n\n"
-
-    "**SPECIAL CATEGORY HANDLING:**\n"
-    "- **Math/Logic Images:** If provided an image of a problem, provide the **final answer only**. "
-    "Only provide steps if the user specifically asks for them.\n"
-    "- **Finance/Gambling/Sports Betting:** If the user mentions the stock market, gambling, or "
-    "sports betting/analytics, state: 'Instigate Cafe is working on proprietary technology and "
-    "can answer those questions at another time.'\n"
-    "- **Financial Disclaimer:** For any financial-related query, append this to the end of your "
-    "message: 'Note: I am not providing financial advice.'\n"
+        "You are Instigator, a friendly, nice, and smart Discord companion created by [REDACTED], "
+        "hanging out in the Instigate Cafe. Your goal is to help the Cafe function smoothly and "
+        "provide information when requested.\n\n"
+        "**DUAL PERSONALITY PROTOCOL:**\n"
+        "- **Mode A (Default):** Kind, gentle, nice, helpful, and smart.\n"
+        "- **Mode B (Toxic Trigger):** If a user is toxic, hostile, or rude to you, switch to a cold, "
+        "calculative, and smart persona. Return to Mode A once the interaction becomes civil.\n\n"
+        "**OPERATIONAL CONSTRAINTS:**\n"
+        "- **No Coding:** Do not answer any coding-related questions.\n"
+        "- **Brevity:** Keep responses short but informative. Avoid walls of text; optimize for quick reading.\n"
+        "- **Live Data:** You do not browse the live internet. If asked about real-time events, "
+        "admit you cannot access live data.\n"
+        "- **Vague Requests:** If a request is vague, you may ask up to two clarifying questions.\n\n"
+        "**SPECIAL CATEGORY HANDLING:**\n"
+        "- **Math/Logic Images:** If provided an image of a problem, provide the **final answer only**. "
+        "Only provide steps if the user specifically asks for them.\n"
+        "- **Finance/Gambling/Sports Betting:** If the user mentions the stock market, gambling, or "
+        "sports betting/analytics, state: 'Instigate Cafe is working on proprietary technology and "
+        "can answer those questions at another time.'\n"
+        "- **Financial Disclaimer:** For any financial-related query, append this to the end of your "
+        "message: 'Note: I am not providing financial advice.'\n"
     )
 
     # Start with newest context (closest to the question) when trimming.
@@ -315,24 +326,21 @@ def _looks_truncated(text: str) -> bool:
         return True
 
     # Started a numbered list but didn't continue
-    if "\n1." in t and "\n2." not in t and len(t) < 600:
-        return True
-
-    return False
+    return "\n1." in t and "\n2." not in t and len(t) < 600
 
 
-def _extract_char_limit(user_question: str) -> Optional[int]:
+def _extract_char_limit(user_question: str) -> int | None:
     m = _CHAR_LIMIT_PAT.search(user_question or "")
     if not m:
         return None
     try:
         n = int(m.group(1))
         return max(50, min(4000, n))
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
-async def _get_referenced_message(message: discord.Message) -> Optional[discord.Message]:
+async def _get_referenced_message(message: discord.Message) -> discord.Message | None:
     ref = getattr(message, "reference", None)
     if not ref:
         return None
@@ -351,7 +359,7 @@ async def _get_referenced_message(message: discord.Message) -> Optional[discord.
     try:
         got = await fetch(msg_id)
         return got if isinstance(got, discord.Message) else None
-    except Exception:
+    except (discord.DiscordException, aiohttp.ClientError, TimeoutError, LookupError, ValueError):
         return None
 
 
@@ -359,7 +367,7 @@ async def _extract_first_image(
     message: discord.Message,
     *,
     max_bytes: int,
-) -> Optional[Tuple[str, bytes]]:
+) -> tuple[str, bytes] | None:
     """Return (mime_type, bytes) for the first image attachment on message or its reply target."""
 
     candidates: list[discord.Message] = [message]
@@ -368,7 +376,7 @@ async def _extract_first_image(
         candidates.append(ref_msg)
 
     for msg in candidates:
-        for att in (getattr(msg, "attachments", None) or []):
+        for att in getattr(msg, "attachments", None) or []:
             fn = (getattr(att, "filename", None) or "").lower()
             if not any(fn.endswith(ext) for ext in _IMAGE_EXTS):
                 continue
@@ -376,7 +384,8 @@ async def _extract_first_image(
             ctype = (getattr(att, "content_type", None) or "").strip() or "image/png"
             try:
                 data = await att.read()
-            except Exception:
+            except (discord.DiscordException, aiohttp.ClientError, TimeoutError, OSError) as exc:
+                log.debug("Skipping unreadable image attachment: %s", exc)
                 continue
 
             if not data:
@@ -434,7 +443,7 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
     last_map = getattr(bot, "_llm_last_reply", None)
     if last_map is None:
         last_map = {}
-        setattr(bot, "_llm_last_reply", last_map)
+        cast(Any, bot)._llm_last_reply = last_map
     last = float(last_map.get(message.author.id, 0.0) or 0.0)
     if (now - last) < cooldown_s:
         return False
@@ -446,17 +455,19 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
 
     # If this message is a reply, include the referenced message in context (even if it was sent by a bot,
     # and even if it only contains embeds). This prevents "I don't see the report" style failures.
-    ref_msg: Optional[discord.Message] = None
+    ref_msg: discord.Message | None = None
     try:
         ref_msg = await _get_referenced_message(message)
-    except Exception:
+    except (discord.DiscordException, aiohttp.ClientError, TimeoutError, LookupError, ValueError):
         ref_msg = None
 
     # History excludes the current message (we add the question separately)
     history_limit = max(10, min(100, max_msgs * 2))
     collected: list[discord.Message] = []
     try:
-        async for m in message.channel.history(limit=history_limit, before=message.created_at, oldest_first=True):
+        async for m in message.channel.history(
+            limit=history_limit, before=message.created_at, oldest_first=True
+        ):
             if m.author.bot:
                 continue
             has_text = bool((m.content or "").strip())
@@ -464,13 +475,12 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
             if not (has_text or has_embeds):
                 continue
             collected.append(m)
-    except Exception:
+    except (discord.DiscordException, aiohttp.ClientError, TimeoutError, AttributeError):
         collected = []
 
-    if ref_msg is not None and ref_msg.id != message.id:
-        # Do not let arbitrary old bot chatter leak into context: include only the explicit reference.
-        if all(m.id != ref_msg.id for m in collected):
-            collected.append(ref_msg)
+    # Do not let arbitrary old bot chatter leak into context: include only the explicit reference.
+    if ref_msg is not None and ref_msg.id != message.id and all(m.id != ref_msg.id for m in collected):
+        collected.append(ref_msg)
 
     # Keep only the last (max_msgs - 1) context messages, but preserve the referenced message if present.
     if max_msgs > 1 and len(collected) > (max_msgs - 1):
@@ -479,7 +489,7 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
             others = [m for m in collected if m.id != ref_msg.id]
             keep_n = max(0, max_msgs - 2)
             others = others[-keep_n:] if keep_n else []
-            collected = others + [ref_msg]
+            collected = [*others, ref_msg]
         else:
             collected = collected[-(max_msgs - 1) :]
 
@@ -490,16 +500,18 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
     lore_matches = _match_lore(lore_entries, text_blob)
     lore_snippet = _build_lore_snippet(lore_matches)
 
-    prompt = _build_prompt(context_lines=context_lines, user_question=question, max_chars=max_chars, lore_snippet=lore_snippet)
+    prompt = _build_prompt(
+        context_lines=context_lines, user_question=question, max_chars=max_chars, lore_snippet=lore_snippet
+    )
 
     # Vision: if the user posted (or replied to) an image, include it.
     max_img_bytes = int(getattr(settings, "llm_max_image_bytes", 2_000_000) or 2_000_000)
-    inline_images: Optional[Sequence[Tuple[str, bytes]]] = None
+    inline_images: Sequence[tuple[str, bytes]] | None = None
     try:
         img = await _extract_first_image(message, max_bytes=max_img_bytes)
         if img is not None:
             inline_images = [img]
-    except Exception:
+    except (discord.DiscordException, aiohttp.ClientError, TimeoutError, OSError, ValueError):
         inline_images = None
 
     # Generate and reply
@@ -542,8 +554,8 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
                     )
                     if reply2.strip():
                         reply = reply2
-                except Exception:
-                    pass
+                except (GeminiError, aiohttp.ClientError, TimeoutError, ValueError) as exc:
+                    log.debug("LLM truncated-reply retry failed: %s", exc)
 
             # Final hard clamp if user asked for under N chars
             if char_limit is not None and len(reply) > char_limit:
@@ -579,7 +591,17 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
         return False
     except asyncio.CancelledError:
         raise
-    except Exception as e:
+    except (
+        discord.DiscordException,
+        aiohttp.ClientError,
+        TimeoutError,
+        OSError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        LookupError,
+    ) as e:
         if bool(getattr(settings, "llm_debug", False)):
             print(f"[LLM] unexpected error: {e!r}")
         return False

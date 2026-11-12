@@ -1,7 +1,7 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import List, Tuple
+
 import random
+from dataclasses import dataclass, field
 
 RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
 SUITS = ["♠", "♥", "♦", "♣"]
@@ -26,10 +26,10 @@ class Card:
 
 @dataclass
 class Deck:
-    cards: List[Card] = field(default_factory=list)
+    cards: list[Card] = field(default_factory=list)
 
     @staticmethod
-    def standard(shuffle: bool = True) -> "Deck":
+    def standard(shuffle: bool = True) -> Deck:
         cards = [Card(r, s) for s in SUITS for r in RANKS]
         if shuffle:
             random.shuffle(cards)
@@ -48,7 +48,7 @@ class Shoe:
         self.num_decks = num_decks
         self.reshuffle_pct = reshuffle_pct
         self._total_cards = num_decks * 52
-        self.cards: List[Card] = []
+        self.cards: list[Card] = []
         self._build_and_shuffle()
 
     def _build_and_shuffle(self) -> None:
@@ -67,14 +67,14 @@ class Shoe:
 
 @dataclass
 class Hand:
-    cards: List[Card] = field(default_factory=list)
+    cards: list[Card] = field(default_factory=list)
     doubled: bool = False
     from_split: bool = False  # split-hands do not qualify for natural blackjack payout
 
     def add(self, c: Card) -> None:
         self.cards.append(c)
 
-    def values(self) -> List[int]:
+    def values(self) -> list[int]:
         totals = [0]
         for c in self.cards:
             if c.rank == "A":
@@ -91,8 +91,8 @@ class Hand:
 
     def is_soft(self) -> bool:
         vals = self.values()
-        # soft if we can subtract 10 (Ace counted as 11) and still be a reachable total
-        return any(v <= 21 for v in vals) and any((v - 10) in vals for v in vals)
+        # soft if at least one total <= 21 still uses an Ace counted as 11
+        return any(v <= 21 and (v - 10) in vals for v in vals)
 
     def is_blackjack(self) -> bool:
         return len(self.cards) == 2 and self.best_total() == 21 and not self.from_split
@@ -126,8 +126,8 @@ def _get_shoe() -> Shoe:
 class GameState:
     shoe: Shoe
     dealer: Hand
-    hands: List[Hand]
-    bets: List[int]
+    hands: list[Hand]
+    bets: list[int]
     active_index: int = 0
     splits_used: int = 0
     dealer_hits_soft_17: bool = True
@@ -141,10 +141,13 @@ class GameState:
         return getattr(self.hands[idx], "_stood", False)  # type: ignore[attr-defined]
 
     def _set_stand(self, idx: int) -> None:
-        setattr(self.hands[idx], "_stood", True)  # type: ignore[attr-defined]
+        self.hands[idx]._stood = True  # type: ignore[attr-defined]
 
     @staticmethod
-    def start(bet: int, dealer_hits_soft_17: bool = True, max_splits: int = 1) -> "GameState":
+    def start(bet: int, dealer_hits_soft_17: bool = True, max_splits: int = 1) -> GameState:
+        bet = int(bet)
+        if bet <= 0:
+            raise ValueError("Bet must be >= 1.")
         shoe = _get_shoe()
         dealer = Hand()
         player = Hand()
@@ -223,7 +226,9 @@ class GameState:
         return True
 
     def _advance_if_needed(self) -> None:
-        while self.active_index < len(self.hands) and (self._hand_standing(self.active_index) or self.hands[self.active_index].is_bust()):
+        while self.active_index < len(self.hands) and (
+            self._hand_standing(self.active_index) or self.hands[self.active_index].is_bust()
+        ):
             self.active_index += 1
         if self.active_index >= len(self.hands):
             self._finish_round()
@@ -235,9 +240,7 @@ class GameState:
         if total > 17:
             return False
         # total == 17
-        if self.dealer_hits_soft_17 and self.dealer.is_soft():
-            return True
-        return False
+        return bool(self.dealer_hits_soft_17 and self.dealer.is_soft())
 
     def _finish_round(self) -> None:
         if any(not h.is_bust() for h in self.hands):
@@ -245,7 +248,7 @@ class GameState:
                 self.dealer.add(self.shoe.draw())
         self.done = True
 
-    def settle(self) -> List[Tuple[str, int]]:
+    def settle(self) -> list[tuple[str, int]]:
         if not self.done:
             self._finish_round()
 
@@ -253,8 +256,8 @@ class GameState:
         dealer_bust = self.dealer.is_bust()
         dealer_bj = self.dealer.is_blackjack()
 
-        results: List[Tuple[str, int]] = []
-        for hand, bet in zip(self.hands, self.bets):
+        results: list[tuple[str, int]] = []
+        for hand, bet in zip(self.hands, self.bets, strict=True):
             if hand.is_bust():
                 results.append(("bust", -bet))
                 continue

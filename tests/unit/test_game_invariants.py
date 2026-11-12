@@ -64,10 +64,6 @@ def test_blackjack_hand_totals_and_classifications(
         (["A", "6", "10", "4"], 21),  # Hard 21 (values=[21, 31])
     ],
 )
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-11: Hand.is_soft checks any(v<=21) separately from (v-10) in vals, misclassifying hard Ace totals ([17, 27]) as soft so H17 dealer hits hard 17. Planned fix: Phase 4.",
-)
 def test_blackjack_hard_total_with_forced_low_ace_is_not_soft(ranks: list[str], expected_total: int):
     hand = bj.Hand(cards=[bj.Card(r, "♠") for r in ranks])
     assert hand.best_total() == expected_total
@@ -160,10 +156,6 @@ def test_blackjack_bust_skips_dealer_draw():
 
 
 @pytest.mark.parametrize("bad_bet", [0, -1, -100])
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-03: GameState.start does not validate bet >= 1 at engine boundary. Planned fix: Phase 4.",
-)
 def test_blackjack_engine_rejects_non_positive_bet(bad_bet: int):
     with pytest.raises(ValueError):
         bj.GameState.start(bet=bad_bet)

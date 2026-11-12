@@ -5,12 +5,12 @@ from dataclasses import dataclass
 
 # Symbol definitions with weights and 3-match multipliers
 SYMBOLS = [
-    ("💎", 2, 50),    # Diamond — rarest, 50x
-    ("7️⃣", 4, 20),    # Seven — 20x
-    ("🍒", 8, 10),    # Cherry — 10x
-    ("🔔", 10, 5),    # Bell — 5x
-    ("🍋", 12, 3),    # Lemon — 3x
-    ("⭐", 14, 2),    # Star — most common, 2x
+    ("💎", 2, 50),  # Diamond — rarest, 50x
+    ("7️⃣", 4, 20),  # Seven — 20x
+    ("🍒", 8, 10),  # Cherry — 10x
+    ("🔔", 10, 5),  # Bell — 5x
+    ("🍋", 12, 3),  # Lemon — 3x
+    ("⭐", 14, 2),  # Star — most common, 2x
 ]
 
 # Build weighted pool
@@ -22,11 +22,11 @@ for emoji, weight, multi in SYMBOLS:
 @dataclass(frozen=True)
 class SlotResult:
     reels: tuple[str, str, str]
-    multiplier: int     # 0 if loss
+    multiplier: int  # 0 if loss
     bet: int
-    payout: int         # 0 if loss, bet * multiplier if win
-    net: int            # payout - bet
-    match_type: str     # "three", "two", "none"
+    payout: int  # 0 if loss, bet * multiplier if win
+    net: int  # payout - bet
+    match_type: str  # "three", "two", "none"
 
 
 def spin(bet: int) -> SlotResult:

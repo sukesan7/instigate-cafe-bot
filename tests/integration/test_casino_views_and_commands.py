@@ -242,10 +242,6 @@ async def test_blackjack_natural_deal_win_bust_double_split_and_forfeit(
     assert all(child.disabled for child in orphan_view.children)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-05: Unsettled blackjack hands live only in RAM (_sessions) with no SQLite escrow; restart drops the active bet without settlement. Planned fix: Phase 4.",
-)
 async def test_blackjack_unsettled_virtual_bet_survives_restart(
     make_interaction,
     make_member,
@@ -263,16 +259,11 @@ async def test_blackjack_unsettled_virtual_bet_survives_restart(
     # Simulate bot process restart clearing in-memory sessions
     _sessions.sessions.clear()
 
-    # Expected safe economy invariant: either upfront wager escrow held the $400 bet
-    # (`balance <= 600`) or persistent session recovery remains in SQLite.
+    # Expected safe economy invariant: upfront wager escrow holds the $400 bet (`balance <= 600`)
     row = await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (member.id,))
-    assert row is not None and row[0] <= 600
+    assert row is not None and row[0] == 600
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-06: BlackjackView.hit_btn acquires _lock without checking self.is_finished(), letting stale clicks on a stopped view mutate the live hand twice. Planned fix: Phase 4.",
-)
 async def test_blackjack_stopped_view_rejects_duplicate_hit_callback(
     make_interaction,
     make_member,
@@ -304,9 +295,83 @@ async def test_blackjack_stopped_view_rejects_duplicate_hit_callback(
 
     # Stale duplicate callback arriving on already-stopped old_view
     await old_view.hit_btn.callback(click2)
+    assert click2.last_reply.ephemeral is True
+    assert "expired" in (click2.last_reply.content or "")
     sess = _sessions.get(start_inter.guild.id, member.id)
     assert sess is not None
-    assert len(sess.state.hands[0].cards) == 3  # currently mutates to 4 cards!
+    assert len(sess.state.hands[0].cards) == 3
+
+
+async def test_blackjack_double_and_split_aces_escrow_and_settlement(
+    make_interaction,
+    make_member,
+    tmp_db: Database,
+):
+    # 1. Double down insufficient funds check vs successful double-down win (+200 net -> $1200)
+    p_dbl = make_member(user_id=800000000000000216, display_name="BJDouble")
+    shoe_over = _FixedShoe([bj.Card("6", "♠"), bj.Card("10", "♦"), bj.Card("5", "♥"), bj.Card("7", "♣")])
+    with patch("icbot.games.blackjack_engine._get_shoe", return_value=shoe_over):
+        s_over = make_interaction(user=p_dbl, command_name="ic casino blackjack")
+        await blackjack.callback(s_over, bet=600)
+
+    assert await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (p_dbl.id,)) == (400,)
+    msg_over = await s_over.original_response()
+    v_over = s_over.last_reply.view
+    assert isinstance(v_over, BlackjackView)
+    dbl_fail = make_interaction(user=p_dbl, message=msg_over, client=s_over.client)
+    await v_over.double_btn.callback(dbl_fail)
+    assert dbl_fail.last_reply.ephemeral is True
+    assert "available **$400**" in (dbl_fail.last_reply.content or "")
+    assert await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (p_dbl.id,)) == (400,)
+
+    # Stand to clear hand cleanly (400 + 600 - 600 vs 17 lose on 11? Wait: player has 11, dealer 17 -> loses, balance 400)
+    stand_over = make_interaction(user=p_dbl, message=msg_over, client=s_over.client)
+    await v_over.stand_btn.callback(stand_over)
+    assert await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (p_dbl.id,)) == (400,)
+
+    # Reset p_dbl for successful double down (bet=100, draws 9 -> 20 vs dealer 17 -> +200 -> 600)
+    shoe_win = _FixedShoe(
+        [bj.Card("6", "♠"), bj.Card("10", "♦"), bj.Card("5", "♥"), bj.Card("7", "♣"), bj.Card("9", "♠")]
+    )
+    with patch("icbot.games.blackjack_engine._get_shoe", return_value=shoe_win):
+        s_win = make_interaction(user=p_dbl, command_name="ic casino blackjack")
+        await blackjack.callback(s_win, bet=100)
+    assert await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (p_dbl.id,)) == (300,)
+    msg_win = await s_win.original_response()
+    assert isinstance(s_win.last_reply.view, BlackjackView)
+    await s_win.last_reply.view.double_btn.callback(
+        make_interaction(user=p_dbl, message=msg_win, client=s_win.client)
+    )
+    assert isinstance(msg_win.view, BlackjackTerminalView)
+    assert await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (p_dbl.id,)) == (600,)
+
+    # 2. Split Aces immediately settles both hands in Split callback without hanging
+    p_split = make_member(user_id=800000000000000217, display_name="BJSplitAces")
+    shoe_split = _FixedShoe(
+        [
+            bj.Card("A", "♠"),
+            bj.Card("10", "♦"),
+            bj.Card("A", "♥"),
+            bj.Card("8", "♣"),
+            bj.Card("K", "♠"),
+            bj.Card("9", "♥"),
+        ]
+    )
+    with patch("icbot.games.blackjack_engine._get_shoe", return_value=shoe_split):
+        s_split = make_interaction(user=p_split, command_name="ic casino blackjack")
+        await blackjack.callback(s_split, bet=100)
+
+    assert await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (p_split.id,)) == (900,)
+    msg_split = await s_split.original_response()
+    v_split = s_split.last_reply.view
+    assert isinstance(v_split, BlackjackView)
+    await v_split.split_btn.callback(make_interaction(user=p_split, message=msg_split, client=s_split.client))
+    assert isinstance(msg_split.view, BlackjackTerminalView)
+    assert _sessions.get(s_split.guild.id, p_split.id) is None
+    assert await tmp_db.fetchone("SELECT balance FROM users WHERE user_id=?", (p_split.id,)) == (1200,)
+    assert await tmp_db.fetchone(
+        "SELECT wins, hands_played FROM blackjack_users WHERE user_id=?", (p_split.id,)
+    ) == (2, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -426,10 +491,6 @@ async def test_exams_clear_rbac_and_execution(make_interaction, make_member, tmp
     assert await tmp_db.fetchall("SELECT id FROM exams") == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-07: exams_add_cmd executes SELECT last_insert_rowid() on a fresh SQLite connection, returning ID 0 so add->remove round-trip fails. Planned fix: Phase 4.",
-)
 async def test_exams_add_returned_id_round_trips_into_remove(make_interaction, make_member):
     admin = make_member(user_id=800000000000000404, administrator=True)
     add_inter = make_interaction(user=admin, command_name="ic exam add")
@@ -474,10 +535,6 @@ async def test_grades_command_success_sends_chart_attachment(
     assert "ELE888 - Intelligent Systems" in (reply.embed.title or "")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-2B-08: grades_command passes unsupported `is_error=True` kwarg to embeds.system(), raising TypeError on 404 / empty-prof / error branches. Planned fix: Phase 3/4.",
-)
 async def test_grades_command_not_found_sends_error_embed_cleanly(
     make_interaction,
     mock_aiohttp,

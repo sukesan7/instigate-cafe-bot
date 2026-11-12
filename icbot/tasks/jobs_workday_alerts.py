@@ -1,23 +1,30 @@
 from __future__ import annotations
 
+import json
+import logging
+import sqlite3
 import time
-from typing import Optional
+from typing import Any, cast
 
 import aiohttp
+import aiosqlite
 import discord
 
 from icbot.db import Database
 from icbot.embeds import job_alert as job_alert_embed
 from icbot.services.jobs_workday_client import WorkdaySite, fetch_workday_jobs, parse_workday_sites
-
 from icbot.tasks.job_alerts import (
     _classify,
     _has_seen,
     _mark_seen,
     _pick_bootstrap_sample_workday,
+    _resolve_sendable_channel,
     _source_has_any,
     _workday_passes_filters,
 )
+
+log = logging.getLogger(__name__)
+
 
 def _jobs_channel_id(settings) -> int:
     """
@@ -28,14 +35,16 @@ def _jobs_channel_id(settings) -> int:
             v = int(getattr(settings, attr, 0) or 0)
             if v:
                 return v
-        except Exception:
+        except (TypeError, ValueError) as exc:
+            log.debug("Skipping invalid jobs channel attr %s: %s", attr, exc)
             continue
     return 0
+
 
 _CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
-async def _get_cached_api_url(db: Database, careers_url: str) -> Optional[str]:
+async def _get_cached_api_url(db: Database, careers_url: str) -> str | None:
     row = await db.fetchone(
         "SELECT api_url, last_updated_unix FROM workday_cxs_cache WHERE careers_url=?",
         (careers_url,),
@@ -47,7 +56,7 @@ async def _get_cached_api_url(db: Database, careers_url: str) -> Optional[str]:
     try:
         if int(last_updated) and (int(time.time()) - int(last_updated) < _CACHE_TTL_SECONDS):
             return str(api_url)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     return None
 
@@ -56,8 +65,8 @@ async def _set_cached_api_url(
     db: Database,
     careers_url: str,
     api_url: str,
-    tenant: Optional[str],
-    site: Optional[str],
+    tenant: str | None,
+    site: str | None,
 ) -> None:
     await db.execute(
         """
@@ -85,18 +94,13 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
         return
 
     raw_sites = list(getattr(settings, "workday_sites", None) or [])
-    raw_sites = [
-        s for s in raw_sites if isinstance(s, str) and s.strip() and s.strip() not in ("\\", "\\\\")
-    ]
+    raw_sites = [s for s in raw_sites if isinstance(s, str) and s.strip() and s.strip() not in ("\\", "\\\\")]
     if not raw_sites:
         return
 
-    channel = bot.get_channel(channel_id)
+    channel = await _resolve_sendable_channel(bot, channel_id)
     if channel is None:
-        try:
-            channel = await bot.fetch_channel(channel_id)  # type: ignore[attr-defined]
-        except Exception:
-            return
+        return
 
     # Optional filters (shared env vars)
     loc_allow = list(getattr(settings, "jobs_location_allowlist", None) or []) or None
@@ -113,7 +117,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
 
     posted = 0
     bad_sources: set[str] = getattr(bot, "_workday_bad_sources", set())
-    setattr(bot, "_workday_bad_sources", bad_sources)
+    cast(Any, bot)._workday_bad_sources = bad_sources
 
     async with aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=timeout_seconds),
@@ -133,7 +137,14 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                     timeout_seconds=timeout_seconds,
                     max_results=240,
                 )
-            except Exception as e:
+            except (
+                aiohttp.ClientError,
+                TimeoutError,
+                RuntimeError,
+                json.JSONDecodeError,
+                ValueError,
+                TypeError,
+            ) as e:
                 bad_sources.add(src)
                 print(f"[JOBS] workday fetch failed ({site.label}): {e!r}")
                 continue
@@ -148,8 +159,8 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                         getattr(cxs_used, "tenant", None),
                         getattr(cxs_used, "site", None),
                     )
-            except Exception:
-                pass
+            except (aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as exc:
+                log.debug("Workday CXS cache refresh skipped for %s: %s", site.label, exc)
 
             # Baseline behavior: avoid spamming old jobs on first-ever run per source
             if not await _source_has_any(db, src):
@@ -184,9 +195,13 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                 await _mark_seen(db, jobs)
 
                 if sample:
-                    print(f"[JOBS] bootstrap posted {len(sample)} jobs for {src}; checkpointed {len(jobs)} jobs.")
+                    print(
+                        f"[JOBS] bootstrap posted {len(sample)} jobs for {src}; checkpointed {len(jobs)} jobs."
+                    )
                 else:
-                    print(f"[JOBS] bootstrap posted 0 (no matching SWE/CS jobs) for {src}; checkpointed {len(jobs)} jobs.")
+                    print(
+                        f"[JOBS] bootstrap posted 0 (no matching SWE/CS jobs) for {src}; checkpointed {len(jobs)} jobs."
+                    )
                 continue
 
             # Normal cycle

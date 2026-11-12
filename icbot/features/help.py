@@ -1,5 +1,5 @@
 import discord
-from discord import app_commands
+
 from icbot.app import ic
 from icbot.embeds import system as system_embed
 
@@ -14,8 +14,8 @@ HELP_CATEGORIES = [
             ("/ic resume", "Submit your resume for an InstigateAI review"),
             ("/ic jobs", "List the latest new grad/intern job openings"),
             ("/ic report", "Pull the latest daily market report on-demand"),
-            ("/ic leaderboard", "View the interactive server balance leaderboard")
-        ]
+            ("/ic leaderboard", "View the interactive server balance leaderboard"),
+        ],
     },
     {
         "title": "🎓 Academic Toolkit",
@@ -26,8 +26,8 @@ HELP_CATEGORIES = [
             ("/ic exam list", "List your scheduled exams"),
             ("/ic exam add", "Add a new exam to your schedule"),
             ("/ic exam remove", "Remove an exam by ID"),
-            ("/ic grades", "View grade distributions for a course (e.g., ele888)")
-        ]
+            ("/ic grades", "View grade distributions for a course (e.g., ele888)"),
+        ],
     },
     {
         "title": "🏛️ Instigate Cafe Stock Exchange",
@@ -40,8 +40,8 @@ HELP_CATEGORIES = [
             ("/ic icse sell", "Sell shares of a stock you own"),
             ("/ic icse short", "Open or increase a short position"),
             ("/ic icse cover", "Cover (close) a short position"),
-            ("/ic icse trades", "Show recent market trades")
-        ]
+            ("/ic icse trades", "Show recent market trades"),
+        ],
     },
     {
         "title": "🎰 Casino Games",
@@ -50,8 +50,8 @@ HELP_CATEGORIES = [
             ("/ic casino blackjack", "Play a hand of blackjack against the dealer"),
             ("/ic casino roulette", "Spin the roulette wheel"),
             ("/ic casino slots", "Pull the lever on the slot machine"),
-            ("/ic casino payouts", "Show the slot machine payout table")
-        ]
+            ("/ic casino payouts", "Show the slot machine payout table"),
+        ],
     },
     {
         "title": "ℹ️ Info & Updates",
@@ -60,18 +60,19 @@ HELP_CATEGORIES = [
             ("/ic serverinfo", "View information about this server"),
             ("/ic botinfo", "View details and capabilities of the IC Bot"),
             ("/ic sports nba", "Get upcoming NBA games and latest headlines"),
-            ("/ic help", "Show this help menu")
-        ]
-    }
+            ("/ic help", "Show this help menu"),
+        ],
+    },
 ]
+
 
 class HelpPaginationView(discord.ui.View):
     def __init__(self, current_page: int, total_pages: int, settings):
-        super().__init__(timeout=180) # 3 minute timeout
+        super().__init__(timeout=180)  # 3 minute timeout
         self.current_page = current_page
         self.total_pages = total_pages
         self.settings = settings
-        
+
         # Disable buttons if at boundaries
         self.prev_button.disabled = self.current_page == 0
         self.next_button.disabled = self.current_page == self.total_pages - 1
@@ -81,7 +82,7 @@ class HelpPaginationView(discord.ui.View):
         # Update button states
         self.prev_button.disabled = self.current_page == 0
         self.next_button.disabled = self.current_page == self.total_pages - 1
-        
+
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
@@ -97,7 +98,7 @@ class HelpPaginationView(discord.ui.View):
 
 def build_help_embed(page: int, total_pages: int, settings) -> discord.Embed:
     category = HELP_CATEGORIES[page]
-    
+
     desc_lines = [str(category["description"]), ""]
     for cmd_name, cmd_desc in category["commands"]:
         desc_lines.append(f"**`{cmd_name}`**\n{cmd_desc}\n")
@@ -107,7 +108,7 @@ def build_help_embed(page: int, total_pages: int, settings) -> discord.Embed:
         title=f"InstigateAI | {category['title']}",
         summary="\n".join(desc_lines),
         fields=[],
-        footer_hint=f"Help Menu • Page {page + 1}/{total_pages}"
+        footer_hint=f"Help Menu • Page {page + 1}/{total_pages}",
     )
     return embed
 
@@ -115,11 +116,11 @@ def build_help_embed(page: int, total_pages: int, settings) -> discord.Embed:
 @ic.command(name="help", description="Show the paginated help menu for all IC bot commands.")
 async def ic_help(interaction: discord.Interaction):
     settings = getattr(interaction.client, "settings", None)
-    
+
     total_pages = len(HELP_CATEGORIES)
     current_page = 0
-    
+
     embed = build_help_embed(current_page, total_pages, settings)
     view = HelpPaginationView(current_page, total_pages, settings)
-    
+
     await interaction.response.send_message(embed=embed, view=view)

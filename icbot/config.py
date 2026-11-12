@@ -21,7 +21,7 @@ def _to_int(value: Any, default: int = 0, *, clamp_snowflake: bool = False) -> i
         if clamp_snowflake and n > MAX_SNOWFLAKE:
             return default
         return n
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -33,7 +33,7 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         if not s:
             return default
         return float(s)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -47,7 +47,7 @@ def _to_bool(value: Any, default: bool = False) -> bool:
         if s in ("0", "false", "no", "n", "off"):
             return False
         return default
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -74,7 +74,7 @@ def _to_color(value: Any, default: int = 0xA64DFF) -> int:
             return int(m.group(1), 16)
 
         return default
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -143,7 +143,6 @@ class Settings:
     ttc_include_reblogs: bool = False
     ttc_debug: bool = False
 
-
     # GO Transit alerts (official GO Open Data API)
     go_api_base: str = "https://api.openmetrolinx.com/OpenDataAPI/api/V1"
     go_api_key: str = ""
@@ -189,7 +188,7 @@ class Settings:
 
     # Workday jobs (new)
     workday_sites: list[str] | None = None  # e.g. "RBC|https://rbc.wd3.myworkdayjobs.com/en-US/RBC"
-    workday_poll_seconds: int = 0           # if 0, defaults to jobs_poll_seconds
+    workday_poll_seconds: int = 0  # if 0, defaults to jobs_poll_seconds
     workday_timeout_seconds: int = 12
 
     # Dev
@@ -253,7 +252,7 @@ class Settings:
         return list(self.lever_sites or [])
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         token = os.getenv("DISCORD_TOKEN", "").strip()
 
         guild_raw = os.getenv("GUILD_ID", "").strip()
@@ -287,7 +286,10 @@ class Settings:
         ttc_include_reblogs = _to_bool(os.getenv("TTC_INCLUDE_REBLOGS", "false"), False)
         ttc_debug = _to_bool(os.getenv("TTC_DEBUG", "false"), False)
 
-        go_api_base = os.getenv("GO_API_BASE", "https://api.openmetrolinx.com/OpenDataAPI/api/V1").strip() or "https://api.openmetrolinx.com/OpenDataAPI/api/V1"
+        go_api_base = (
+            os.getenv("GO_API_BASE", "https://api.openmetrolinx.com/OpenDataAPI/api/V1").strip()
+            or "https://api.openmetrolinx.com/OpenDataAPI/api/V1"
+        )
         go_api_key = os.getenv("GO_API_KEY", "").strip()
         go_alerts_channel_id = _to_int(os.getenv("GO_ALERTS_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
         go_poll_seconds = _to_int(os.getenv("GO_POLL_SECONDS", "180"), 180)
@@ -346,9 +348,13 @@ class Settings:
 
         # Daily market summary
         market_daily_report_enabled = _to_bool(os.getenv("MARKET_DAILY_REPORT_ENABLED", "false"), False)
-        market_daily_report_channel_id = _to_int(os.getenv("MARKET_DAILY_REPORT_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
+        market_daily_report_channel_id = _to_int(
+            os.getenv("MARKET_DAILY_REPORT_CHANNEL_ID", "0"), 0, clamp_snowflake=True
+        )
         market_daily_report_time = os.getenv("MARKET_DAILY_REPORT_TIME", "16:30").strip() or "16:30"
-        market_daily_report_tz = os.getenv("MARKET_DAILY_REPORT_TZ", "America/Toronto").strip() or "America/Toronto"
+        market_daily_report_tz = (
+            os.getenv("MARKET_DAILY_REPORT_TZ", "America/Toronto").strip() or "America/Toronto"
+        )
         market_daily_report_top_n = _to_int(os.getenv("MARKET_DAILY_REPORT_TOP_N", "8"), 8)
         market_daily_report_tickers = _to_str_list(os.getenv("MARKET_DAILY_REPORT_TICKERS", ""))
 
@@ -365,7 +371,10 @@ class Settings:
         exams_tz = os.getenv("EXAMS_TZ", "America/Toronto").strip() or "America/Toronto"
         notes_sites = _to_str_list(os.getenv("NOTES_SITES", ""))
         lore_path = os.getenv("LORE_PATH", "").strip()
-        rmp_university = os.getenv("RMP_UNIVERSITY", "Toronto Metropolitan University").strip() or "Toronto Metropolitan University"
+        rmp_university = (
+            os.getenv("RMP_UNIVERSITY", "Toronto Metropolitan University").strip()
+            or "Toronto Metropolitan University"
+        )
 
         # Default workday poll seconds to jobs poll seconds if unset
         if workday_poll_seconds <= 0:

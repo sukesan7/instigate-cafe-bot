@@ -5,14 +5,13 @@ from discord import app_commands
 
 from icbot.app import casino
 from icbot.embeds import game as game_embed
-from icbot.services.user_service import UserStore, InsufficientBalanceError
 from icbot.games.roulette_engine import (
-    spin,
-    evaluate,
     color_emoji,
     color_square,
-    BetType,
+    evaluate,
+    spin,
 )
+from icbot.services.user_service import InsufficientBalanceError, UserStore
 
 
 def _make_user_store(interaction: discord.Interaction) -> UserStore:
@@ -26,9 +25,18 @@ def _make_user_store(interaction: discord.Interaction) -> UserStore:
 
 
 VALID_BET_TYPES = {
-    "red", "black", "even", "odd", "high", "low",
-    "dozen1", "dozen2", "dozen3",
-    "col1", "col2", "col3",
+    "red",
+    "black",
+    "even",
+    "odd",
+    "high",
+    "low",
+    "dozen1",
+    "dozen2",
+    "dozen3",
+    "col1",
+    "col2",
+    "col3",
     "straight",
 }
 
@@ -50,11 +58,18 @@ BET_DESCRIPTIONS = {
 
 PAYOUT_LABELS = {
     "straight": "35:1",
-    "red": "1:1", "black": "1:1",
-    "even": "1:1", "odd": "1:1",
-    "high": "1:1", "low": "1:1",
-    "dozen1": "2:1", "dozen2": "2:1", "dozen3": "2:1",
-    "col1": "2:1", "col2": "2:1", "col3": "2:1",
+    "red": "1:1",
+    "black": "1:1",
+    "even": "1:1",
+    "odd": "1:1",
+    "high": "1:1",
+    "low": "1:1",
+    "dozen1": "2:1",
+    "dozen2": "2:1",
+    "dozen3": "2:1",
+    "col1": "2:1",
+    "col2": "2:1",
+    "col3": "2:1",
 }
 
 

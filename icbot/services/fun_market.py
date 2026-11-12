@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import logging
 import math
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiosqlite
 
+from icbot.db import Database
 from icbot.services.fun_market_catalog import catalog_map, normalize_symbol
 
+log = logging.getLogger(__name__)
 
 SHORT_COLLATERAL_RATIO = 1.5
 PRICE_FLOOR = 1
@@ -58,7 +63,9 @@ class PortfolioSnapshot:
 
 
 class FunMarketStore:
-    def __init__(self, db, *, starting_bankroll: int = 1000, tz_name: str = "America/Toronto"):
+    def __init__(
+        self, db: Database, *, starting_bankroll: int = 1000, tz_name: str = "America/Toronto"
+    ) -> None:
         self.db = db
         self.starting_bankroll = int(starting_bankroll or 1000)
         self.tz_name = str(tz_name or "America/Toronto")
@@ -71,15 +78,11 @@ class FunMarketStore:
 
     def _week_key(self) -> str:
         try:
-            from datetime import datetime
-            from zoneinfo import ZoneInfo
-
             dt = datetime.now(ZoneInfo(self.tz_name))
             iso = dt.isocalendar()
             return f"{iso.year}-W{iso.week:02d}"
-        except Exception:
-            from datetime import datetime
-            dt = datetime.utcnow()
+        except (ZoneInfoNotFoundError, KeyError, ValueError):
+            dt = datetime.now(UTC)
             iso = dt.isocalendar()
             return f"{iso.year}-W{iso.week:02d}"
 
@@ -105,13 +108,14 @@ class FunMarketStore:
     async def _set_bankroll_conn(self, conn: aiosqlite.Connection, user_id: int, bankroll: int) -> None:
         await conn.execute("UPDATE users SET balance=? WHERE user_id=?", (int(bankroll), user_id))
 
-    async def _get_stock_conn(self, conn: aiosqlite.Connection, symbol: str) -> Optional[tuple]:
+    async def _get_stock_conn(self, conn: aiosqlite.Connection, symbol: str) -> tuple[Any, ...] | None:
         cur = await conn.execute(
             "SELECT symbol, name, price, category, is_active, updated_ts, week_key, week_open "
             "FROM fun_stocks WHERE symbol=?",
             (symbol,),
         )
-        return await cur.fetchone()
+        row = await cur.fetchone()
+        return tuple(row) if row is not None else None
 
     async def _maybe_rollover_week_conn(self, conn: aiosqlite.Connection) -> None:
         wk = self._week_key()
@@ -141,7 +145,7 @@ class FunMarketStore:
             row = await cur.fetchone()
             if row and row[0] is not None:
                 legacy_ic_value = int(str(row[0]))
-        except Exception:
+        except (aiosqlite.Error, TypeError, ValueError):
             legacy_ic_value = None
 
         for sym, item in cat.items():
@@ -199,8 +203,8 @@ class FunMarketStore:
                     "INSERT OR REPLACE INTO meta (key, value) VALUES ('stock_value', ?)",
                     (str(int(row[0])),),
                 )
-        except Exception:
-            pass
+        except (aiosqlite.Error, TypeError, ValueError) as exc:
+            log.debug("Skipping legacy meta.stock_value sync: %s", exc)
 
         # Ensure week baselines are valid
         await conn.execute(
@@ -232,58 +236,58 @@ class FunMarketStore:
     # Public helpers
     # ---------------------------
     async def sync_catalog(self) -> None:
-        async with self.db._lock:  # type: ignore[attr-defined]
-            async with aiosqlite.connect(self.db.path) as conn:  # type: ignore[attr-defined]
-                await self._sync_catalog_conn(conn)
-                await conn.commit()
+        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
+            await self._sync_catalog_conn(conn)
+            await conn.commit()
 
-    async def list_stocks(self, *, active_only: bool = True, include_inactive: bool = False) -> list[StockRow]:
+    async def list_stocks(
+        self, *, active_only: bool = True, include_inactive: bool = False
+    ) -> list[StockRow]:
         # include_inactive kept for future convenience; active_only wins if True
-        async with self.db._lock:  # type: ignore[attr-defined]
-            async with aiosqlite.connect(self.db.path) as conn:  # type: ignore[attr-defined]
-                await self._sync_catalog_conn(conn)
-                if active_only:
-                    sql = (
-                        "SELECT symbol, name, price, category, is_active, updated_ts, COALESCE(week_key,''), COALESCE(week_open, price) "
-                        "FROM fun_stocks WHERE is_active=1 ORDER BY category, symbol"
+        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
+            await self._sync_catalog_conn(conn)
+            if active_only:
+                sql = (
+                    "SELECT symbol, name, price, category, is_active, updated_ts, COALESCE(week_key,''), COALESCE(week_open, price) "
+                    "FROM fun_stocks WHERE is_active=1 ORDER BY category, symbol"
+                )
+                params: tuple[Any, ...] = ()
+            elif include_inactive:
+                sql = (
+                    "SELECT symbol, name, price, category, is_active, updated_ts, COALESCE(week_key,''), COALESCE(week_open, price) "
+                    "FROM fun_stocks ORDER BY is_active DESC, category, symbol"
+                )
+                params = ()
+            else:
+                sql = (
+                    "SELECT symbol, name, price, category, is_active, updated_ts, COALESCE(week_key,''), COALESCE(week_open, price) "
+                    "FROM fun_stocks ORDER BY category, symbol"
+                )
+                params = ()
+            cur = await conn.execute(sql, params)
+            rows = await cur.fetchall()
+            out: list[StockRow] = []
+            for r in rows:
+                sym, name, price, cat, is_active, updated_ts, week_key, week_open = r
+                price_i = int(price)
+                week_open_i = max(PRICE_FLOOR, int(week_open or price_i))
+                abs_chg = price_i - week_open_i
+                pct = ((price_i - week_open_i) / week_open_i * 100.0) if week_open_i else 0.0
+                out.append(
+                    StockRow(
+                        symbol=str(sym),
+                        name=str(name),
+                        price=price_i,
+                        category=str(cat or "misc"),
+                        is_active=bool(is_active),
+                        updated_ts=int(updated_ts or 0),
+                        week_key=str(week_key or ""),
+                        week_open=week_open_i,
+                        weekly_change_abs=abs_chg,
+                        weekly_change_pct=float(pct),
                     )
-                    params: tuple[Any, ...] = ()
-                elif include_inactive:
-                    sql = (
-                        "SELECT symbol, name, price, category, is_active, updated_ts, COALESCE(week_key,''), COALESCE(week_open, price) "
-                        "FROM fun_stocks ORDER BY is_active DESC, category, symbol"
-                    )
-                    params = ()
-                else:
-                    sql = (
-                        "SELECT symbol, name, price, category, is_active, updated_ts, COALESCE(week_key,''), COALESCE(week_open, price) "
-                        "FROM fun_stocks ORDER BY category, symbol"
-                    )
-                    params = ()
-                cur = await conn.execute(sql, params)
-                rows = await cur.fetchall()
-                out: list[StockRow] = []
-                for r in rows:
-                    sym, name, price, cat, is_active, updated_ts, week_key, week_open = r
-                    price_i = int(price)
-                    week_open_i = max(PRICE_FLOOR, int(week_open or price_i))
-                    abs_chg = price_i - week_open_i
-                    pct = ((price_i - week_open_i) / week_open_i * 100.0) if week_open_i else 0.0
-                    out.append(
-                        StockRow(
-                            symbol=str(sym),
-                            name=str(name),
-                            price=price_i,
-                            category=str(cat or "misc"),
-                            is_active=bool(is_active),
-                            updated_ts=int(updated_ts or 0),
-                            week_key=str(week_key or ""),
-                            week_open=week_open_i,
-                            weekly_change_abs=abs_chg,
-                            weekly_change_pct=float(pct),
-                        )
-                    )
-                return out
+                )
+            return out
 
     async def get_stock(self, symbol: str) -> StockRow:
         sym = normalize_symbol(symbol)
@@ -295,7 +299,7 @@ class FunMarketStore:
                 return s
         raise FunMarketError(f"Unknown symbol `{sym}`. Edit fun_market_catalog.py and sync the catalog.")
 
-    async def history(self, *, symbol: str | None = None, limit: int = 10) -> list[tuple]:
+    async def history(self, *, symbol: str | None = None, limit: int = 10) -> list[tuple[Any, ...]]:
         limit = max(1, min(int(limit), 25))
         sym = normalize_symbol(symbol) if symbol else ""
         await self.sync_catalog()
@@ -321,80 +325,85 @@ class FunMarketStore:
     # ---------------------------
     # Admin price actions
     # ---------------------------
-    async def admin_move(self, *, symbol: str, delta: int, user_id: int, reason: str | None = None) -> StockRow:
+    async def admin_move(
+        self, *, symbol: str, delta: int, user_id: int, reason: str | None = None
+    ) -> StockRow:
         sym = normalize_symbol(symbol)
         if not sym:
             raise FunMarketError("Invalid symbol.")
         delta = int(delta)
-        async with self.db._lock:  # type: ignore[attr-defined]
-            async with aiosqlite.connect(self.db.path) as conn:  # type: ignore[attr-defined]
-                await self._sync_catalog_conn(conn)
-                row = await self._get_stock_conn(conn, sym)
-                if row is None:
-                    raise FunMarketError(f"Unknown symbol `{sym}`.")
-                _, _name, old_price, _cat, is_active, _uts, _wk, _wo = row
-                if not bool(is_active):
-                    raise FunMarketError(f"`{sym}` is inactive in the code catalog.")
-                new_price = max(PRICE_FLOOR, int(old_price) + delta)
-                actual_delta = new_price - int(old_price)
-                now = self._now()
-                await conn.execute(
-                    "UPDATE fun_stocks SET price=?, updated_ts=? WHERE symbol=?",
-                    (new_price, now, sym),
+        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
+            await self._sync_catalog_conn(conn)
+            row = await self._get_stock_conn(conn, sym)
+            if row is None:
+                raise FunMarketError(f"Unknown symbol `{sym}`.")
+            _, _name, old_price, _cat, is_active, _uts, _wk, _wo = row
+            if not bool(is_active):
+                raise FunMarketError(f"`{sym}` is inactive in the code catalog.")
+            new_price = max(PRICE_FLOOR, int(old_price) + delta)
+            actual_delta = new_price - int(old_price)
+            now = self._now()
+            await conn.execute(
+                "UPDATE fun_stocks SET price=?, updated_ts=? WHERE symbol=?",
+                (new_price, now, sym),
+            )
+            await conn.execute(
+                "INSERT INTO fun_stock_events (ts_unix, symbol, user_id, delta, new_value, reason) VALUES (?, ?, ?, ?, ?, ?)",
+                (now, sym, int(user_id), actual_delta, new_price, reason),
+            )
+            if sym == "IC":
+                await self._mirror_legacy_ic_conn(
+                    conn, user_id=int(user_id), delta=actual_delta, new_value=new_price, reason=reason
                 )
-                await conn.execute(
-                    "INSERT INTO fun_stock_events (ts_unix, symbol, user_id, delta, new_value, reason) VALUES (?, ?, ?, ?, ?, ?)",
-                    (now, sym, int(user_id), actual_delta, new_price, reason),
-                )
-                if sym == "IC":
-                    await self._mirror_legacy_ic_conn(conn, user_id=int(user_id), delta=actual_delta, new_value=new_price, reason=reason)
-                await conn.commit()
+            await conn.commit()
         return await self.get_stock(sym)
 
-    async def admin_set(self, *, symbol: str, new_value: int, user_id: int, reason: str | None = None) -> StockRow:
+    async def admin_set(
+        self, *, symbol: str, new_value: int, user_id: int, reason: str | None = None
+    ) -> StockRow:
         sym = normalize_symbol(symbol)
         if not sym:
             raise FunMarketError("Invalid symbol.")
         new_value = max(PRICE_FLOOR, int(new_value))
-        async with self.db._lock:  # type: ignore[attr-defined]
-            async with aiosqlite.connect(self.db.path) as conn:  # type: ignore[attr-defined]
-                await self._sync_catalog_conn(conn)
-                row = await self._get_stock_conn(conn, sym)
-                if row is None:
-                    raise FunMarketError(f"Unknown symbol `{sym}`.")
-                _, _name, old_price, _cat, is_active, _uts, _wk, _wo = row
-                if not bool(is_active):
-                    raise FunMarketError(f"`{sym}` is inactive in the code catalog.")
-                old_price_i = int(old_price)
-                delta = new_value - old_price_i
-                now = self._now()
-                await conn.execute(
-                    "UPDATE fun_stocks SET price=?, updated_ts=? WHERE symbol=?",
-                    (new_value, now, sym),
+        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
+            await self._sync_catalog_conn(conn)
+            row = await self._get_stock_conn(conn, sym)
+            if row is None:
+                raise FunMarketError(f"Unknown symbol `{sym}`.")
+            _, _name, old_price, _cat, is_active, _uts, _wk, _wo = row
+            if not bool(is_active):
+                raise FunMarketError(f"`{sym}` is inactive in the code catalog.")
+            old_price_i = int(old_price)
+            delta = new_value - old_price_i
+            now = self._now()
+            await conn.execute(
+                "UPDATE fun_stocks SET price=?, updated_ts=? WHERE symbol=?",
+                (new_value, now, sym),
+            )
+            await conn.execute(
+                "INSERT INTO fun_stock_events (ts_unix, symbol, user_id, delta, new_value, reason) VALUES (?, ?, ?, ?, ?, ?)",
+                (now, sym, int(user_id), delta, new_value, reason),
+            )
+            if sym == "IC":
+                await self._mirror_legacy_ic_conn(
+                    conn, user_id=int(user_id), delta=delta, new_value=new_value, reason=reason
                 )
-                await conn.execute(
-                    "INSERT INTO fun_stock_events (ts_unix, symbol, user_id, delta, new_value, reason) VALUES (?, ?, ?, ?, ?, ?)",
-                    (now, sym, int(user_id), delta, new_value, reason),
-                )
-                if sym == "IC":
-                    await self._mirror_legacy_ic_conn(conn, user_id=int(user_id), delta=delta, new_value=new_value, reason=reason)
-                await conn.commit()
+            await conn.commit()
         return await self.get_stock(sym)
 
     async def week_rollover(self, *, user_id: int, note: str | None = None) -> str:
         wk = self._week_key()
-        async with self.db._lock:  # type: ignore[attr-defined]
-            async with aiosqlite.connect(self.db.path) as conn:  # type: ignore[attr-defined]
-                await self._sync_catalog_conn(conn)
-                await conn.execute(
-                    "UPDATE fun_stocks SET week_key=?, week_open=price, updated_ts=? WHERE is_active=1",
-                    (wk, self._now()),
-                )
-                await conn.execute(
-                    "INSERT OR REPLACE INTO fun_market_weeks (week_key, settled_at, settled_by, notes) VALUES (?, ?, ?, ?)",
-                    (wk, self._now(), int(user_id), note),
-                )
-                await conn.commit()
+        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
+            await self._sync_catalog_conn(conn)
+            await conn.execute(
+                "UPDATE fun_stocks SET week_key=?, week_open=price, updated_ts=? WHERE is_active=1",
+                (wk, self._now()),
+            )
+            await conn.execute(
+                "INSERT OR REPLACE INTO fun_market_weeks (week_key, settled_at, settled_by, notes) VALUES (?, ?, ?, ?)",
+                (wk, self._now(), int(user_id), note),
+            )
+            await conn.commit()
         return wk
 
     # ---------------------------
@@ -405,216 +414,232 @@ class FunMarketStore:
         qty = int(qty)
         if qty <= 0:
             raise FunMarketError("Quantity must be at least 1.")
-        async with self.db._lock:  # type: ignore[attr-defined]
-            async with aiosqlite.connect(self.db.path) as conn:  # type: ignore[attr-defined]
-                await self._sync_catalog_conn(conn)
-                row = await self._get_stock_conn(conn, sym)
-                if row is None or not bool(row[4]):
-                    raise FunMarketError(f"Unknown/ inactive symbol `{sym}`.")
-                price = int(row[2])
-                cost = price * qty
-                bankroll = await self._get_bankroll_conn(conn, user_id)
-                if bankroll < cost:
-                    raise FunMarketError(f"Insufficient bankroll. Need ${cost}, have ${bankroll}.")
+        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
+            await self._sync_catalog_conn(conn)
+            row = await self._get_stock_conn(conn, sym)
+            if row is None or not bool(row[4]):
+                raise FunMarketError(f"Unknown/ inactive symbol `{sym}`.")
+            price = int(row[2])
+            cost = price * qty
+            bankroll = await self._get_bankroll_conn(conn, user_id)
+            if bankroll < cost:
+                raise FunMarketError(f"Insufficient bankroll. Need ${cost}, have ${bankroll}.")
 
-                cur = await conn.execute(
-                    "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE user_id=? AND symbol=? AND side='LONG'",
-                    (int(user_id), sym),
-                )
-                prow = await cur.fetchone()
-                if prow is None:
-                    new_qty = qty
-                    new_avg = float(price)
-                    await conn.execute(
-                        "INSERT INTO fun_positions (user_id, symbol, side, qty, avg_price, collateral_locked) VALUES (?, ?, 'LONG', ?, ?, 0)",
-                        (int(user_id), sym, new_qty, new_avg),
-                    )
-                else:
-                    old_qty = int(prow[0])
-                    old_avg = float(prow[1])
-                    new_qty = old_qty + qty
-                    new_avg = ((old_qty * old_avg) + (qty * price)) / max(1, new_qty)
-                    await conn.execute(
-                        "UPDATE fun_positions SET qty=?, avg_price=? WHERE user_id=? AND symbol=? AND side='LONG'",
-                        (new_qty, float(new_avg), int(user_id), sym),
-                    )
-
-                new_bankroll = bankroll - cost
-                await self._set_bankroll_conn(conn, user_id, new_bankroll)
+            cur = await conn.execute(
+                "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE user_id=? AND symbol=? AND side='LONG'",
+                (int(user_id), sym),
+            )
+            prow = await cur.fetchone()
+            if prow is None:
+                new_qty = qty
+                new_avg = float(price)
                 await conn.execute(
-                    "INSERT INTO fun_trades (ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, 'BUY', ?, ?, ?, 0, NULL)",
-                    (self._now(), int(user_id), sym, qty, price, -cost),
+                    "INSERT INTO fun_positions (user_id, symbol, side, qty, avg_price, collateral_locked) VALUES (?, ?, 'LONG', ?, ?, 0)",
+                    (int(user_id), sym, new_qty, new_avg),
                 )
-                await conn.commit()
+            else:
+                old_qty = int(prow[0])
+                old_avg = float(prow[1])
+                new_qty = old_qty + qty
+                new_avg = ((old_qty * old_avg) + (qty * price)) / max(1, new_qty)
+                await conn.execute(
+                    "UPDATE fun_positions SET qty=?, avg_price=? WHERE user_id=? AND symbol=? AND side='LONG'",
+                    (new_qty, float(new_avg), int(user_id), sym),
+                )
+
+            new_bankroll = bankroll - cost
+            await self._set_bankroll_conn(conn, user_id, new_bankroll)
+            await conn.execute(
+                "INSERT INTO fun_trades (ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, 'BUY', ?, ?, ?, 0, NULL)",
+                (self._now(), int(user_id), sym, qty, price, -cost),
+            )
+            await conn.commit()
 
         stock = await self.get_stock(sym)
         pos = await self._get_position(user_id=user_id, symbol=sym, side="LONG")
+        if pos is None:
+            raise FunMarketError(f"Failed to load LONG position for `{sym}`.")
         return stock, pos, new_bankroll
 
-    async def sell_long(self, *, user_id: int, symbol: str, qty: int) -> tuple[StockRow, PositionRow | None, int, int]:
+    async def sell_long(
+        self, *, user_id: int, symbol: str, qty: int
+    ) -> tuple[StockRow, PositionRow | None, int, int]:
         sym = normalize_symbol(symbol)
         qty = int(qty)
         if qty <= 0:
             raise FunMarketError("Quantity must be at least 1.")
-        async with self.db._lock:  # type: ignore[attr-defined]
-            async with aiosqlite.connect(self.db.path) as conn:  # type: ignore[attr-defined]
-                await self._sync_catalog_conn(conn)
-                srow = await self._get_stock_conn(conn, sym)
-                if srow is None:
-                    raise FunMarketError(f"Unknown symbol `{sym}`.")
-                price = int(srow[2])
-                cur = await conn.execute(
-                    "SELECT qty, avg_price FROM fun_positions WHERE user_id=? AND symbol=? AND side='LONG'",
+        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
+            await self._sync_catalog_conn(conn)
+            srow = await self._get_stock_conn(conn, sym)
+            if srow is None:
+                raise FunMarketError(f"Unknown symbol `{sym}`.")
+            price = int(srow[2])
+            cur = await conn.execute(
+                "SELECT qty, avg_price FROM fun_positions WHERE user_id=? AND symbol=? AND side='LONG'",
+                (int(user_id), sym),
+            )
+            prow = await cur.fetchone()
+            if prow is None:
+                raise FunMarketError(f"No long position in `{sym}`.")
+            old_qty = int(prow[0])
+            avg = float(prow[1])
+            if qty > old_qty:
+                raise FunMarketError(f"You only have {old_qty} shares long in `{sym}`.")
+            realized = round((price - avg) * qty)
+            proceeds = price * qty
+            bankroll = await self._get_bankroll_conn(conn, user_id)
+            new_bankroll = bankroll + proceeds
+            await self._set_bankroll_conn(conn, user_id, new_bankroll)
+
+            new_qty = old_qty - qty
+            if new_qty <= 0:
+                await conn.execute(
+                    "DELETE FROM fun_positions WHERE user_id=? AND symbol=? AND side='LONG'",
                     (int(user_id), sym),
                 )
-                prow = await cur.fetchone()
-                if prow is None:
-                    raise FunMarketError(f"No long position in `{sym}`.")
-                old_qty = int(prow[0])
-                avg = float(prow[1])
-                if qty > old_qty:
-                    raise FunMarketError(f"You only have {old_qty} shares long in `{sym}`.")
-                realized = int(round((price - avg) * qty))
-                proceeds = price * qty
-                bankroll = await self._get_bankroll_conn(conn, user_id)
-                new_bankroll = bankroll + proceeds
-                await self._set_bankroll_conn(conn, user_id, new_bankroll)
-
-                new_qty = old_qty - qty
-                if new_qty <= 0:
-                    await conn.execute(
-                        "DELETE FROM fun_positions WHERE user_id=? AND symbol=? AND side='LONG'",
-                        (int(user_id), sym),
-                    )
-                else:
-                    await conn.execute(
-                        "UPDATE fun_positions SET qty=? WHERE user_id=? AND symbol=? AND side='LONG'",
-                        (new_qty, int(user_id), sym),
-                    )
+            else:
                 await conn.execute(
-                    "INSERT INTO fun_trades (ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, 'SELL', ?, ?, ?, ?, NULL)",
-                    (self._now(), int(user_id), sym, qty, price, proceeds, realized),
+                    "UPDATE fun_positions SET qty=? WHERE user_id=? AND symbol=? AND side='LONG'",
+                    (new_qty, int(user_id), sym),
                 )
-                await conn.commit()
+            await conn.execute(
+                "INSERT INTO fun_trades (ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, 'SELL', ?, ?, ?, ?, NULL)",
+                (self._now(), int(user_id), sym, qty, price, proceeds, realized),
+            )
+            await conn.commit()
 
         stock = await self.get_stock(sym)
         pos = await self._get_position(user_id=user_id, symbol=sym, side="LONG")
         return stock, pos, new_bankroll, realized
 
-    async def open_short(self, *, user_id: int, symbol: str, qty: int) -> tuple[StockRow, PositionRow, int, int]:
+    async def open_short(
+        self, *, user_id: int, symbol: str, qty: int
+    ) -> tuple[StockRow, PositionRow, int, int]:
         sym = normalize_symbol(symbol)
         qty = int(qty)
         if qty <= 0:
             raise FunMarketError("Quantity must be at least 1.")
-        async with self.db._lock:  # type: ignore[attr-defined]
-            async with aiosqlite.connect(self.db.path) as conn:  # type: ignore[attr-defined]
-                await self._sync_catalog_conn(conn)
-                srow = await self._get_stock_conn(conn, sym)
-                if srow is None or not bool(srow[4]):
-                    raise FunMarketError(f"Unknown/ inactive symbol `{sym}`.")
-                price = int(srow[2])
-                notional = price * qty
-                collateral = int(math.ceil(notional * SHORT_COLLATERAL_RATIO))
-                bankroll = await self._get_bankroll_conn(conn, user_id)
-                if bankroll < collateral:
-                    raise FunMarketError(
-                        f"Insufficient bankroll for short collateral. Need ${collateral} ({int(SHORT_COLLATERAL_RATIO*100)}%), have ${bankroll}."
-                    )
-
-                cur = await conn.execute(
-                    "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE user_id=? AND symbol=? AND side='SHORT'",
-                    (int(user_id), sym),
+        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
+            await self._sync_catalog_conn(conn)
+            srow = await self._get_stock_conn(conn, sym)
+            if srow is None or not bool(srow[4]):
+                raise FunMarketError(f"Unknown/ inactive symbol `{sym}`.")
+            price = int(srow[2])
+            notional = price * qty
+            collateral = math.ceil(notional * SHORT_COLLATERAL_RATIO)
+            bankroll = await self._get_bankroll_conn(conn, user_id)
+            if bankroll < collateral:
+                raise FunMarketError(
+                    f"Insufficient bankroll for short collateral. Need ${collateral} ({int(SHORT_COLLATERAL_RATIO * 100)}%), have ${bankroll}."
                 )
-                prow = await cur.fetchone()
-                if prow is None:
-                    new_qty = qty
-                    new_avg = float(price)
-                    new_collateral = collateral
-                    await conn.execute(
-                        "INSERT INTO fun_positions (user_id, symbol, side, qty, avg_price, collateral_locked) VALUES (?, ?, 'SHORT', ?, ?, ?)",
-                        (int(user_id), sym, new_qty, new_avg, new_collateral),
-                    )
-                else:
-                    old_qty = int(prow[0])
-                    old_avg = float(prow[1])
-                    old_collateral = int(prow[2] or 0)
-                    new_qty = old_qty + qty
-                    new_avg = ((old_qty * old_avg) + (qty * price)) / max(1, new_qty)
-                    new_collateral = old_collateral + collateral
-                    await conn.execute(
-                        "UPDATE fun_positions SET qty=?, avg_price=?, collateral_locked=? WHERE user_id=? AND symbol=? AND side='SHORT'",
-                        (new_qty, float(new_avg), new_collateral, int(user_id), sym),
-                    )
 
-                new_bankroll = bankroll - collateral
-                await self._set_bankroll_conn(conn, user_id, new_bankroll)
+            cur = await conn.execute(
+                "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE user_id=? AND symbol=? AND side='SHORT'",
+                (int(user_id), sym),
+            )
+            prow = await cur.fetchone()
+            if prow is None:
+                new_qty = qty
+                new_avg = float(price)
+                new_collateral = collateral
                 await conn.execute(
-                    "INSERT INTO fun_trades (ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, 'SHORT', ?, ?, ?, 0, ?)",
-                    (self._now(), int(user_id), sym, qty, price, -collateral, f"Collateral {int(SHORT_COLLATERAL_RATIO*100)}%"),
+                    "INSERT INTO fun_positions (user_id, symbol, side, qty, avg_price, collateral_locked) VALUES (?, ?, 'SHORT', ?, ?, ?)",
+                    (int(user_id), sym, new_qty, new_avg, new_collateral),
                 )
-                await conn.commit()
+            else:
+                old_qty = int(prow[0])
+                old_avg = float(prow[1])
+                old_collateral = int(prow[2] or 0)
+                new_qty = old_qty + qty
+                new_avg = ((old_qty * old_avg) + (qty * price)) / max(1, new_qty)
+                new_collateral = old_collateral + collateral
+                await conn.execute(
+                    "UPDATE fun_positions SET qty=?, avg_price=?, collateral_locked=? WHERE user_id=? AND symbol=? AND side='SHORT'",
+                    (new_qty, float(new_avg), new_collateral, int(user_id), sym),
+                )
+
+            new_bankroll = bankroll - collateral
+            await self._set_bankroll_conn(conn, user_id, new_bankroll)
+            await conn.execute(
+                "INSERT INTO fun_trades (ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, 'SHORT', ?, ?, ?, 0, ?)",
+                (
+                    self._now(),
+                    int(user_id),
+                    sym,
+                    qty,
+                    price,
+                    -collateral,
+                    f"Collateral {int(SHORT_COLLATERAL_RATIO * 100)}%",
+                ),
+            )
+            await conn.commit()
 
         stock = await self.get_stock(sym)
         pos = await self._get_position(user_id=user_id, symbol=sym, side="SHORT")
+        if pos is None:
+            raise FunMarketError(f"Failed to load SHORT position for `{sym}`.")
         return stock, pos, new_bankroll, collateral
 
-    async def cover_short(self, *, user_id: int, symbol: str, qty: int) -> tuple[StockRow, PositionRow | None, int, int, int]:
+    async def cover_short(
+        self, *, user_id: int, symbol: str, qty: int
+    ) -> tuple[StockRow, PositionRow | None, int, int, int]:
         sym = normalize_symbol(symbol)
         qty = int(qty)
         if qty <= 0:
             raise FunMarketError("Quantity must be at least 1.")
-        async with self.db._lock:  # type: ignore[attr-defined]
-            async with aiosqlite.connect(self.db.path) as conn:  # type: ignore[attr-defined]
-                await self._sync_catalog_conn(conn)
-                srow = await self._get_stock_conn(conn, sym)
-                if srow is None:
-                    raise FunMarketError(f"Unknown symbol `{sym}`.")
-                price = int(srow[2])
+        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
+            await self._sync_catalog_conn(conn)
+            srow = await self._get_stock_conn(conn, sym)
+            if srow is None:
+                raise FunMarketError(f"Unknown symbol `{sym}`.")
+            price = int(srow[2])
 
-                cur = await conn.execute(
-                    "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE user_id=? AND symbol=? AND side='SHORT'",
+            cur = await conn.execute(
+                "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE user_id=? AND symbol=? AND side='SHORT'",
+                (int(user_id), sym),
+            )
+            prow = await cur.fetchone()
+            if prow is None:
+                raise FunMarketError(f"No short position in `{sym}`.")
+
+            old_qty = int(prow[0])
+            avg = float(prow[1])
+            old_collateral = int(prow[2] or 0)
+            if qty > old_qty:
+                raise FunMarketError(f"You only have {old_qty} shares short in `{sym}`.")
+
+            # Proportional collateral release; exact close releases all remainder
+            if qty == old_qty:
+                release = old_collateral
+            else:
+                release = round(old_collateral * (qty / max(1, old_qty)))
+                release = max(0, min(release, old_collateral))
+
+            realized = round((avg - price) * qty)
+            cash_delta = int(release + realized)
+            bankroll = await self._get_bankroll_conn(conn, user_id)
+            new_bankroll = (
+                bankroll + cash_delta
+            )  # may go negative on extreme losses (intentional debt behavior)
+            await self._set_bankroll_conn(conn, user_id, new_bankroll)
+
+            new_qty = old_qty - qty
+            new_collateral = old_collateral - release
+            if new_qty <= 0:
+                await conn.execute(
+                    "DELETE FROM fun_positions WHERE user_id=? AND symbol=? AND side='SHORT'",
                     (int(user_id), sym),
                 )
-                prow = await cur.fetchone()
-                if prow is None:
-                    raise FunMarketError(f"No short position in `{sym}`.")
-
-                old_qty = int(prow[0])
-                avg = float(prow[1])
-                old_collateral = int(prow[2] or 0)
-                if qty > old_qty:
-                    raise FunMarketError(f"You only have {old_qty} shares short in `{sym}`.")
-
-                # Proportional collateral release; exact close releases all remainder
-                if qty == old_qty:
-                    release = old_collateral
-                else:
-                    release = int(round(old_collateral * (qty / max(1, old_qty))))
-                    release = max(0, min(release, old_collateral))
-
-                realized = int(round((avg - price) * qty))
-                cash_delta = int(release + realized)
-                bankroll = await self._get_bankroll_conn(conn, user_id)
-                new_bankroll = bankroll + cash_delta  # may go negative on extreme losses (intentional debt behavior)
-                await self._set_bankroll_conn(conn, user_id, new_bankroll)
-
-                new_qty = old_qty - qty
-                new_collateral = old_collateral - release
-                if new_qty <= 0:
-                    await conn.execute(
-                        "DELETE FROM fun_positions WHERE user_id=? AND symbol=? AND side='SHORT'",
-                        (int(user_id), sym),
-                    )
-                else:
-                    await conn.execute(
-                        "UPDATE fun_positions SET qty=?, collateral_locked=? WHERE user_id=? AND symbol=? AND side='SHORT'",
-                        (new_qty, max(0, new_collateral), int(user_id), sym),
-                    )
+            else:
                 await conn.execute(
-                    "INSERT INTO fun_trades (ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, 'COVER', ?, ?, ?, ?, NULL)",
-                    (self._now(), int(user_id), sym, qty, price, cash_delta, realized),
+                    "UPDATE fun_positions SET qty=?, collateral_locked=? WHERE user_id=? AND symbol=? AND side='SHORT'",
+                    (new_qty, max(0, new_collateral), int(user_id), sym),
                 )
-                await conn.commit()
+            await conn.execute(
+                "INSERT INTO fun_trades (ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, 'COVER', ?, ?, ?, ?, NULL)",
+                (self._now(), int(user_id), sym, qty, price, cash_delta, realized),
+            )
+            await conn.commit()
 
         stock = await self.get_stock(sym)
         pos = await self._get_position(user_id=user_id, symbol=sym, side="SHORT")
@@ -665,11 +690,11 @@ class FunMarketStore:
             market_value = qty_i * mkt_i
             side_s = str(side).upper()
             if side_s == "LONG":
-                pnl = int(round((mkt_i - avg_f) * qty_i))
+                pnl = round((mkt_i - avg_f) * qty_i)
                 equity = market_value
                 long_value += market_value
             else:
-                pnl = int(round((avg_f - mkt_i) * qty_i))
+                pnl = round((avg_f - mkt_i) * qty_i)
                 equity = coll_i + pnl
                 short_equity += equity
             unreal += pnl
@@ -716,7 +741,7 @@ class FunMarketStore:
         snaps.sort(key=lambda s: s.net_worth, reverse=True)
         return snaps[:limit]
 
-    async def recent_trades(self, *, user_id: int | None = None, limit: int = 15) -> list[tuple]:
+    async def recent_trades(self, *, user_id: int | None = None, limit: int = 15) -> list[tuple[Any, ...]]:
         limit = max(1, min(int(limit), 25))
         if user_id is None:
             return await self.db.fetchall(

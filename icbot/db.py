@@ -1,7 +1,10 @@
 from __future__ import annotations
-import aiosqlite
+
 import asyncio
-from typing import Any, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
+
+import aiosqlite
 
 
 class Database:
@@ -68,8 +71,6 @@ class Database:
                 await db.execute(
                     "ALTER TABLE blackjack_users ADD COLUMN reset_count INTEGER NOT NULL DEFAULT 0"
                 )
-
-
 
             # Job alerts (dedupe + bootstrap checkpoints)
             await db.execute(
@@ -146,7 +147,9 @@ class Database:
             fun_cols = [str(r[1]) for r in (await cur.fetchall() or [])]
             if fun_cols:
                 if "category" not in fun_cols:
-                    await db.execute("ALTER TABLE fun_stocks ADD COLUMN category TEXT NOT NULL DEFAULT 'misc'")
+                    await db.execute(
+                        "ALTER TABLE fun_stocks ADD COLUMN category TEXT NOT NULL DEFAULT 'misc'"
+                    )
                 if "is_active" not in fun_cols:
                     await db.execute("ALTER TABLE fun_stocks ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
                 if "week_key" not in fun_cols:
@@ -187,9 +190,7 @@ class Database:
                 )
                 """
             )
-            await db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_fun_positions_user ON fun_positions(user_id)"
-            )
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_fun_positions_user ON fun_positions(user_id)")
 
             # Additive migration if table existed before collateral support
             cur = await db.execute("PRAGMA table_info(fun_positions)")
@@ -218,9 +219,7 @@ class Database:
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_fun_trades_user_ts ON fun_trades(user_id, ts_unix DESC)"
             )
-            await db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_fun_trades_ts ON fun_trades(ts_unix DESC)"
-            )
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_fun_trades_ts ON fun_trades(ts_unix DESC)")
 
             await db.execute(
                 """
@@ -242,24 +241,30 @@ class Database:
             await db.commit()
 
     async def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
-        async with self._lock:
-            async with aiosqlite.connect(self.path) as db:
-                await db.execute(sql, params)
-                await db.commit()
+        async with self._lock, aiosqlite.connect(self.path) as db:
+            await db.execute(sql, params)
+            await db.commit()
 
-    async def fetchone(self, sql: str, params: Sequence[Any] = ()) -> Optional[tuple]:
+    async def execute_insert(self, sql: str, params: Sequence[Any] = ()) -> int:
+        async with self._lock, aiosqlite.connect(self.path) as db:
+            cur = await db.execute(sql, params)
+            await db.commit()
+            return int(cur.lastrowid or 0)
+
+    async def fetchone(self, sql: str, params: Sequence[Any] = ()) -> tuple[Any, ...] | None:
         async with aiosqlite.connect(self.path) as db:
             cur = await db.execute(sql, params)
-            return await cur.fetchone()
+            row = await cur.fetchone()
+            return tuple(row) if row is not None else None
 
-    async def fetchall(self, sql: str, params: Sequence[Any] = ()) -> list[tuple]:
+    async def fetchall(self, sql: str, params: Sequence[Any] = ()) -> list[tuple[Any, ...]]:
         async with aiosqlite.connect(self.path) as db:
             cur = await db.execute(sql, params)
-            return await cur.fetchall()
+            rows = await cur.fetchall()
+            return [tuple(r) for r in rows]
 
     async def execute_many(self, statements: list[tuple[str, Sequence[Any]]]) -> None:
-        async with self._lock:
-            async with aiosqlite.connect(self.path) as db:
-                for sql, params in statements:
-                    await db.execute(sql, params)
-                await db.commit()
+        async with self._lock, aiosqlite.connect(self.path) as db:
+            for sql, params in statements:
+                await db.execute(sql, params)
+            await db.commit()

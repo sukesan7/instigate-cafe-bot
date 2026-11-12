@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-import aiohttp
-import asyncio
+import json
+import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlencode
+
+import aiohttp
+
+log = logging.getLogger(__name__)
 
 
 class GOFetchError(RuntimeError):
@@ -45,8 +49,8 @@ def _extract_list_codes(items: Any, key: str) -> list[str]:
                 v = getattr(it, key, None)
                 if v:
                     out.append(str(v))
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                log.debug("Skipping GO alert item attribute %s: %s", key, exc)
     return out
 
 
@@ -56,10 +60,7 @@ def _parse_messages(payload: Any) -> list[GOMessage]:
 
     # expected: {"Metadata": {...}, "Messages": {"Message":[...]}}
     messages = payload.get("Messages") or {}
-    if isinstance(messages, dict) and "Message" in messages:
-        raw = messages.get("Message")
-    else:
-        raw = messages
+    raw = messages.get("Message") if isinstance(messages, dict) and "Message" in messages else messages
 
     out: list[GOMessage] = []
     for m in _as_list(raw):
@@ -69,8 +70,12 @@ def _parse_messages(payload: Any) -> list[GOMessage]:
             GOMessage(
                 code=str(m.get("Code") or "").strip(),
                 status=(str(m.get("Status")).strip() if m.get("Status") is not None else None),
-                posted_dt=(str(m.get("PostedDateTime")).strip() if m.get("PostedDateTime") is not None else None),
-                subject_en=(str(m.get("SubjectEnglish")).strip() if m.get("SubjectEnglish") is not None else None),
+                posted_dt=(
+                    str(m.get("PostedDateTime")).strip() if m.get("PostedDateTime") is not None else None
+                ),
+                subject_en=(
+                    str(m.get("SubjectEnglish")).strip() if m.get("SubjectEnglish") is not None else None
+                ),
                 body_en=(str(m.get("BodyEnglish")).strip() if m.get("BodyEnglish") is not None else None),
                 category=(str(m.get("Category")).strip() if m.get("Category") is not None else None),
                 subcategory=(str(m.get("SubCategory")).strip() if m.get("SubCategory") is not None else None),
@@ -110,17 +115,19 @@ async def fetch_service_alerts(
     }
 
     try:
-        async with session.get(url, headers=headers, timeout=timeout_seconds) as resp:
+        async with session.get(
+            url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout_seconds)
+        ) as resp:
             # Some GO endpoints return 200 + ErrorCode in Metadata, but also can return non-200.
             text = await resp.text()
             if resp.status != 200:
                 raise GOFetchError(f"HTTP {resp.status} via GET {url} :: {text[:300]}")
             try:
                 payload = await resp.json(content_type=None)
-            except Exception as e:
-                raise GOFetchError(f"invalid json: {e!r} :: {text[:300]}")
-    except (asyncio.TimeoutError, aiohttp.ClientError) as e:
-        raise GOFetchError(f"network error: {e!r}")
+            except (aiohttp.ContentTypeError, json.JSONDecodeError, ValueError) as e:
+                raise GOFetchError(f"invalid json: {e!r} :: {text[:300]}") from e
+    except (TimeoutError, aiohttp.ClientError) as e:
+        raise GOFetchError(f"network error: {e!r}") from e
 
     msgs = _parse_messages(payload)
     return msgs

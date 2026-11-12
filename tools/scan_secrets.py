@@ -20,9 +20,9 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 # ---------------------------------------------------------------------------
 # Forbidden file patterns (relative to repo root)
@@ -69,15 +69,11 @@ SECRET_REGEXES: dict[str, re.Pattern[str]] = {
     ),
     "Google Gemini API Key": re.compile(r"\bAIzaSy[A-Za-z0-9_-]{33}\b"),
     "AWS Access Key ID": re.compile(r"\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b"),
-    "GitHub Personal Access Token": re.compile(
-        r"\b(?:ghp_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{82})\b"
-    ),
+    "GitHub Personal Access Token": re.compile(r"\b(?:ghp_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{82})\b"),
     "Slack Webhook URL": re.compile(
         r"https://hooks\.slack\.com/services/T[A-Z0-9_]+/B[A-Z0-9_]+/[A-Za-z0-9_]+"
     ),
-    "Discord Webhook URL": re.compile(
-        r"https://discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]+"
-    ),
+    "Discord Webhook URL": re.compile(r"https://discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]+"),
     "Private Key Header": re.compile(r"-----BEGIN (?:[A-Z ]+)?PRIVATE KEY-----"),
 }
 
@@ -110,7 +106,7 @@ def get_repo_root() -> Path:
             check=True,
         )
         return Path(res.stdout.strip()).resolve()
-    except Exception:
+    except (subprocess.CalledProcessError, OSError):
         # Fallback to parent of tools directory
         return Path(__file__).resolve().parent.parent
 
@@ -126,7 +122,7 @@ def get_tracked_files(repo_root: Path) -> list[str]:
             check=True,
         )
         return [f.strip() for f in res.stdout.splitlines() if f.strip()]
-    except Exception:
+    except (subprocess.CalledProcessError, OSError):
         # Fallback: walk directory respecting basic ignores
         out: list[str] = []
         for root, dirs, files in os.walk(repo_root):
@@ -166,14 +162,16 @@ def scan_file_content(file_path: Path, rel_path: str) -> list[Finding]:
             if b"\x00" in chunk:
                 return findings  # Skip binary files
 
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(file_path, encoding="utf-8", errors="ignore") as f:
             for line_idx, line in enumerate(f, start=1):
                 for label, pat in SECRET_REGEXES.items():
                     m = pat.search(line)
                     if m:
                         matched_text = m.group(0)
                         # Mask matched token for safe reporting
-                        masked = matched_text[:4] + "..." + matched_text[-4:] if len(matched_text) > 8 else "***"
+                        masked = (
+                            matched_text[:4] + "..." + matched_text[-4:] if len(matched_text) > 8 else "***"
+                        )
                         findings.append(
                             Finding(
                                 category="LEAKED_SECRET",
@@ -182,7 +180,7 @@ def scan_file_content(file_path: Path, rel_path: str) -> list[Finding]:
                                 description=f"Found pattern for {label}: '{masked}'",
                             )
                         )
-    except Exception as e:
+    except (OSError, UnicodeError, ValueError) as e:
         findings.append(
             Finding(
                 category="SCAN_ERROR",
@@ -228,7 +226,7 @@ def audit_env_example(repo_root: Path) -> list[Finding]:
         "TTC_BOOTSTRAP_POST_LATEST",
     ]
 
-    with open(env_example, "r", encoding="utf-8") as f:
+    with open(env_example, encoding="utf-8") as f:
         for idx, line in enumerate(f, start=1):
             line_str = line.strip()
             if not line_str or line_str.startswith("#"):
@@ -369,7 +367,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(" [FAIL] Enforce-clean mode active: legacy tracked artifacts must be untracked before release.")
         return 1
     elif legacy_findings and not args.allow_legacy:
-        print(" [WARN] Legacy tracked artifacts detected. Use --allow-legacy during intermediate development,")
+        print(
+            " [WARN] Legacy tracked artifacts detected. Use --allow-legacy during intermediate development,"
+        )
         print("        or run with --enforce-clean to verify ready-for-publication state.")
         return 1
     else:
@@ -379,4 +379,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional
 import html
 import re
+from dataclasses import dataclass
 
 import aiohttp
 
@@ -23,7 +22,7 @@ class TTCItem:
     title: str
     link: str
     summary: str
-    published_iso: Optional[str]
+    published_iso: str | None
 
 
 class TTCFetchError(RuntimeError):
@@ -90,12 +89,12 @@ async def fetch_account_status_items(
     api_base: str,
     account_id: str,
     *,
-    since_id: Optional[str] = None,
+    since_id: str | None = None,
     limit: int = 20,
     timeout_seconds: int = 14,
     include_replies: bool = True,
     include_reblogs: bool = False,
-) -> List[TTCItem]:
+) -> list[TTCItem]:
     """
     Fetch new statuses for an account. Returns newest-first (Mastodon default).
     Use since_id to only retrieve newer items.
@@ -105,7 +104,7 @@ async def fetch_account_status_items(
         raise TTCFetchError("Missing api_base or account_id")
 
     url = f"{api_base}/api/v1/accounts/{account_id}/statuses"
-    params: Dict[str, str] = {
+    params: dict[str, str] = {
         "limit": str(max(1, min(int(limit), 40))),
     }
     # Many TTC updates are posted as replies to earlier advisories.
@@ -136,7 +135,7 @@ async def fetch_account_status_items(
     if not isinstance(data, list):
         return []
 
-    out: List[TTCItem] = []
+    out: list[TTCItem] = []
     for st in data:
         if not isinstance(st, dict):
             continue

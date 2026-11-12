@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import ssl
-from datetime import datetime
-from typing import Optional
+from datetime import UTC, datetime
 
 import aiohttp
 import discord
@@ -12,6 +12,8 @@ import discord
 from icbot.embeds import go_alert as go_alert_embed
 from icbot.services.go_client import GOFetchError, GOMessage, fetch_service_alerts
 
+log = logging.getLogger(__name__)
+_MIN_DT = datetime.min.replace(tzinfo=UTC)
 
 _MAJOR_PATTERNS = [
     r"\bderail(ed|ment)?\b",
@@ -135,9 +137,9 @@ def _make_go_connector(settings) -> aiohttp.TCPConnector:
                 import certifi  # type: ignore
 
                 ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-            except Exception:
+            except (ImportError, OSError, ssl.SSLError, ValueError):
                 ssl_ctx = ssl.create_default_context()
-    except Exception:
+    except (OSError, ssl.SSLError, ValueError):
         ssl_ctx = ssl.create_default_context()
 
     return aiohttp.TCPConnector(ssl=ssl_ctx)
@@ -165,23 +167,23 @@ def _is_major(m: GOMessage) -> bool:
 
 
 def _is_train_related(m: GOMessage) -> bool:
-    for code in (m.lines or []):
+    for code in m.lines or []:
         c = str(code).strip().upper()
         if _TRAIN_LINE_RE.match(c):
             return True
     return False
 
 
-def _parse_dt(s: str | None) -> Optional[datetime]:
+def _parse_dt(s: str | None) -> datetime | None:
     if not s:
         return None
     s = s.strip()
     # Examples in docs: "2026-01-09 15:56:04"
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
         try:
-            return datetime.strptime(s, fmt)
-        except Exception:
-            pass
+            return datetime.strptime(s, fmt).replace(tzinfo=UTC)
+        except ValueError as exc:
+            log.debug("GO timestamp %r failed format %s: %s", s, fmt, exc)
     return None
 
 
@@ -200,7 +202,7 @@ async def _resolve_channel(bot: discord.Client, channel_id: int):
         if ch:
             return ch
         return await bot.fetch_channel(channel_id)
-    except Exception:
+    except (discord.DiscordException, LookupError, ValueError):
         return None
 
 
@@ -217,9 +219,7 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
 
     # Channel defaults to TTC if not explicitly set.
     channel_id = int(
-        getattr(settings, "go_alerts_channel_id", 0)
-        or getattr(settings, "ttc_alerts_channel_id", 0)
-        or 0
+        getattr(settings, "go_alerts_channel_id", 0) or getattr(settings, "ttc_alerts_channel_id", 0) or 0
     )
 
     if not channel_id:
@@ -246,14 +246,14 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
 
     # Fetch with small retry on transient issues
     msgs: list[GOMessage] = []
-    last_err: Optional[BaseException] = None
+    last_err: BaseException | None = None
     async with aiohttp.ClientSession(connector=_make_go_connector(settings)) as session:
         for attempt in range(3):
             try:
                 msgs = await fetch_service_alerts(session, api_base, access_key, timeout_seconds=18)
                 last_err = None
                 break
-            except (asyncio.TimeoutError, aiohttp.ClientError, GOFetchError) as e:
+            except (TimeoutError, aiohttp.ClientError, GOFetchError) as e:
                 last_err = e
                 await asyncio.sleep(1.5 * (attempt + 1))
 
@@ -282,10 +282,10 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
     # Sort (oldest -> newest) by PostedDateTime where possible.
     msgs_sorted = sorted(
         msgs,
-        key=lambda m: _parse_dt(m.posted_dt) or datetime.min,
+        key=lambda m: _parse_dt(m.posted_dt) or _MIN_DT,
     )
 
-    newest = max(msgs_sorted, key=lambda m: _parse_dt(m.posted_dt) or datetime.min)
+    newest = max(msgs_sorted, key=lambda m: _parse_dt(m.posted_dt) or _MIN_DT)
 
     last_code = (await _get_meta(db, "go_last_servicealert_code")).strip()
 
@@ -296,8 +296,10 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
             f"include_buses={include_buses} allowlist={'on' if bool(allow) else 'off'} "
             f"last_code={'set' if bool(last_code) else 'none'}"
         )
-        if len(msgs_sorted) > 0 and poll_level == 'major' and major_ct == 0:
-            print("[GO] NOTE: items fetched but none matched MAJOR patterns; set GO_ALERT_LEVEL=all to see them.")
+        if len(msgs_sorted) > 0 and poll_level == "major" and major_ct == 0:
+            print(
+                "[GO] NOTE: items fetched but none matched MAJOR patterns; set GO_ALERT_LEVEL=all to see them."
+            )
 
     # Bootstrap behavior: optionally post ONE latest matching item, then checkpoint
     if not last_code:
@@ -321,14 +323,16 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
                     await channel.send(embed=embed)  # type: ignore[call-arg]
                     posted = True
                     break
-                except Exception as e:
+                except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
                     print(f"[GO] post failed: {e!r}")
                     break
             _ = posted
 
         await _set_meta(db, "go_last_servicealert_code", newest.code)
         if debug:
-            print(f"[GO] bootstrap: checkpoint={newest.code} posted_latest={bootstrap_post_latest} level={poll_level}")
+            print(
+                f"[GO] bootstrap: checkpoint={newest.code} posted_latest={bootstrap_post_latest} level={poll_level}"
+            )
         return
 
     # If we can't find the last_code in the current feed (e.g., retention), treat it like a bootstrap.
@@ -355,7 +359,7 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
                 try:
                     await channel.send(embed=embed)  # type: ignore[call-arg]
                     break
-                except Exception as e:
+                except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
                     print(f"[GO] post failed: {e!r}")
                     return
         return
@@ -388,6 +392,6 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
         )
         try:
             await channel.send(embed=embed)  # type: ignore[call-arg]
-        except Exception as e:
+        except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
             print(f"[GO] post failed: {e!r}")
             return

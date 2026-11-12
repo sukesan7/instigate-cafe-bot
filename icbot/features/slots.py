@@ -5,8 +5,8 @@ from discord import app_commands
 
 from icbot.app import casino
 from icbot.embeds import game as game_embed
-from icbot.services.user_service import UserStore, InsufficientBalanceError
-from icbot.games.slots_engine import spin, reel_display, payout_table
+from icbot.games.slots_engine import payout_table, reel_display, spin
+from icbot.services.user_service import InsufficientBalanceError, UserStore
 
 
 def _make_user_store(interaction: discord.Interaction) -> UserStore:

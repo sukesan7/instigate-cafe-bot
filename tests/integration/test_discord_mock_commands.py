@@ -117,9 +117,7 @@ async def test_exam_commands_rbac_add_list_and_remove(make_interaction, make_mem
         notes="Calculator allowed",
     )
     assert "Added exam COE817" in add_inter.last_reply.content
-    # Characterization: exams_add_cmd queries last_insert_rowid() on a fresh DB connection,
-    # so the confirmation message currently prints ID: 0 even though SQLite inserts id = 1.
-    assert "- ID: " in add_inter.last_reply.content
+    assert "- ID: 1" in add_inter.last_reply.content
 
     # List schedule shows newly added exam with SQLite-assigned ID 1
     list_inter = make_interaction(user=regular_user, command_name="ic exam list")

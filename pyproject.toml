@@ -132,30 +132,7 @@ ignore_missing_imports = true
 warn_unused_configs = true
 warn_redundant_casts = true
 no_implicit_optional = true
-exclude = ["^\\.venv/", "^scripts/", "^tests/"]
-
-[[tool.mypy.overrides]]
-module = [
-    "icbot.config",
-    "icbot.permissions",
-    "icbot.embeds",
-    "icbot.app",
-    "icbot.utils",
-    "icbot.games.*",
-    "icbot.services.user_service",
-    "icbot.services.fun_market_catalog",
-    "icbot.services.gemini_client",
-    "icbot.services.sports_client",
-    "icbot.services.btc_esplora",
-    "icbot.services.crypto_fng",
-    "icbot.services.jobs_ats_client",
-    "icbot.services.ttc_client",
-    "icbot.services.yahoo_quotes",
-    "tools.check_syntax",
-    "tools.lore_loader",
-    "tools.scan_secrets",
-    "tools.smoke_offline",
-]
 check_untyped_defs = true
 warn_return_any = true
+exclude = ["^\\.venv/", "^scripts/", "^tests/"]
 

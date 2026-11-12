@@ -1,41 +1,55 @@
 import asyncio
+import logging
+import sqlite3
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import aiohttp
+import aiosqlite
 import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from icbot.config import Settings, MAX_SNOWFLAKE
-from icbot.db import Database
 from icbot.app import ic
-from icbot.permissions import is_admin_or_allowed
+from icbot.config import MAX_SNOWFLAKE, Settings
+from icbot.db import Database
 
-from icbot.tasks.ttc_alerts import poll_and_post_ttc
+# Import features (registers commands onto /ic)
+from icbot.features import (
+    admin,  # noqa: F401
+    blackjack,  # noqa: F401
+    exams,  # noqa: F401
+    grades,  # noqa: F401
+    help,  # noqa: F401
+    info,  # noqa: F401
+    invest,  # noqa: F401
+    jobs,  # noqa: F401
+    lc_leaderboard,  # noqa: F401
+    notes,  # noqa: F401
+    prof,  # noqa: F401
+    profile,  # noqa: F401
+    report,  # noqa: F401
+    resume,  # noqa: F401
+    roulette,  # noqa: F401
+    slots,  # noqa: F401
+    sports,  # noqa: F401
+)
+from icbot.permissions import is_admin_or_allowed
+from icbot.services.fun_market import FunMarketError
+from icbot.services.go_client import GOFetchError
+from icbot.services.ttc_client import TTCFetchError
+from icbot.tasks.btc_watch import poll_and_post_btc_watch
 from icbot.tasks.go_alerts import poll_and_post_go_alerts
 from icbot.tasks.job_alerts import poll_and_post_jobs
 from icbot.tasks.jobs_workday_alerts import poll_and_post_workday_jobs
-from icbot.tasks.market_watch import poll_and_post_market_watch
-from icbot.tasks.market_daily_report import post_daily_market_report
-from icbot.tasks.btc_watch import poll_and_post_btc_watch
 from icbot.tasks.llm_assistant import maybe_handle_llm_mention
+from icbot.tasks.market_daily_report import post_daily_market_report
+from icbot.tasks.market_watch import poll_and_post_market_watch
+from icbot.tasks.ttc_alerts import poll_and_post_ttc
 
-# Import features (registers commands onto /ic)
-from icbot.features import blackjack  # noqa: F401
-from icbot.features import invest  # noqa: F401
-from icbot.features import lc_leaderboard  # noqa: F401
-from icbot.features import sports  # noqa: F401
-from icbot.features import notes  # noqa: F401
-from icbot.features import prof  # noqa: F401
-from icbot.features import info  # noqa: F401
-from icbot.features import resume  # noqa: F401
-from icbot.features import report  # noqa: F401
-from icbot.features import jobs  # noqa: F401
-from icbot.features import exams  # noqa: F401
-from icbot.features import profile  # noqa: F401
-from icbot.features import roulette  # noqa: F401
-from icbot.features import slots  # noqa: F401
-from icbot.features import grades # noqa: F401
-from icbot.features import admin # noqa: F401
-from icbot.features import help # noqa: F401
+log = logging.getLogger(__name__)
 
 load_dotenv(override=True)
 settings = Settings.from_env()
@@ -46,7 +60,13 @@ intents.guilds = True
 intents.messages = True  # needed for message-count leaderboard tracking
 intents.message_content = True  # required for @bot mentions + reading chat context
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+
+class _CafeCommandTree(app_commands.CommandTree[commands.Bot]):
+    async def interaction_check(self, interaction: discord.Interaction[commands.Bot], /) -> bool:
+        return await ic_channel_gate(interaction)
+
+
+bot = commands.Bot(command_prefix="!", intents=intents, tree_cls=_CafeCommandTree)
 
 
 def _fmt_csv(items: list[str], *, limit: int = 12) -> str:
@@ -59,7 +79,7 @@ def _fmt_csv(items: list[str], *, limit: int = 12) -> str:
     return f"{head},...(+{len(items) - limit})"
 
 
-async def ic_channel_gate(interaction: discord.Interaction) -> bool:
+async def ic_channel_gate(interaction: discord.Interaction[Any]) -> bool:
     """
     Gate ONLY /ic slash commands for non-admin users:
       - Admin/allowed roles can use /ic anywhere
@@ -91,17 +111,15 @@ async def ic_channel_gate(interaction: discord.Interaction) -> bool:
     return True
 
 
-@bot.tree.interaction_check
-async def _ic_tree_interaction_check(interaction: discord.Interaction) -> bool:
-    return await ic_channel_gate(interaction)
-
-
 @bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+async def on_app_command_error(interaction: discord.Interaction[Any], error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CommandOnCooldown):
         import math
+
         mins, secs = divmod(error.retry_after, 60)
-        msg = f"⏳ This command is on cooldown. Please try again in **{math.ceil(mins)}m {math.ceil(secs)}s**."
+        msg = (
+            f"⏳ This command is on cooldown. Please try again in **{math.ceil(mins)}m {math.ceil(secs)}s**."
+        )
         if not interaction.response.is_done():
             await interaction.response.send_message(msg, ephemeral=True)
         else:
@@ -111,15 +129,15 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     # Silence check failures (we already responded in the gate)
     if isinstance(error, app_commands.CheckFailure):
         return
-        
+
     print(f"[ERROR] App command error: {error!r}")
     try:
         if not interaction.response.is_done():
             await interaction.response.send_message("❌ An unexpected error occurred.", ephemeral=True)
         else:
             await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
-    except Exception:
-        pass
+    except (discord.DiscordException, aiohttp.ClientError, RuntimeError) as exc:
+        log.debug("Failed sending app command error response: %s", exc)
 
 
 async def _ttc_loop() -> None:
@@ -128,11 +146,23 @@ async def _ttc_loop() -> None:
     while not bot.is_closed():
         try:
             await poll_and_post_ttc(bot)
-        except Exception as e:
+        except asyncio.CancelledError:
+            raise
+        except (
+            discord.DiscordException,
+            aiohttp.ClientError,
+            TimeoutError,
+            aiosqlite.Error,
+            sqlite3.Error,
+            TTCFetchError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            LookupError,
+        ) as e:
             print(f"[TTC] loop error: {e!r}")
         await asyncio.sleep(max(30, int(getattr(settings, "ttc_poll_seconds", 120) or 120)))
-
-
 
 
 async def _go_loop() -> None:
@@ -141,9 +171,24 @@ async def _go_loop() -> None:
     while not bot.is_closed():
         try:
             await poll_and_post_go_alerts(bot)
-        except Exception as e:
+        except asyncio.CancelledError:
+            raise
+        except (
+            discord.DiscordException,
+            aiohttp.ClientError,
+            TimeoutError,
+            aiosqlite.Error,
+            sqlite3.Error,
+            GOFetchError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            LookupError,
+        ) as e:
             print(f"[GO] loop error: {e!r}")
         await asyncio.sleep(max(60, int(getattr(settings, "go_poll_seconds", 180) or 180)))
+
 
 async def _jobs_loop() -> None:
     """Background poller that posts job alerts into the configured jobs channel."""
@@ -165,7 +210,18 @@ async def _jobs_loop() -> None:
         except asyncio.CancelledError:
             print("[JOBS] loop cancelled")
             raise
-        except Exception as e:
+        except (
+            discord.DiscordException,
+            aiohttp.ClientError,
+            TimeoutError,
+            aiosqlite.Error,
+            sqlite3.Error,
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            LookupError,
+        ) as e:
             print(f"[JOBS] loop error: {type(e).__name__}: {e!r}")
             traceback.print_exc()
 
@@ -181,7 +237,9 @@ async def _workday_loop() -> None:
 
     await bot.wait_until_ready()
 
-    poll_s0 = int(getattr(settings, "workday_poll_seconds", 0) or getattr(settings, "jobs_poll_seconds", 600) or 600)
+    poll_s0 = int(
+        getattr(settings, "workday_poll_seconds", 0) or getattr(settings, "jobs_poll_seconds", 600) or 600
+    )
     print(f"[WORKDAY] loop started (poll={poll_s0}s)")
 
     while not bot.is_closed():
@@ -194,14 +252,26 @@ async def _workday_loop() -> None:
         except asyncio.CancelledError:
             print("[WORKDAY] loop cancelled")
             raise
-        except Exception as e:
+        except (
+            discord.DiscordException,
+            aiohttp.ClientError,
+            TimeoutError,
+            aiosqlite.Error,
+            sqlite3.Error,
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            LookupError,
+        ) as e:
             print(f"[WORKDAY] loop error: {type(e).__name__}: {e!r}")
             traceback.print_exc()
 
-        poll_s = int(getattr(settings, "workday_poll_seconds", 0) or getattr(settings, "jobs_poll_seconds", 600) or 600)
+        poll_s = int(
+            getattr(settings, "workday_poll_seconds", 0) or getattr(settings, "jobs_poll_seconds", 600) or 600
+        )
         poll_s = max(60, poll_s)
         await asyncio.sleep(poll_s)
-
 
 
 async def _market_loop() -> None:
@@ -210,7 +280,20 @@ async def _market_loop() -> None:
     while not bot.is_closed():
         try:
             await poll_and_post_market_watch(bot)
-        except Exception as e:
+        except asyncio.CancelledError:
+            raise
+        except (
+            discord.DiscordException,
+            aiohttp.ClientError,
+            TimeoutError,
+            aiosqlite.Error,
+            sqlite3.Error,
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            LookupError,
+        ) as e:
             print(f"[MARKET] loop error: {e!r}")
         await asyncio.sleep(max(10, int(getattr(settings, "market_watch_poll_seconds", 300) or 300)))
 
@@ -226,28 +309,20 @@ def _parse_hhmm(raw: str, default_h: int = 16, default_m: int = 30) -> tuple[int
         # allow "1630"
         if len(raw) == 4 and raw.isdigit():
             return int(raw[:2]), int(raw[2:])
-    except Exception:
-        pass
+    except (TypeError, ValueError) as exc:
+        log.debug("Invalid HHMM value %r: %s", raw, exc)
     return default_h, default_m
 
 
 def _seconds_until_next(hh: int, mm: int, tz_name: str) -> float:
     """Seconds until next (hh:mm) in the given timezone."""
-    from datetime import datetime, timedelta
-
     try:
-        from zoneinfo import ZoneInfo
-
         tz = ZoneInfo(tz_name)
         now = datetime.now(tz)
-    except Exception:
-        now = datetime.utcnow()
-        tz = None
+    except (ZoneInfoNotFoundError, KeyError, ValueError):
+        now = datetime.now(UTC)
 
-    if tz is not None:
-        target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    else:
-        target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
 
     if now >= target:
         target = target + timedelta(days=1)
@@ -276,7 +351,21 @@ async def _daily_market_report_loop() -> None:
 
             # Small backoff to avoid immediate re-run on edge cases
             await asyncio.sleep(60)
-        except Exception as e:
+        except asyncio.CancelledError:
+            raise
+        except (
+            discord.DiscordException,
+            aiohttp.ClientError,
+            TimeoutError,
+            aiosqlite.Error,
+            sqlite3.Error,
+            FunMarketError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            LookupError,
+        ) as e:
             print(f"[DAILY] loop error: {e!r}")
             await asyncio.sleep(120)
 
@@ -287,7 +376,20 @@ async def _btc_watch_loop() -> None:
     while not bot.is_closed():
         try:
             await poll_and_post_btc_watch(bot)
-        except Exception as e:
+        except asyncio.CancelledError:
+            raise
+        except (
+            discord.DiscordException,
+            aiohttp.ClientError,
+            TimeoutError,
+            aiosqlite.Error,
+            sqlite3.Error,
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            LookupError,
+        ) as e:
             print(f"[BTC] loop error: {e!r}")
         await asyncio.sleep(max(30, int(getattr(settings, "btc_watch_poll_seconds", 300) or 300)))
 
@@ -297,18 +399,18 @@ async def on_ready():
     await db.init()
 
     # Make shared singletons available to feature modules via interaction.client
-    bot.settings = settings  # type: ignore[attr-defined]
-    bot.db = db  # type: ignore[attr-defined]
+    cast(Any, bot).settings = settings
+    cast(Any, bot).db = db
 
     # ---- Startup config logs (helps debug .env issues) ----
-    
+
     # Load LLM killswitch state from DB
     try:
         row = await db.fetchone("SELECT value FROM meta WHERE key=?", ("llm_killed",))
         if row and str(row[0]) == "1":
-            setattr(bot, "_llm_killed", True)
+            cast(Any, bot)._llm_killed = True
             print("[BOOT] Loaded persisted llm_killed=True state from DB.")
-    except Exception as e:
+    except (aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as e:
         print(f"[BOOT] Error loading LLM killswitch state: {e!r}")
     try:
         mw_enabled = bool(getattr(settings, "market_watch_enabled", False))
@@ -334,15 +436,23 @@ async def on_ready():
             f"db={settings.db_path}"
         )
         if mw_enabled and not mw_channel:
-            print("[MARKET] WARNING: enabled but no channel id set (MARKET_WATCH_CHANNEL_ID or STOCK_CHANNEL_ID).")
-    except Exception as e:
+            print(
+                "[MARKET] WARNING: enabled but no channel id set (MARKET_WATCH_CHANNEL_ID or STOCK_CHANNEL_ID)."
+            )
+    except (AttributeError, KeyError, LookupError, TypeError, ValueError) as e:
         print(f"[MARKET] config log error: {e!r}")
 
     # Jobs config log (Greenhouse/Lever/Workday)
     try:
         j_poll = int(getattr(settings, "jobs_poll_seconds", 0) or 0)
-        gh = list(getattr(settings, "greenhouse_boards", None) or getattr(settings, "greenhouse_board_tokens", None) or [])
-        lv = list(getattr(settings, "lever_sites", None) or getattr(settings, "lever_site_tokens", None) or [])
+        gh = list(
+            getattr(settings, "greenhouse_boards", None)
+            or getattr(settings, "greenhouse_board_tokens", None)
+            or []
+        )
+        lv = list(
+            getattr(settings, "lever_sites", None) or getattr(settings, "lever_site_tokens", None) or []
+        )
         wd = list(getattr(settings, "workday_sites", None) or [])
 
         def _preview(items: list[str], max_n: int = 12) -> str:
@@ -361,7 +471,7 @@ async def on_ready():
             f"lever={_preview(lv)} "
             f"workday={_preview(wd)}"
         )
-    except Exception as e:
+    except (AttributeError, KeyError, LookupError, TypeError, ValueError) as e:
         print(f"[JOBS] config log error: {e!r}")
 
     # TTC config log
@@ -385,7 +495,7 @@ async def on_ready():
             print("[TTC] WARNING: no TTC channel id set (TTC_ALERTS_CHANNEL_ID).")
         if not ttc_base or not ttc_acct:
             print("[TTC] WARNING: missing TTC_MASTODON_BASE or TTC_MASTODON_ACCT.")
-    except Exception as e:
+    except (AttributeError, KeyError, LookupError, TypeError, ValueError) as e:
         print(f"[TTC] config log error: {e!r}")
 
     # LLM mention assistant config log
@@ -407,16 +517,16 @@ async def on_ready():
         )
         if llm_enabled and not has_key:
             print("[LLM] WARNING: enabled but no GEMINI_API_KEY set.")
-    except Exception as e:
+    except (AttributeError, KeyError, LookupError, TypeError, ValueError) as e:
         print(f"[LLM] config log error: {e!r}")
 
     # Register the /ic root group
     if getattr(settings, "guild_id_invalid", False):
         raw = getattr(settings, "guild_id_raw", "")
-        raw_val = None
+        raw_val: Any = None
         try:
             raw_val = int(raw)
-        except Exception:
+        except (TypeError, ValueError):
             raw_val = raw
         print(
             f"[BOOT] ERROR: GUILD_ID parsed as {raw_val} (> {MAX_SNOWFLAKE}). "
@@ -438,28 +548,27 @@ async def on_ready():
 
     # Start TTC poller once
     if not getattr(bot, "_ttc_started", False):
-        bot._ttc_started = True
+        cast(Any, bot)._ttc_started = True
         if getattr(settings, "ttc_alerts_channel_id", 0):
             bot.loop.create_task(_ttc_loop())
 
-    
     # Start GO Transit poller once
     if not getattr(bot, "_go_started", False):
-        bot._go_started = True
-        go_channel = int(getattr(settings, "go_alerts_channel_id", 0) or getattr(settings, "ttc_alerts_channel_id", 0) or 0)
+        cast(Any, bot)._go_started = True
+        go_channel = int(
+            getattr(settings, "go_alerts_channel_id", 0) or getattr(settings, "ttc_alerts_channel_id", 0) or 0
+        )
         go_key = str(getattr(settings, "go_api_key", "") or "").strip()
         if go_channel and go_key:
             bot.loop.create_task(_go_loop())
         elif go_channel and not go_key:
             print("[GO] enabled via channel but missing GO_API_KEY (register for a GO API access key).")
-            
-# Start Jobs poller once
+
+    # Start Jobs poller once
     if not getattr(bot, "_jobs_started", False):
-        bot._jobs_started = True
+        cast(Any, bot)._jobs_started = True
         jobs_channel_id = int(
-            getattr(settings, "job_alerts_channel_id", 0)
-            or getattr(settings, "jobs_channel_id", 0)
-            or 0
+            getattr(settings, "job_alerts_channel_id", 0) or getattr(settings, "jobs_channel_id", 0) or 0
         )
         if jobs_channel_id:
             bot.loop.create_task(_jobs_loop())
@@ -469,11 +578,9 @@ async def on_ready():
 
     # Start Workday poller once (separate task; posts into same jobs channel)
     if not getattr(bot, "_workday_started", False):
-        bot._workday_started = True
+        cast(Any, bot)._workday_started = True
         jobs_channel_id = int(
-            getattr(settings, "job_alerts_channel_id", 0)
-            or getattr(settings, "jobs_channel_id", 0)
-            or 0
+            getattr(settings, "job_alerts_channel_id", 0) or getattr(settings, "jobs_channel_id", 0) or 0
         )
         if jobs_channel_id and (getattr(settings, "workday_sites", None) or []):
             bot.loop.create_task(_workday_loop())
@@ -483,7 +590,7 @@ async def on_ready():
 
     # Start Market watch poller once
     if not getattr(bot, "_market_started", False):
-        bot._market_started = True
+        cast(Any, bot)._market_started = True
         mw_enabled = bool(getattr(settings, "market_watch_enabled", False))
         mw_channel = int(getattr(settings, "market_watch_channel_id", 0) or 0) or int(
             getattr(settings, "stock_channel_id", 0) or 0
@@ -492,23 +599,26 @@ async def on_ready():
         if mw_enabled and mw_channel:
             bot.loop.create_task(_market_loop())
         elif mw_enabled and not mw_channel:
-            print("[MARKET] enabled=true but no channel_id configured (set MARKET_WATCH_CHANNEL_ID or STOCK_CHANNEL_ID)")
+            print(
+                "[MARKET] enabled=true but no channel_id configured (set MARKET_WATCH_CHANNEL_ID or STOCK_CHANNEL_ID)"
+            )
 
     # Start Daily market report loop once
     if not getattr(bot, "_daily_report_started", False):
-        bot._daily_report_started = True
+        cast(Any, bot)._daily_report_started = True
         dr_enabled = bool(getattr(settings, "market_daily_report_enabled", False))
         if dr_enabled:
             bot.loop.create_task(_daily_market_report_loop())
 
     # Start BTC address watch loop once
     if not getattr(bot, "_btc_watch_started", False):
-        bot._btc_watch_started = True
+        cast(Any, bot)._btc_watch_started = True
         bw_enabled = bool(getattr(settings, "btc_watch_enabled", False))
         if bw_enabled:
             bot.loop.create_task(_btc_watch_loop())
 
-    print(f"Logged in as {bot.user} (id={bot.user.id})")
+    if bot.user is not None:
+        print(f"Logged in as {bot.user} (id={bot.user.id})")
 
 
 @bot.event
@@ -519,14 +629,30 @@ async def on_message(message: discord.Message):
     try:
         if bot.user is not None and bot.user in (message.mentions or []):
             await maybe_handle_llm_mention(bot, message)
-        else:
-            # Optional debug: helps confirm whether Discord inserted an @mention into a reply.
-            if bool(getattr(settings, "llm_debug", False)) and bot.user is not None:
-                if getattr(message, "reference", None) is not None and message.author and not message.author.bot:
-                    mentioned_ids = [u.id for u in (message.mentions or [])]
-                    if bot.user.id in mentioned_ids:
-                        print("[LLM] NOTE: reply contains a bot mention (likely due to 'Mention @user' reply toggle).")
-    except Exception as e:
+        # Optional debug: helps confirm whether Discord inserted an @mention into a reply.
+        elif (
+            bool(getattr(settings, "llm_debug", False))
+            and bot.user is not None
+            and getattr(message, "reference", None) is not None
+            and message.author
+            and not message.author.bot
+        ):
+            mentioned_ids = [u.id for u in (message.mentions or [])]
+            if bot.user.id in mentioned_ids:
+                print(
+                    "[LLM] NOTE: reply contains a bot mention (likely due to 'Mention @user' reply toggle)."
+                )
+    except (
+        discord.DiscordException,
+        aiohttp.ClientError,
+        TimeoutError,
+        OSError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        LookupError,
+    ) as e:
         if bool(getattr(settings, "llm_debug", False)):
             print(f"[LLM] on_message handler error: {e!r}")
 

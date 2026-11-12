@@ -54,7 +54,7 @@ def _safe_int(v: Any) -> int | None:
         if v is None:
             return None
         return int(v)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -80,7 +80,7 @@ def _tx_value_sats(tx: Any, address: str) -> int | None:
                 in_sats += int(prev.get("value") or 0)
 
         return out_sats - in_sats
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return None
 
 

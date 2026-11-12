@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any
 
 import aiohttp
 
@@ -41,11 +43,11 @@ async def gemini_generate_text(
     api_key: str,
     model: str,
     prompt: str,
-    system_instruction: Optional[str] = None,
+    system_instruction: str | None = None,
     # Optional inline images (mime_type, bytes). If provided, the request becomes multimodal.
-    inline_images: Optional[Sequence[Tuple[str, bytes]]] = None,
-    temperature: Optional[float] = None,
-    max_output_tokens: Optional[int] = None,
+    inline_images: Sequence[tuple[str, bytes]] | None = None,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
     timeout_seconds: int = 25,
 ) -> str:
     """Call the Gemini Developer API (REST) and return the model's text output."""
@@ -57,10 +59,7 @@ async def gemini_generate_text(
     if not model:
         raise GeminiError("missing model name", status=0)
 
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        f"?key={api_key}"
-    )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
     parts: list[dict[str, Any]] = []
     if inline_images:
@@ -97,18 +96,20 @@ async def gemini_generate_text(
     timeout = aiohttp.ClientTimeout(total=max(5, int(timeout_seconds)))
 
     status: int = 0
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(url, json=body, headers={"Content-Type": "application/json"}) as resp:
-            status = int(resp.status)
-            text = await resp.text()
-            if status < 200 or status >= 300:
-                raise GeminiError("non-2xx response", status=status, details=text[:2000])
+    async with (
+        aiohttp.ClientSession(timeout=timeout) as session,
+        session.post(url, json=body, headers={"Content-Type": "application/json"}) as resp,
+    ):
+        status = int(resp.status)
+        text = await resp.text()
+        if status < 200 or status >= 300:
+            raise GeminiError("non-2xx response", status=status, details=text[:2000])
 
-            try:
-                payload = await resp.json()
-            except Exception:
-                # Some proxies or errors still yield text.
-                raise GeminiError("invalid json response", status=status, details=text[:2000])
+        try:
+            payload = await resp.json()
+        except (aiohttp.ContentTypeError, json.JSONDecodeError, ValueError) as err:
+            # Some proxies or errors still yield text.
+            raise GeminiError("invalid json response", status=status, details=text[:2000]) from err
 
     out = _extract_text(payload)
     if out:
@@ -119,9 +120,9 @@ async def gemini_generate_text(
     try:
         cand0 = (payload.get("candidates") or [{}])[0] or {}
         finish_reason = str(cand0.get("finishReason") or "")
-    except Exception:
+    except (AttributeError, IndexError, TypeError):
         finish_reason = ""
 
-    details = (str(payload)[:2000] if payload else "")
+    details = str(payload)[:2000] if payload else ""
     msg = "empty response" + (f" (finishReason={finish_reason})" if finish_reason else "")
     raise GeminiError(msg, status=status, details=details)

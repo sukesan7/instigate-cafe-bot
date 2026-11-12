@@ -41,7 +41,7 @@ def _to_int(v: Any) -> int | None:
         if v is None:
             return None
         return int(v)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 

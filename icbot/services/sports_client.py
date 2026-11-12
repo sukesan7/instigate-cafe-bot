@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+import logging
 import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
 import aiohttp
 
+log = logging.getLogger(__name__)
 
 ODDS_BASE_URL = "https://api.the-odds-api.com/v4"
 
@@ -37,9 +40,9 @@ class OddsAPIClient:
         self.api_key = (api_key or "").strip()
         self.timeout_seconds = timeout_seconds
         self.cache_ttl_seconds = cache_ttl_seconds
-        self._cache: Dict[str, Tuple[float, Any]] = {}
+        self._cache: dict[str, tuple[float, Any]] = {}
 
-    def _cache_get(self, key: str) -> Optional[Any]:
+    def _cache_get(self, key: str) -> Any | None:
         v = self._cache.get(key)
         if not v:
             return None
@@ -52,7 +55,7 @@ class OddsAPIClient:
     def _cache_set(self, key: str, data: Any) -> None:
         self._cache[key] = (time.time(), data)
 
-    async def _get_json(self, path: str, params: Dict[str, Any]) -> Any:
+    async def _get_json(self, path: str, params: dict[str, Any]) -> Any:
         if not self.api_key:
             raise OddsAPIError("Missing ODDS_API_KEY")
 
@@ -71,14 +74,16 @@ class OddsAPIClient:
             "Accept": "application/json",
         }
 
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(url, params=params) as resp:
-                # Helpful error text (Odds API uses structured JSON errors often)
-                text = await resp.text()
-                if resp.status >= 400:
-                    raise OddsAPIError(f"Odds API error {resp.status}: {text[:400]}")
+        async with (
+            aiohttp.ClientSession(timeout=timeout, headers=headers) as session,
+            session.get(url, params=params) as resp,
+        ):
+            # Helpful error text (Odds API uses structured JSON errors often)
+            text = await resp.text()
+            if resp.status >= 400:
+                raise OddsAPIError(f"Odds API error {resp.status}: {text[:400]}")
 
-                data = await resp.json()
+            data = await resp.json()
 
         self._cache_set(cache_key, data)
         return data
@@ -92,21 +97,21 @@ class OddsAPIClient:
             s = s[:-1] + "+00:00"
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
 
     async def list_sports(self) -> Any:
         # GET /v4/sports (docs note this endpoint doesn't count against quota)
         return await self._get_json("/sports", params={})
 
-    async def get_events(self, sport_key: str, *, days_from: int = 7) -> List[SportEvent]:
+    async def get_events(self, sport_key: str, *, days_from: int = 7) -> list[SportEvent]:
         """
         GET /v4/sports/{sport_key}/events
         Returns upcoming events (no odds). Great for schedules.
         """
         raw = await self._get_json(f"/sports/{sport_key}/events", params={"daysFrom": days_from})
 
-        events: List[SportEvent] = []
+        events: list[SportEvent] = []
         for e in raw or []:
             try:
                 events.append(
@@ -118,14 +123,15 @@ class OddsAPIClient:
                         away_team=str(e.get("away_team", "")),
                     )
                 )
-            except Exception:
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
                 # Skip malformed item
+                log.debug("Skipping malformed sports event: %s", exc)
                 continue
 
         events.sort(key=lambda x: x.commence_time)
         return events
 
-    async def get_upcoming(self, sport_key: str, *, limit: int = 5, days_from: int = 7) -> List[SportEvent]:
+    async def get_upcoming(self, sport_key: str, *, limit: int = 5, days_from: int = 7) -> list[SportEvent]:
         events = await self.get_events(sport_key, days_from=days_from)
         return events[: max(0, limit)]
 

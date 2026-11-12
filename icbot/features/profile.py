@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import logging
 import time
 
+import aiosqlite
 import discord
 from discord import app_commands
 
 from icbot.app import ic
 from icbot.embeds import system as system_embed
+from icbot.services.fun_market import FunMarketError
 from icbot.services.user_service import (
-    UserStore,
     DailyAlreadyClaimedError,
+    UserStore,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _make_user_store(interaction: discord.Interaction) -> UserStore:
@@ -68,7 +73,8 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
         else:
             fields.append(("📊 Positions", "None", True))
             fields.append(("💼 Net Worth", f"**${profile.balance:,}**", True))
-    except Exception:
+    except (FunMarketError, aiosqlite.Error, TypeError, ValueError) as exc:
+        log.debug("Profile stock summary unavailable: %s", exc)
         fields.append(("📊 Stocks", "N/A", True))
 
     # ---- Blackjack stats ----
@@ -85,10 +91,9 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
             fields.append(("🃏 Blackjack", bj_text, False))
         else:
             fields.append(("🃏 Blackjack", "No games played", False))
-    except Exception:
+    except (aiosqlite.Error, TypeError, ValueError) as exc:
+        log.debug("Profile blackjack summary unavailable: %s", exc)
         fields.append(("🃏 Blackjack", "N/A", False))
-
-
 
     # ---- Daily claim status ----
     now = int(time.time())

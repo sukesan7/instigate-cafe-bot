@@ -5,34 +5,43 @@ from dataclasses import dataclass
 from typing import Literal
 
 # American roulette: 0, 00, 1-36
-NUMBERS = list(range(0, 37)) + [-1]  # -1 represents "00"
+NUMBERS = [*range(37), -1]  # -1 represents "00"
 
 RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
 BLACK_NUMBERS = {2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35}
 
 BetType = Literal[
-    "red", "black", "even", "odd", "high", "low",
-    "dozen1", "dozen2", "dozen3",
-    "col1", "col2", "col3",
+    "red",
+    "black",
+    "even",
+    "odd",
+    "high",
+    "low",
+    "dozen1",
+    "dozen2",
+    "dozen3",
+    "col1",
+    "col2",
+    "col3",
     "straight",
 ]
 
 
 @dataclass(frozen=True)
 class SpinResult:
-    number: int          # 0-36, or -1 for 00
-    color: str           # "red", "black", or "green"
-    display: str         # "0", "00", "1", ..., "36"
+    number: int  # 0-36, or -1 for 00
+    color: str  # "red", "black", or "green"
+    display: str  # "0", "00", "1", ..., "36"
 
 
 @dataclass(frozen=True)
 class RouletteResult:
     spin: SpinResult
     bet_type: str
-    bet_target: str      # e.g., "red", "17", "dozen1"
+    bet_target: str  # e.g., "red", "17", "dozen1"
     bet_amount: int
-    payout: int          # 0 if loss, bet + winnings if win
-    net: int             # payout - bet_amount
+    payout: int  # 0 if loss, bet + winnings if win
+    net: int  # payout - bet_amount
     won: bool
 
 
@@ -116,10 +125,9 @@ def evaluate(bet_type: str, bet_target: str, bet_amount: int, result: SpinResult
         if _is_outside_winner(n) and n % 3 == 2:
             won = True
             multiplier = 2
-    elif bet_type == "col3":
-        if _is_outside_winner(n) and n % 3 == 0:
-            won = True
-            multiplier = 2
+    elif bet_type == "col3" and _is_outside_winner(n) and n % 3 == 0:
+        won = True
+        multiplier = 2
 
     payout = bet_amount + (bet_amount * multiplier) if won else 0
     net = payout - bet_amount

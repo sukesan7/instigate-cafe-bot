@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import discord
 from discord import app_commands
@@ -20,7 +21,7 @@ class ExamItem:
     course_code: str
     course_name: str
     start_ts: int
-    end_ts: Optional[int]
+    end_ts: int | None
     location: str
     notes: str
 
@@ -32,26 +33,22 @@ def _get_settings_and_db(interaction: discord.Interaction) -> tuple[Settings | N
     return settings, db
 
 
-def _zone(tz_name: str):
+def _zone(tz_name: str) -> ZoneInfo | None:
     try:
-        from zoneinfo import ZoneInfo
-
         return ZoneInfo(tz_name)
-    except Exception:
+    except (ZoneInfoNotFoundError, KeyError, ValueError):
         try:
-            from zoneinfo import ZoneInfo
-
             return ZoneInfo("America/Toronto")
-        except Exception:
+        except (ZoneInfoNotFoundError, KeyError, ValueError):
             return None
 
 
-def _fmt_range(start_ts: int, end_ts: Optional[int], tz_name: str) -> str:
+def _fmt_range(start_ts: int, end_ts: int | None, tz_name: str) -> str:
     tz = _zone(tz_name)
     if tz is None:
-        s = datetime.fromtimestamp(start_ts, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        s = datetime.fromtimestamp(start_ts, UTC).strftime("%Y-%m-%d %H:%M UTC")
         if end_ts:
-            e = datetime.fromtimestamp(end_ts, timezone.utc).strftime("%H:%M UTC")
+            e = datetime.fromtimestamp(end_ts, UTC).strftime("%H:%M UTC")
             return f"{s} – {e}"
         return s
 
@@ -84,7 +81,7 @@ def _parse_date_time(date_str: str, time_str: str, tz_name: str) -> int:
 
     tz = _zone(tz_name)
     if tz is None:
-        dt = datetime(y, m, d, hh, mm, tzinfo=timezone.utc)
+        dt = datetime(y, m, d, hh, mm, tzinfo=UTC)
         return int(dt.timestamp())
 
     dt = datetime(y, m, d, hh, mm, tzinfo=tz)
@@ -211,15 +208,15 @@ async def exams_add_cmd(
             end_ts = _parse_date_time(date, str(end_time), tz_name)
             if end_ts < start_ts:
                 raise ValueError("end_time must be after start_time")
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         await interaction.followup.send(
             f"Error: invalid date/time ({e}). Use date=YYYY-MM-DD and time=HH:MM (24h).",
             ephemeral=True,
         )
         return
 
-    now_ts = int(datetime.utcnow().timestamp())
-    await db.execute(
+    now_ts = int(datetime.now(UTC).timestamp())
+    exam_id = await db.execute_insert(
         """
         INSERT INTO exams (course_code, course_name, start_ts, end_ts, location, notes, created_by, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -235,9 +232,6 @@ async def exams_add_cmd(
             now_ts,
         ),
     )
-
-    row = await db.fetchone("SELECT last_insert_rowid()")
-    exam_id = int(row[0]) if row and row[0] is not None else 0
 
     when = _fmt_range(start_ts, end_ts, tz_name)
     msg = (

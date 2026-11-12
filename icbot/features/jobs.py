@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Optional
+from typing import Any
 
 import discord
 from discord import app_commands
@@ -10,7 +10,7 @@ from icbot.app import ic
 from icbot.tasks.job_alerts import job_matches_env_filters
 
 
-def _pick_first(cols: list[str], candidates: list[str]) -> Optional[str]:
+def _pick_first(cols: list[str], candidates: list[str]) -> str | None:
     for c in candidates:
         if c in cols:
             return c
@@ -22,7 +22,7 @@ async def _table_columns(db: Any, table: str) -> list[str]:
     return [r[1] for r in rows]
 
 
-def _format_age(ts: Optional[int]) -> str:
+def _format_age(ts: int | None) -> str:
     if not ts or ts <= 0:
         return ""
     delta = int(time.time()) - int(ts)
@@ -39,7 +39,7 @@ def _chunk(text: str, limit: int = 3800) -> list[str]:
     parts: list[str] = []
     buf = ""
     for block in text.split("\n\n"):
-        add = (block + "\n\n")
+        add = block + "\n\n"
         if len(buf) + len(add) > limit:
             if buf.strip():
                 parts.append(buf.strip())
@@ -71,12 +71,18 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
     col_location = _pick_first(cols, ["location", "job_location"])
     col_url = _pick_first(cols, ["url", "job_url", "link"])
     col_source = _pick_first(cols, ["source", "platform"])
-    col_seen = _pick_first(cols, ["first_seen_unix", "seen_unix", "seen_at_unix", "created_unix", "inserted_unix"])
+    col_seen = _pick_first(
+        cols, ["first_seen_unix", "seen_unix", "seen_at_unix", "created_unix", "inserted_unix"]
+    )
     col_posted = _pick_first(cols, ["posted_unix", "posted_at_unix"])
     col_blob = _pick_first(cols, ["text_blob", "blob", "description", "snippet"])
 
     order_col = col_seen or col_posted or "rowid"
-    select_cols = [c for c in [col_title, col_company, col_location, col_url, col_source, col_seen, col_posted, col_blob] if c]
+    select_cols = [
+        c
+        for c in [col_title, col_company, col_location, col_url, col_source, col_seen, col_posted, col_blob]
+        if c
+    ]
     if not select_cols:
         select_cols = cols
 
@@ -106,13 +112,12 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
     matched = 0
 
     for r in rows:
-        j = dict(zip(select_cols, r))
+        j = dict(zip(select_cols, r, strict=True))
         title = (j.get(col_title) if col_title else None) or ""
         company = (j.get(col_company) if col_company else None) or ""
         location = (j.get(col_location) if col_location else None) or ""
         url = (j.get(col_url) if col_url else None) or ""
         source = (j.get(col_source) if col_source else None) or ""
-        blob = (j.get(col_blob) if col_blob else None) or ""
 
         if not title:
             continue
@@ -139,7 +144,7 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
             url=url,
             location=location,
             source=source,
-            footer_hint=f"Tracking System • {age}" if age else "Tracking System"
+            footer_hint=f"Tracking System • {age}" if age else "Tracking System",
         )
         embeds.append(e)
 
@@ -158,9 +163,11 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
     chunk_size = 5
     first_chunk = True
     for i in range(0, len(embeds), chunk_size):
-        chunk = embeds[i:i + chunk_size]
+        chunk = embeds[i : i + chunk_size]
         if first_chunk:
-            await interaction.followup.send(content=f"🧰 **SWE/CS Job Postings** (latest {matched})", embeds=chunk)
+            await interaction.followup.send(
+                content=f"🧰 **SWE/CS Job Postings** (latest {matched})", embeds=chunk
+            )
             first_chunk = False
         else:
             await interaction.followup.send(embeds=chunk)

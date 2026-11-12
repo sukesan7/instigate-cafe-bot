@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
+import aiohttp
 import discord
 
 from icbot.embeds import system as system_embed
@@ -41,13 +42,13 @@ async def _set_meta(db, key: str, value: str) -> None:
     await db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
 
-async def _resolve_channel(bot: discord.Client, channel_id: int) -> Optional[discord.abc.Messageable]:
+async def _resolve_channel(bot: discord.Client, channel_id: int) -> discord.abc.Messageable | None:
     ch = bot.get_channel(channel_id)
     if ch is not None:
         return ch  # type: ignore[return-value]
     try:
         return await bot.fetch_channel(channel_id)  # type: ignore[return-value]
-    except Exception:
+    except (discord.DiscordException, LookupError, ValueError):
         return None
 
 
@@ -58,15 +59,31 @@ def _default_watchlist() -> list[str]:
     """
     return [
         # FAANG+
-        "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NFLX",
+        "AAPL",
+        "MSFT",
+        "AMZN",
+        "GOOGL",
+        "META",
+        "NFLX",
         # Semis / infra
-        "NVDA", "AMD", "AVGO", "TSM", "ASML",
+        "NVDA",
+        "AMD",
+        "AVGO",
+        "TSM",
+        "ASML",
         # High-beta / AI / hype
-        "TSLA", "PLTR",
+        "TSLA",
+        "PLTR",
         # Financials / energy / broad retail
-        "JPM", "BAC", "XOM", "CVX", "COST",
+        "JPM",
+        "BAC",
+        "XOM",
+        "CVX",
+        "COST",
         # Biotech (light)
-        "VRTX", "REGN", "MRNA",
+        "VRTX",
+        "REGN",
+        "MRNA",
     ]
 
 
@@ -130,7 +147,7 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
 
     try:
         quotes = await fetch_quotes(symbols, debug=debug)
-    except Exception as e:
+    except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
         if debug:
             print(f"[MARKET] fetch error: {e!r}")
         return
@@ -139,10 +156,12 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
     q_qqq = quotes.get("QQQ")
     q_vix = quotes.get("^VIX") or quotes.get("%5EVIX")
 
-    market_state = (q_spy.market_state if q_spy else None) or (q_qqq.market_state if q_qqq else None) or (
-        q_vix.market_state if q_vix else None
+    market_state = (
+        (q_spy.market_state if q_spy else None)
+        or (q_qqq.market_state if q_qqq else None)
+        or (q_vix.market_state if q_vix else None)
     )
-    
+
     raw_state = str(market_state).upper()
     state_map = {
         "PREPRE": "Pre-Market",
@@ -150,7 +169,7 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
         "REGULAR": "Regular Trading Hours",
         "POST": "Post-Market",
         "POSTPOST": "Post-Market",
-        "CLOSED": "Closed"
+        "CLOSED": "Closed",
     }
     market_state = state_map.get(raw_state, raw_state)
 
@@ -300,11 +319,11 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
             msg = await ch.send(text)
             if debug:
                 print(f"[MARKET] posted plain-text ok: message_id={getattr(msg, 'id', 'n/a')}")
-        except Exception as e:
+        except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
             if debug:
                 print(f"[MARKET] ERROR: forbidden + plain-text send failed: {e!r}")
         return
-    except Exception as e:
+    except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
         if debug:
             print(f"[MARKET] ERROR: send failed: {e!r}")
         return

@@ -1,6 +1,5 @@
 # Offline-capable local pre-commit quality & publication-safety hooks.
-# Uses repo: local hooks so checks run deterministically without cloning external hook repos
-# and never reformat untouched legacy runtime modules (icbot/, main.py) during Phase 2.
+# Uses repo: local hooks so checks run deterministically without cloning external hook repos.
 
 repos:
   - repo: local
@@ -42,16 +41,16 @@ repos:
         files: \.(py|json|toml|yml|yaml)$
         types: [file]
 
-      - id: ruff-check-scoped
-        name: Ruff lint (tests/, scripts/manual/, tools offline helpers)
+      - id: ruff-check
+        name: Ruff lint
         language: system
         entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" check "$@"' --
-        files: ^(tests|scripts/manual)/.*\.py$|^tools/(check_syntax|smoke_offline)\.py$
         types: [python]
+        exclude: ^(\.venv|assets|docs)/
 
-      - id: ruff-format-check-scoped
-        name: Ruff format check (tests/, scripts/manual/, tools offline helpers)
+      - id: ruff-format-check
+        name: Ruff format check
         language: system
         entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" format --check "$@"' --
-        files: ^(tests|scripts/manual)/.*\.py$|^tools/(check_syntax|smoke_offline)\.py$
         types: [python]
+        exclude: ^(\.venv|assets|docs)/

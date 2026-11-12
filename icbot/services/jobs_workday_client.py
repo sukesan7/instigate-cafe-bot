@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
-from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
+from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import aiohttp
+from yarl import URL
 
+log = logging.getLogger(__name__)
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
@@ -16,15 +19,15 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 class WorkdaySite:
     label: str
     careers_url: str
-    api_url_override: Optional[str] = None
+    api_url_override: str | None = None
     locale: str = "en-US"
 
 
 @dataclass(frozen=True)
 class WorkdayCxsInfo:
     api_url: str
-    tenant: Optional[str]
-    site: Optional[str]
+    tenant: str | None
+    site: str | None
     locale: str
 
 
@@ -68,7 +71,9 @@ def parse_workday_sites(items: list[str]) -> list[WorkdaySite]:
         if api_override and not api_override.startswith(("http://", "https://")):
             api_override = "https://" + api_override
 
-        out.append(WorkdaySite(label=label, careers_url=careers_url, api_url_override=api_override, locale=locale))
+        out.append(
+            WorkdaySite(label=label, careers_url=careers_url, api_url_override=api_override, locale=locale)
+        )
     return out
 
 
@@ -93,12 +98,14 @@ def _unescape_workday_text(html: str) -> str:
 def _snippet(s: Any, n: int = 350) -> str:
     try:
         txt = s if isinstance(s, str) else json.dumps(s)
-    except Exception:
+    except (TypeError, ValueError):
         txt = repr(s)
     return (txt[:n] + "...") if len(txt) > n else txt
 
 
-_CSRF_IN_HTML = re.compile(r"(?:x-calypso-csrf-token|csrfToken)[\"']?\s*[:=]\s*[\"']([a-zA-Z0-9\-_/\.]+)[\"']", re.I)
+_CSRF_IN_HTML = re.compile(
+    r"(?:x-calypso-csrf-token|csrfToken)[\"']?\s*[:=]\s*[\"']([a-zA-Z0-9\-_/\.]+)[\"']", re.I
+)
 
 
 async def _warmup_and_get_csrf(
@@ -107,14 +114,15 @@ async def _warmup_and_get_csrf(
     *,
     locale: str,
     timeout_seconds: int,
-) -> Optional[str]:
+) -> str | None:
     headers = {
         "User-Agent": UA,
         "Accept": "text/html,application/xhtml+xml",
         # IMPORTANT: single locale only
         "Accept-Language": locale,
     }
-    async with session.get(careers_url, headers=headers, timeout=timeout_seconds) as r:
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+    async with session.get(careers_url, headers=headers, timeout=timeout) as r:
         token = r.headers.get("x-calypso-csrf-token") or r.headers.get("X-Calypso-CSRF-Token")
         text = await r.text(errors="ignore")
 
@@ -128,14 +136,13 @@ async def _warmup_and_get_csrf(
 
     # Cookie-based fallback (best-effort)
     try:
-        jar = session.cookie_jar.filter_cookies(careers_url)
+        jar = session.cookie_jar.filter_cookies(URL(careers_url))
         for k, morsel in jar.items():
             name = k.lower()
-            if "csrf" in name or "xsrf" in name:
-                if morsel.value:
-                    return morsel.value
-    except Exception:
-        pass
+            if ("csrf" in name or "xsrf" in name) and morsel.value:
+                return morsel.value
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        log.debug("Workday CSRF cookie fallback failed: %s", exc)
 
     return None
 
@@ -156,13 +163,13 @@ def _heuristic_cxs_from_careers_url(careers_url: str, locale: str) -> WorkdayCxs
         site = path_parts[-1]
 
     if not tenant or not site:
-        raise RuntimeError(f"Workday heuristic failed (tenant={tenant!r}, site={site!r}) from {careers_url!r}")
+        raise RuntimeError(
+            f"Workday heuristic failed (tenant={tenant!r}, site={site!r}) from {careers_url!r}"
+        )
 
     api = f"{base}/wday/cxs/{tenant}/{site}/jobs"
     api = _add_or_replace_query(api, locale=locale)
     return WorkdayCxsInfo(api_url=api, tenant=tenant, site=site, locale=locale)
-
-
 
 
 def _careers_prefix_from_careers_url(careers_url: str, locale: str) -> str:
@@ -181,11 +188,13 @@ def _careers_prefix_from_careers_url(careers_url: str, locale: str) -> str:
     if locale in parts:
         i = parts.index(locale)
         if i + 1 < len(parts):
-            return f"/{locale}/{parts[i+1]}"
+            return f"/{locale}/{parts[i + 1]}"
     # Fallback: if the path already ends with a site slug, keep last segment
     if parts:
         return "/" + "/".join(parts[:2]) if len(parts) >= 2 else "/" + parts[0]
     return ""
+
+
 def _extract_jobs_from_payload(payload: dict[str, Any], site: WorkdaySite) -> list[JobItem]:
     jobs: list[JobItem] = []
     postings = payload.get("jobPostings") or payload.get("jobs") or []
@@ -196,8 +205,14 @@ def _extract_jobs_from_payload(payload: dict[str, Any], site: WorkdaySite) -> li
         if not isinstance(p, dict):
             continue
 
-        title = p.get("title") or p.get("postingTitle") or (p.get("jobPostingInfo") or {}).get("title") or "Job"
-        external_path = p.get("externalPath") or p.get("externalUrl") or (p.get("jobPostingInfo") or {}).get("externalPath")
+        title = (
+            p.get("title") or p.get("postingTitle") or (p.get("jobPostingInfo") or {}).get("title") or "Job"
+        )
+        external_path = (
+            p.get("externalPath")
+            or p.get("externalUrl")
+            or (p.get("jobPostingInfo") or {}).get("externalPath")
+        )
 
         if isinstance(external_path, str) and external_path.startswith("http"):
             url = external_path
@@ -218,14 +233,8 @@ def _extract_jobs_from_payload(payload: dict[str, Any], site: WorkdaySite) -> li
                 # Common case: some tenants return "/job/..." (missing "/<locale>/<site>/")
                 # Example (broken): https://cppib.wd10.myworkdayjobs.com/job/...
                 # Fixed:          https://cppib.wd10.myworkdayjobs.com/en-US/cppinvestments/job/...
-                if ep.startswith("/job/") or ep == "/job" or ep.startswith("/job?"):
-                    if prefix and not prefix.endswith("/"):
-                        url = host + prefix + ep
-                    else:
-                        url = host + prefix + ep
-                else:
-                    # If the path already includes locale/site ("/en-US/<site>/..."), keep it.
-                    url = host + ep
+                # If the path already includes locale/site ("/en-US/<site>/..."), keep it.
+                url = host + prefix + ep if ep.startswith(("/job/", "/job?")) or ep == "/job" else host + ep
 
         location = p.get("locationsText") or p.get("location") or ""
         if isinstance(location, list):
@@ -257,9 +266,12 @@ async def _request_json(
     *,
     headers: dict[str, str],
     timeout_seconds: int,
-    json_body: Optional[dict[str, Any]] = None,
-) -> Tuple[int, dict[str, Any]]:
-    kwargs: dict[str, Any] = {"headers": headers, "timeout": timeout_seconds}
+    json_body: dict[str, Any] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    kwargs: dict[str, Any] = {
+        "headers": headers,
+        "timeout": aiohttp.ClientTimeout(total=timeout_seconds),
+    }
     if json_body is not None:
         kwargs["json"] = json_body
 
@@ -267,7 +279,7 @@ async def _request_json(
         raw = await r.text(errors="ignore")
         try:
             return r.status, json.loads(raw)
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             return r.status, {"_raw": raw}
 
 
@@ -275,10 +287,10 @@ async def fetch_workday_jobs(
     session: aiohttp.ClientSession,
     site: WorkdaySite,
     *,
-    api_url_override: Optional[str] = None,
+    api_url_override: str | None = None,
     timeout_seconds: int = 12,
     max_results: int = 240,
-) -> Tuple[list[JobItem], WorkdayCxsInfo]:
+) -> tuple[list[JobItem], WorkdayCxsInfo]:
     """
     Key change: Workday CXS often rejects large 'limit' values.
     We cap page size to 20, which matches many production boards.
@@ -292,7 +304,9 @@ async def fetch_workday_jobs(
         cxs = WorkdayCxsInfo(api_url=api_url, tenant=None, site=None, locale=site.locale)
 
     # Warmup cookies + CSRF if required
-    csrf = await _warmup_and_get_csrf(session, site.careers_url, locale=site.locale, timeout_seconds=timeout_seconds)
+    csrf = await _warmup_and_get_csrf(
+        session, site.careers_url, locale=site.locale, timeout_seconds=timeout_seconds
+    )
 
     origin = _origin_from_url(site.careers_url)
     headers = {
@@ -330,7 +344,11 @@ async def fetch_workday_jobs(
             # Fallback GET with searchText present + Workday-safe limit
             get_url = _add_or_replace_query(api_url, offset=str(offset), limit=str(limit), searchText="")
             st_get, payload_get = await _request_json(
-                session, "GET", get_url, headers={k: v for k, v in headers.items() if k.lower() != "content-type"}, timeout_seconds=timeout_seconds
+                session,
+                "GET",
+                get_url,
+                headers={k: v for k, v in headers.items() if k.lower() != "content-type"},
+                timeout_seconds=timeout_seconds,
             )
             if st_get != 200:
                 raise RuntimeError(
@@ -344,7 +362,7 @@ async def fetch_workday_jobs(
         total = 0
         try:
             total = int((payload_post.get("total") if isinstance(payload_post, dict) else 0) or 0)
-        except Exception:
+        except (TypeError, ValueError):
             total = 0
 
         if total and offset + page_size >= total:

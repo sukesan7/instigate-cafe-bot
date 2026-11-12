@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import logging
 import os
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
 import time
-import aiohttp
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
 
-from discord import app_commands
+import aiohttp
 import discord
 
 from icbot.app import sports
 from icbot.embeds import system as system_embed
 from icbot.services.sports_client import OddsAPIClient, OddsAPIError
 
+log = logging.getLogger(__name__)
 
 # Odds API sport keys
 SPORT_KEYS = {
@@ -34,13 +34,13 @@ DEFAULT_RSS = {
 }
 
 # Simple in-process cache for RSS so we don't spam
-_RSS_CACHE: Dict[str, Tuple[float, List[Tuple[str, str]]]] = {}
+_RSS_CACHE: dict[str, tuple[float, list[tuple[str, str]]]] = {}
 _RSS_TTL_SECONDS = 600
 
 
 def _unix(dt: datetime) -> int:
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return int(dt.timestamp())
 
 
@@ -63,7 +63,7 @@ def _get_odds_client(interaction: discord.Interaction) -> OddsAPIClient:
     return OddsAPIClient(api_key=api_key, cache_ttl_seconds=600)
 
 
-def _rss_urls_for(sport: str) -> List[str]:
+def _rss_urls_for(sport: str) -> list[str]:
     sport = sport.lower().strip()
     env_key = f"SPORTS_RSS_{sport.upper()}"
     override = (os.getenv(env_key, "") or "").strip()
@@ -72,7 +72,7 @@ def _rss_urls_for(sport: str) -> List[str]:
     return DEFAULT_RSS.get(sport, [])
 
 
-async def _fetch_rss_items(url: str, *, limit: int = 5) -> List[Tuple[str, str]]:
+async def _fetch_rss_items(url: str, *, limit: int = 5) -> list[tuple[str, str]]:
     """
     Return list[(title, link)] from RSS/Atom feed.
     Robust enough for simple headline pulls.
@@ -83,22 +83,21 @@ async def _fetch_rss_items(url: str, *, limit: int = 5) -> List[Tuple[str, str]]
         "Accept": "application/rss+xml, application/atom+xml, text/xml, */*",
     }
 
-    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-        async with session.get(url) as resp:
-            text = await resp.text()
-            if resp.status >= 400:
-                return []
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session, session.get(url) as resp:
+        text = await resp.text()
+        if resp.status >= 400:
+            return []
 
     # Parse XML (RSS or Atom)
     try:
         root = ET.fromstring(text)
-    except Exception:
+    except ET.ParseError:
         return []
 
     def strip_ns(tag: str) -> str:
         return tag.split("}", 1)[-1] if "}" in tag else tag
 
-    items: List[Tuple[str, str]] = []
+    items: list[tuple[str, str]] = []
 
     # RSS: <rss><channel><item>...
     for item in root.findall(".//item"):
@@ -122,7 +121,7 @@ async def _fetch_rss_items(url: str, *, limit: int = 5) -> List[Tuple[str, str]]
     return items
 
 
-async def _get_news(sport: str, *, limit: int = 5) -> List[Tuple[str, str]]:
+async def _get_news(sport: str, *, limit: int = 5) -> list[tuple[str, str]]:
     urls = _rss_urls_for(sport)
     if not urls:
         return []
@@ -132,7 +131,7 @@ async def _get_news(sport: str, *, limit: int = 5) -> List[Tuple[str, str]]:
     if cached and (time.time() - cached[0]) <= _RSS_TTL_SECONDS:
         return cached[1]
 
-    results: List[Tuple[str, str]] = []
+    results: list[tuple[str, str]] = []
     seen = set()
     for url in urls:
         items = await _fetch_rss_items(url, limit=limit)
@@ -160,7 +159,7 @@ def _format_upcoming(events) -> str:
     return "\n".join(lines)
 
 
-def _format_news(items: List[Tuple[str, str]]) -> str:
+def _format_news(items: list[tuple[str, str]]) -> str:
     if not items:
         return "News unavailable (no feed configured or fetch failed)."
     lines = []
@@ -196,7 +195,8 @@ async def _send_sport(interaction: discord.Interaction, sport: str, title: str):
     news_items = []
     try:
         news_items = await _get_news(sport, limit=5)
-    except Exception:
+    except (aiohttp.ClientError, TimeoutError, ET.ParseError, ValueError) as exc:
+        log.debug("Sports RSS fetch failed for %s: %s", sport, exc)
         news_items = []
 
     emb = system_embed(

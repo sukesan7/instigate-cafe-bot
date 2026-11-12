@@ -27,30 +27,9 @@ SAFE_ENV := env \
 	JOBS_BOOTSTRAP_POST="false" \
 	TTC_BOOTSTRAP_POST_LATEST="false"
 
-# Scoped formatting/lint targets for Phase 2 (legacy icbot/ and main.py deferred to Phase 3/4)
-SCOPED_STYLE_PATHS := tests scripts/manual tools/check_syntax.py tools/smoke_offline.py
-
-# Incremental typed core modules verified clean under check_untyped_defs + warn_return_any
-TYPED_CORE_MODULES := \
-	icbot/config.py \
-	icbot/permissions.py \
-	icbot/embeds.py \
-	icbot/app.py \
-	icbot/utils.py \
-	icbot/games \
-	icbot/services/user_service.py \
-	icbot/services/fun_market_catalog.py \
-	icbot/services/gemini_client.py \
-	icbot/services/sports_client.py \
-	icbot/services/btc_esplora.py \
-	icbot/services/crypto_fng.py \
-	icbot/services/jobs_ats_client.py \
-	icbot/services/ttc_client.py \
-	icbot/services/yahoo_quotes.py \
-	tools/check_syntax.py \
-	tools/lore_loader.py \
-	tools/scan_secrets.py \
-	tools/smoke_offline.py
+# Repository formatting/lint and type-checking targets (respecting pyproject.toml excludes)
+STYLE_PATHS := .
+TYPECHECK_PATHS := .
 
 .PHONY: help format format-check lint lint-baseline typecheck typecheck-baseline smoke-offline test test-cov precommit audit check
 
@@ -58,12 +37,12 @@ help:
 	@echo "Instigate Cafe Bot — Offline Developer Tooling"
 	@echo ""
 	@echo "Tier 1 (Static only — zero runtime, zero network):"
-	@echo "  make format              Format tests/, scripts/manual/, and tools/smoke_offline.py only"
-	@echo "  make format-check        Verify Ruff formatting on scoped paths"
-	@echo "  make lint                Run Ruff lint on tests/, scripts/manual/, and tools/smoke_offline.py"
-	@echo "  make lint-baseline       Report full Ruff baseline counts across icbot/, main.py, and tools/"
-	@echo "  make typecheck           Run incremental mypy gate on verified clean core modules (21 files)"
-	@echo "  make typecheck-baseline  Report full mypy baseline errors across icbot/, main.py, and tools/"
+	@echo "  make format              Format repository Python files with Ruff"
+	@echo "  make format-check        Verify Ruff formatting across repository"
+	@echo "  make lint                Run Ruff lint across repository"
+	@echo "  make lint-baseline       Report Ruff statistics across icbot/, main.py, and tools/"
+	@echo "  make typecheck           Run mypy across icbot/, main.py, and tools/"
+	@echo "  make typecheck-baseline  Run mypy explicitly on icbot/, main.py, and tools/"
 	@echo ""
 	@echo "Tier 2 (Offline-safe — synthetic fixtures & mocked network only):"
 	@echo "  make smoke-offline       AST-parse all Python files & verify zero-token offline module imports"
@@ -76,19 +55,19 @@ help:
 	@echo "  make audit               Run pip-audit against pinned requirements.lock"
 
 format:
-	$(RUFF) format $(SCOPED_STYLE_PATHS)
+	$(RUFF) format $(STYLE_PATHS)
 
 format-check:
-	$(RUFF) format --check $(SCOPED_STYLE_PATHS)
+	$(RUFF) format --check $(STYLE_PATHS)
 
 lint:
-	$(RUFF) check $(SCOPED_STYLE_PATHS)
+	$(RUFF) check $(STYLE_PATHS)
 
 lint-baseline:
 	-$(RUFF) check icbot main.py tools --statistics
 
 typecheck:
-	$(MYPY) $(TYPED_CORE_MODULES)
+	$(MYPY) $(TYPECHECK_PATHS)
 
 typecheck-baseline:
 	-$(MYPY) icbot main.py tools

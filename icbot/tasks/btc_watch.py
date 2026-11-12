@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+import sqlite3
+from typing import Any
 
+import aiohttp
+import aiosqlite
 import discord
 
 from icbot.embeds import system as system_embed
-from icbot.services.btc_esplora import DEFAULT_BASE_URL, AddressTx, fetch_address_txs
+from icbot.services.btc_esplora import DEFAULT_BASE_URL, fetch_address_txs
 
 
 def _to_int(s: str, default: int = 0) -> int:
@@ -24,13 +27,13 @@ async def _set_meta(db, key: str, value: str) -> None:
     await db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
 
-async def _resolve_channel(bot: discord.Client, channel_id: int) -> Optional[discord.abc.Messageable]:
+async def _resolve_channel(bot: discord.Client, channel_id: int) -> discord.abc.Messageable | None:
     ch = bot.get_channel(channel_id)
     if ch is not None:
         return ch  # type: ignore[return-value]
     try:
         return await bot.fetch_channel(channel_id)  # type: ignore[return-value]
-    except Exception:
+    except (discord.DiscordException, LookupError, ValueError):
         return None
 
 
@@ -79,9 +82,11 @@ async def poll_and_post_btc_watch(bot: discord.Client) -> None:
 
     debug = bool(getattr(settings, "btc_watch_debug", False))
 
-    channel_id = int(getattr(settings, "btc_watch_channel_id", 0) or 0) or int(
-        getattr(settings, "market_watch_channel_id", 0) or 0
-    ) or int(getattr(settings, "stock_channel_id", 0) or 0)
+    channel_id = (
+        int(getattr(settings, "btc_watch_channel_id", 0) or 0)
+        or int(getattr(settings, "market_watch_channel_id", 0) or 0)
+        or int(getattr(settings, "stock_channel_id", 0) or 0)
+    )
     if not channel_id:
         if debug:
             print("[BTC] enabled=true but no channel configured")
@@ -112,7 +117,7 @@ async def poll_and_post_btc_watch(bot: discord.Client) -> None:
     for addr in addresses[:50]:  # hard cap for safety
         try:
             txs = await fetch_address_txs(addr, base_url=base_url, limit=5)
-        except Exception as e:
+        except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError, KeyError) as e:
             if debug:
                 print(f"[BTC] fetch failed addr={_short_addr(addr)} err={e!r}")
             continue
@@ -159,11 +164,25 @@ async def poll_and_post_btc_watch(bot: discord.Client) -> None:
                     await _set_meta(db, f"btc_last_tx:{addr}", newest.txid)
                     await _set_meta(db, "btc_last_alert_any", str(now))
                     return
-                except Exception as e:
+                except (
+                    discord.DiscordException,
+                    aiosqlite.Error,
+                    sqlite3.Error,
+                    RuntimeError,
+                    OSError,
+                    ValueError,
+                ) as e:
                     if debug:
                         print(f"[BTC] send failed (forbidden fallback): {e!r}")
                     return
-            except Exception as e:
+            except (
+                discord.DiscordException,
+                aiosqlite.Error,
+                sqlite3.Error,
+                RuntimeError,
+                OSError,
+                ValueError,
+            ) as e:
                 if debug:
                     print(f"[BTC] send failed: {e!r}")
                 return

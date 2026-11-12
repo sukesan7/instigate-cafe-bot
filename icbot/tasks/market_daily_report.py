@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import aiohttp
+import aiosqlite
 import discord
 
 from icbot.embeds import system as system_embed
-from icbot.services.yahoo_quotes import Quote, fetch_quotes
 from icbot.services.crypto_fng import fetch_fear_greed
-from icbot.services.fun_market import FunMarketStore
+from icbot.services.fun_market import FunMarketError, FunMarketStore
+from icbot.services.yahoo_quotes import Quote, fetch_quotes
 
 
 def _fmt_pct(x: float | None) -> str:
@@ -41,8 +46,6 @@ async def _set_meta(db, key: str, value: str) -> None:
     await db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
 
-
-
 async def _fun_market_lines(settings, db) -> list[str]:
     """All fun stocks for the daily report, including IC."""
     try:
@@ -52,7 +55,7 @@ async def _fun_market_lines(settings, db) -> list[str]:
             tz_name=str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"),
         )
         rows = await store.list_stocks(active_only=True)
-    except Exception:
+    except (FunMarketError, aiosqlite.Error, sqlite3.Error, TypeError, ValueError):
         return []
 
     lines: list[str] = []
@@ -92,7 +95,7 @@ async def _apply_sp500_move(settings, db, *, bot_id: int = 0, debug: bool = Fals
     try:
         quotes = await fetch_quotes(["SPY"], debug=debug)
         spy = quotes.get("SPY")
-    except Exception as e:
+    except (aiohttp.ClientError, TimeoutError, RuntimeError, json.JSONDecodeError, ValueError) as e:
         if debug:
             print(f"[DAILY] SPY fetch failed for auto-move: {e!r}")
         return
@@ -112,7 +115,7 @@ async def _apply_sp500_move(settings, db, *, bot_id: int = 0, debug: bool = Fals
 
     try:
         stocks = await store.list_stocks(active_only=True)
-    except Exception as e:
+    except (FunMarketError, aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as e:
         if debug:
             print(f"[DAILY] list_stocks failed for auto-move: {e!r}")
         return
@@ -125,8 +128,8 @@ async def _apply_sp500_move(settings, db, *, bot_id: int = 0, debug: bool = Fals
 
         # Calculate delta from percentage; no minimum limit
         raw_delta = price * pct / 100.0
-        delta = int(round(raw_delta))
-        
+        delta = round(raw_delta)
+
         if delta == 0:
             continue  # 0% move or too small to move even $1, skip
 
@@ -138,7 +141,7 @@ async def _apply_sp500_move(settings, db, *, bot_id: int = 0, debug: bool = Fals
                 reason=f"S&P 500 daily: {pct:+.2f}%",
             )
             moved += 1
-        except Exception as e:
+        except (FunMarketError, aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as e:
             if debug:
                 print(f"[DAILY] auto-move {s.symbol}: {e!r}")
 
@@ -147,13 +150,13 @@ async def _apply_sp500_move(settings, db, *, bot_id: int = 0, debug: bool = Fals
         print(f"[DAILY] auto-move applied: SPY {pct:+.2f}% → {moved} stocks moved")
 
 
-async def _resolve_channel(bot: discord.Client, channel_id: int) -> Optional[discord.abc.Messageable]:
+async def _resolve_channel(bot: discord.Client, channel_id: int) -> discord.abc.Messageable | None:
     ch = bot.get_channel(channel_id)
     if ch is not None:
         return ch  # type: ignore[return-value]
     try:
         return await bot.fetch_channel(channel_id)  # type: ignore[return-value]
-    except Exception:
+    except (discord.DiscordException, LookupError, ValueError):
         return None
 
 
@@ -179,11 +182,27 @@ def _parse_ticker_list(raw: Any) -> list[str]:
 def _default_watchlist() -> list[str]:
     # Keep aligned with market_watch defaults.
     return [
-        "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NFLX",
-        "NVDA", "AMD", "AVGO", "TSM", "ASML",
-        "TSLA", "PLTR",
-        "JPM", "BAC", "XOM", "CVX", "COST",
-        "VRTX", "REGN", "MRNA",
+        "AAPL",
+        "MSFT",
+        "AMZN",
+        "GOOGL",
+        "META",
+        "NFLX",
+        "NVDA",
+        "AMD",
+        "AVGO",
+        "TSM",
+        "ASML",
+        "TSLA",
+        "PLTR",
+        "JPM",
+        "BAC",
+        "XOM",
+        "CVX",
+        "COST",
+        "VRTX",
+        "REGN",
+        "MRNA",
     ]
 
 
@@ -201,18 +220,17 @@ def _regular_move(q: Quote) -> _Move:
 def _local_date_str(tz_name: str) -> str:
     # zoneinfo is stdlib on py3.9+.
     try:
-        from zoneinfo import ZoneInfo
-
         tz = ZoneInfo(tz_name)
         return datetime.now(tz=tz).strftime("%Y-%m-%d")
-    except Exception:
+    except (ZoneInfoNotFoundError, KeyError, ValueError):
         # Fallback: UTC date (still dedupes within a given runtime)
-        return datetime.utcnow().strftime("%Y-%m-%d")
+        return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 # ------------------------------------------------------------------------------
 # Shared helpers (used by scheduled daily report AND /ic report command)
 # ------------------------------------------------------------------------------
+
 
 def resolve_market_report_tickers(settings) -> list[str]:
     """
@@ -259,7 +277,7 @@ async def build_market_report_embed(
         fng = await fetch_fear_greed()
         if fng:
             fng_text = f"**{fng.value}** — {fng.value_classification}"
-    except Exception:
+    except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError, KeyError):
         fng_text = None
 
     # Snapshot lines
@@ -274,7 +292,9 @@ async def build_market_report_embed(
         q = quotes.get(sym) or quotes.get(sym.replace("^", "%5E"))
         if q:
             label = sym.replace("^", "")
-            fear_lines.append(f"**{label}**: {_fmt_price(q.regular_price)} ({_fmt_pct(q.regular_change_pct)})")
+            fear_lines.append(
+                f"**{label}**: {_fmt_price(q.regular_price)} ({_fmt_pct(q.regular_change_pct)})"
+            )
 
     moves: list[_Move] = []
     for sym in tickers:
@@ -330,6 +350,7 @@ async def build_market_report_embed(
 # Scheduled daily report (runs once/day from your scheduler)
 # ------------------------------------------------------------------------------
 
+
 async def post_daily_market_report(bot: discord.Client) -> None:
     """Post the daily market summary (intended to run once/day)."""
     settings = getattr(bot, "settings", None)
@@ -342,9 +363,11 @@ async def post_daily_market_report(bot: discord.Client) -> None:
 
     debug = bool(getattr(settings, "market_daily_report_debug", False))
 
-    channel_id = int(getattr(settings, "market_daily_report_channel_id", 0) or 0) or int(
-        getattr(settings, "market_watch_channel_id", 0) or 0
-    ) or int(getattr(settings, "stock_channel_id", 0) or 0)
+    channel_id = (
+        int(getattr(settings, "market_daily_report_channel_id", 0) or 0)
+        or int(getattr(settings, "market_watch_channel_id", 0) or 0)
+        or int(getattr(settings, "stock_channel_id", 0) or 0)
+    )
 
     if not channel_id:
         if debug:
@@ -378,7 +401,15 @@ async def post_daily_market_report(bot: discord.Client) -> None:
             subtitle=f"End-of-day snapshot • {today} ({tz_name})",
             debug=debug,
         )
-    except Exception as e:
+    except (
+        aiohttp.ClientError,
+        TimeoutError,
+        RuntimeError,
+        aiosqlite.Error,
+        sqlite3.Error,
+        ValueError,
+        TypeError,
+    ) as e:
         if debug:
             print(f"[DAILY] build embed failed: {e!r}")
         return
@@ -393,7 +424,16 @@ async def post_daily_market_report(bot: discord.Client) -> None:
         try:
             bot_id = bot.user.id if bot.user else 0
             await _apply_sp500_move(settings, db, bot_id=bot_id, debug=debug)
-        except Exception as e:
+        except (
+            aiohttp.ClientError,
+            TimeoutError,
+            RuntimeError,
+            FunMarketError,
+            aiosqlite.Error,
+            sqlite3.Error,
+            ValueError,
+            TypeError,
+        ) as e:
             if debug:
                 print(f"[DAILY] auto-move error: {e!r}")
 
@@ -428,10 +468,24 @@ async def post_daily_market_report(bot: discord.Client) -> None:
             await _set_meta(db, "daily_report_last_date", today)
             if debug:
                 print(f"[DAILY] posted text ok for {today}")
-        except Exception as e:
+        except (
+            discord.DiscordException,
+            aiosqlite.Error,
+            sqlite3.Error,
+            RuntimeError,
+            OSError,
+            ValueError,
+        ) as e:
             if debug:
                 print(f"[DAILY] send failed (forbidden fallback): {e!r}")
 
-    except Exception as e:
+    except (
+        discord.DiscordException,
+        aiosqlite.Error,
+        sqlite3.Error,
+        RuntimeError,
+        OSError,
+        ValueError,
+    ) as e:
         if debug:
             print(f"[DAILY] send failed: {e!r}")

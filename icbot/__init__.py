@@ -1,1 +1,1 @@
-__all__ = ["config", "db", "permissions", "utils", "embeds"]
+__all__ = ["config", "db", "embeds", "permissions", "utils"]

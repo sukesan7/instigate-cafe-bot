@@ -1,5 +1,6 @@
 import asyncio
 import os
+
 import aiohttp
 import discord
 
@@ -9,7 +10,10 @@ if not TOKEN:
     raise SystemExit("DISCORD_TOKEN is missing in environment (.env not loaded?)")
 
 
-async def purge():
+async def purge() -> None:
+    if not TOKEN:
+        raise SystemExit("DISCORD_TOKEN is missing in environment (.env not loaded?)")
+    token = TOKEN
     intents = discord.Intents.none()
     client = discord.Client(intents=intents)
 
@@ -20,7 +24,7 @@ async def purge():
             app_id = app.id
 
             headers = {
-                "Authorization": f"Bot {TOKEN}",
+                "Authorization": f"Bot {token}",
                 "Content-Type": "application/json",
             }
 
@@ -36,7 +40,7 @@ async def purge():
         finally:
             await client.close()
 
-    await client.start(TOKEN)
+    await client.start(token)
 
 
 if __name__ == "__main__":

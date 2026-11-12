@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -79,12 +79,12 @@ def load_lore() -> list[LoreEntry]:
 
     try:
         data = json.loads(pack_path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
         _LORE_CACHE = []
         return _LORE_CACHE
 
     entries: list[LoreEntry] = []
-    for e in (data.get("entries") or []):
+    for e in data.get("entries") or []:
         triggers = tuple(str(t).strip().lower() for t in (e.get("triggers") or []) if str(t).strip())
         if not triggers:
             continue
@@ -94,7 +94,9 @@ def load_lore() -> list[LoreEntry]:
                 triggers=triggers,
                 title=str(e.get("title") or "").strip() or "Lore",
                 summary=str(e.get("summary") or "").strip(),
-                response_rules=tuple(str(r).strip() for r in (e.get("response_rules") or []) if str(r).strip()),
+                response_rules=tuple(
+                    str(r).strip() for r in (e.get("response_rules") or []) if str(r).strip()
+                ),
             )
         )
 

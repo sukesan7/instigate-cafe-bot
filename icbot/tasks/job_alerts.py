@@ -1,13 +1,59 @@
 from __future__ import annotations
 
+import logging
 import re
-from datetime import datetime, timezone
+import sqlite3
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Any, Protocol, TypeVar, cast
 
 import aiohttp
+import aiosqlite
 import discord
 
 from icbot.embeds import job_alert as job_alert_embed
 from icbot.services.jobs_ats_client import JobPosting, fetch_greenhouse_jobs, fetch_lever_jobs
+
+log = logging.getLogger(__name__)
+
+
+class _Sendable(Protocol):
+    async def send(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class _JobRecord(Protocol):
+    @property
+    def source(self) -> str: ...
+    @property
+    def external_id(self) -> str: ...
+    @property
+    def company(self) -> str: ...
+    @property
+    def title(self) -> str: ...
+    @property
+    def url(self) -> str: ...
+    @property
+    def location(self) -> str: ...
+    @property
+    def text_blob(self) -> str: ...
+    @property
+    def posted_unix(self) -> int: ...
+
+
+_JobT = TypeVar("_JobT", bound=_JobRecord)
+
+
+async def _resolve_sendable_channel(bot: discord.Client, channel_id: int) -> _Sendable | None:
+    ch: Any = bot.get_channel(channel_id)
+    if ch is None:
+        try:
+            ch = await bot.fetch_channel(channel_id)
+        except (discord.DiscordException, LookupError, ValueError):
+            return None
+    if ch is not None and callable(getattr(ch, "send", None)):
+        return cast(_Sendable, ch)
+    return None
+
 
 def _jobs_channel_id(settings) -> int:
     """
@@ -19,14 +65,14 @@ def _jobs_channel_id(settings) -> int:
             v = int(getattr(settings, attr, 0) or 0)
             if v:
                 return v
-        except Exception:
+        except (TypeError, ValueError) as exc:
+            log.debug("Skipping invalid jobs channel attr %s: %s", attr, exc)
             continue
     return 0
 
 
-
 def _now_unix() -> int:
-    return int(datetime.now(tz=timezone.utc).timestamp())
+    return int(datetime.now(tz=UTC).timestamp())
 
 
 # ---- Classification (labels only; NOT a filter gate) ----
@@ -98,13 +144,12 @@ def _classify(text_blob: str) -> list[str]:
 
 # ---- Shared allow/deny filters (driven by .env via settings) ----
 
+
 def _keyword_passes(text: str, allowlist: list[str] | None, denylist: list[str] | None) -> bool:
     t = (text or "").lower()
     if allowlist and not any(a.lower() in t for a in allowlist if a):
         return False
-    if denylist and any(d.lower() in t for d in denylist if d):
-        return False
-    return True
+    return not (denylist and any(d.lower() in t for d in denylist if d))
 
 
 def _location_passes(location: str, allowlist: list[str] | None) -> bool:
@@ -142,6 +187,7 @@ def _location_passes_smart(location: str, text_blob: str, allowlist: list[str] |
 
     return any(tok.lower() in blob for tok in allowlist if tok)
 
+
 _SENIORITY_RX = re.compile(
     r"\b(senior|sr\.?|staff|principal|lead|manager|director|head|vp|architect|distinguished)\b",
     re.IGNORECASE,
@@ -167,6 +213,7 @@ _EARLY_CAREER_HINT_RX = re.compile(
     r"\b(intern(ship)?|co[- ]?op|new\s*grads?|graduates?|entry[- ]?level|junior|jr\.?|student|early\s+career)\b",
     re.IGNORECASE,
 )
+
 
 def job_matches_env_filters(
     *,
@@ -209,23 +256,20 @@ def job_matches_env_filters(
     # Gate 4: .env deny keywords (always applied)
     if kw_deny:
         for d in kw_deny:
-            if not d: continue
+            if not d:
+                continue
             # Use regex boundaries so 'pm' doesn't flag 'equipment' or 'development'
             pattern = rf"\b{re.escape(d)}\b"
             if re.search(pattern, t, re.IGNORECASE):
                 return False
 
     # Gate 5: .env allow keywords (if set, at least one must match)
-    # relaxed: Since discipline + early career are already hard-gated, 
+    # relaxed: Since discipline + early career are already hard-gated,
     # we don't strictly require an explicit keyword match unless it's explicitly wanted.
     # We will let the hard gates do the primary filtering.
-    pass
 
     # Gate 6: Location
-    if not _location_passes_smart(location, text_blob, loc_allow):
-        return False
-
-    return True
+    return _location_passes_smart(location, text_blob, loc_allow)
 
 
 # ---- Workday-specific filtering helpers ----
@@ -264,18 +308,18 @@ def _workday_passes_filters(
 
 
 def _pick_bootstrap_sample_workday(
-    jobs: list[JobPosting],
+    jobs: Sequence[_JobT],
     *,
     loc_allow: list[str] | None,
     kw_allow: list[str] | None,
     kw_deny: list[str] | None,
     require_early_career: bool = False,
     max_items: int = 5,
-) -> list[tuple[JobPosting, list[str]]]:
+) -> list[tuple[_JobT, list[str]]]:
     """Workday bootstrap is STRICT: never ignores filters."""
-    picked: list[tuple[JobPosting, list[str]]] = []
+    picked: list[tuple[_JobT, list[str]]] = []
 
-    def ok(j: JobPosting) -> bool:
+    def ok(j: _JobT) -> bool:
         return _workday_passes_filters(
             text_blob=j.text_blob,
             location=j.location,
@@ -315,6 +359,7 @@ def _looks_like_not_found(err: Exception) -> bool:
 
 # ---- DB helpers ----
 
+
 async def _source_has_any(db, source: str) -> bool:
     row = await db.fetchone("SELECT 1 FROM job_seen WHERE source=? LIMIT 1", (source,))
     return row is not None
@@ -332,7 +377,7 @@ async def _has_seen(db, source: str, external_id: str) -> bool:
 _MARK_SEEN_MODE: str | None = None  # "extended" | "basic"
 
 
-async def _mark_seen(db, jobs: list[JobPosting]) -> None:
+async def _mark_seen(db, jobs: Sequence[_JobRecord]) -> None:
     global _MARK_SEEN_MODE
     now = _now_unix()
 
@@ -364,7 +409,7 @@ async def _mark_seen(db, jobs: list[JobPosting]) -> None:
             await db.execute_many(stmts_ext)
             _MARK_SEEN_MODE = "extended"
             return
-        except Exception:
+        except (aiosqlite.Error, sqlite3.Error):
             _MARK_SEEN_MODE = "basic"
 
     # Basic insert (compatible with older schema)
@@ -422,14 +467,15 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
     if not channel_id:
         return
 
-    channel = bot.get_channel(channel_id)
+    channel = await _resolve_sendable_channel(bot, channel_id)
     if channel is None:
-        try:
-            channel = await bot.fetch_channel(channel_id)  # type: ignore[attr-defined]
-        except Exception:
-            return
+        return
 
-    gh = list(getattr(settings, "greenhouse_boards", None) or getattr(settings, "greenhouse_board_tokens", None) or [])
+    gh = list(
+        getattr(settings, "greenhouse_boards", None)
+        or getattr(settings, "greenhouse_board_tokens", None)
+        or []
+    )
     gh = [t for t in gh if isinstance(t, str) and t.strip() and t.strip() not in ("\\", "\\\\")]
     lv = list(getattr(settings, "lever_sites", None) or getattr(settings, "lever_site_tokens", None) or [])
     lv = [t for t in lv if isinstance(t, str) and t.strip() and t.strip() not in ("\\", "\\\\")]
@@ -444,7 +490,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
     require_early_career = bool(getattr(settings, "jobs_require_early_career", False))
 
     bad_sources: set[str] = getattr(bot, "_jobs_bad_sources", set())
-    setattr(bot, "_jobs_bad_sources", bad_sources)
+    cast(Any, bot)._jobs_bad_sources = bad_sources
 
     async with aiohttp.ClientSession(headers={"User-Agent": "InstigateCafeBot/1.0"}) as session:
         all_jobs: list[JobPosting] = []
@@ -458,7 +504,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 continue
             try:
                 all_jobs.extend(await fetch_greenhouse_jobs(session, token, timeout_seconds=12, limit=120))
-            except Exception as e:
+            except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
                 if _looks_like_not_found(e):
                     bad_sources.add(src_key)
                 print(f"[JOBS] greenhouse fetch failed: {e!r}")
@@ -472,7 +518,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 continue
             try:
                 all_jobs.extend(await fetch_lever_jobs(session, site, timeout_seconds=12, limit=120))
-            except Exception as e:
+            except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
                 if _looks_like_not_found(e):
                     bad_sources.add(src_key)
                 print(f"[JOBS] lever fetch failed: {e!r}")
@@ -572,4 +618,6 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
             posts_left -= 1
             posted_total += 1
 
-    print(f"[JOBS] cycle complete: fetched={len(all_jobs)} posted={posted_total} bad_sources={len(bad_sources)}")
+    print(
+        f"[JOBS] cycle complete: fetched={len(all_jobs)} posted={posted_total} bad_sources={len(bad_sources)}"
+    )

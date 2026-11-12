@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from typing import Iterable
+import contextlib
+from collections.abc import Iterable
 
 import discord
 from discord import app_commands
 
-from icbot.app import icse, admin
-from icbot.embeds import stock as stock_embed, system as system_embed
+from icbot.app import admin, icse
+from icbot.embeds import stock as stock_embed
+from icbot.embeds import system as system_embed
 from icbot.permissions import is_admin_or_allowed
-from icbot.services.fun_market import FunMarketStore, FunMarketError, format_signed_money
+from icbot.services.fun_market import FunMarketError, FunMarketStore, format_signed_money
 from icbot.utils import parse_signed_int
-
-
-
 
 
 async def _post_optional_announcement(interaction: discord.Interaction, embed: discord.Embed) -> None:
@@ -21,10 +20,8 @@ async def _post_optional_announcement(interaction: discord.Interaction, embed: d
     if settings.stock_channel_id and interaction.guild:
         ch = interaction.guild.get_channel(settings.stock_channel_id)
         if isinstance(ch, discord.TextChannel):
-            try:
+            with contextlib.suppress(discord.Forbidden):
                 await ch.send(embed=embed)
-            except discord.Forbidden:
-                pass
 
 
 def _store(interaction: discord.Interaction) -> FunMarketStore:
@@ -66,7 +63,9 @@ async def market(interaction: discord.Interaction):
     st = _store(interaction)
     rows = await st.list_stocks(active_only=True)
     if not rows:
-        await interaction.response.send_message("No Instigate Cafe Stock Exchange stocks configured yet. Edit `icbot/services/fun_market_catalog.py`.")
+        await interaction.response.send_message(
+            "No Instigate Cafe Stock Exchange stocks configured yet. Edit `icbot/services/fun_market_catalog.py`."
+        )
         return
 
     by_cat: dict[str, list] = {}
@@ -170,10 +169,7 @@ async def buy(interaction: discord.Interaction, symbol: str, qty: int):
         settings,
         title=f"🟢 Bought ${s.symbol}",
         headline=f"**{qty} shares @ ${s.price}**",
-        reason=(
-            f"Position: LONG x{pos.qty} @ ${pos.avg_price:.2f}\n"
-            f"Cash: **${bankroll}**"
-        ),
+        reason=(f"Position: LONG x{pos.qty} @ ${pos.avg_price:.2f}\nCash: **${bankroll}**"),
         footer_hint=interaction.user.display_name,
     )
     await interaction.response.send_message(embed=embed)
@@ -195,11 +191,7 @@ async def sell(interaction: discord.Interaction, symbol: str, qty: int):
         settings,
         title=f"🔵 Sold ${s.symbol}",
         headline=f"**{qty} shares @ ${s.price}**",
-        reason=(
-            f"Realized P/L: **{format_signed_money(realized)}**\n"
-            f"{pos_line}\n"
-            f"Cash: **${bankroll}**"
-        ),
+        reason=(f"Realized P/L: **{format_signed_money(realized)}**\n{pos_line}\nCash: **${bankroll}**"),
         footer_hint=interaction.user.display_name,
     )
     await interaction.response.send_message(embed=embed)
@@ -210,7 +202,9 @@ async def sell(interaction: discord.Interaction, symbol: str, qty: int):
 async def short(interaction: discord.Interaction, symbol: str, qty: int):
     st = _store(interaction)
     try:
-        s, pos, bankroll, collateral = await st.open_short(user_id=interaction.user.id, symbol=symbol, qty=qty)
+        s, pos, bankroll, collateral = await st.open_short(
+            user_id=interaction.user.id, symbol=symbol, qty=qty
+        )
     except FunMarketError as e:
         await interaction.response.send_message(f"❌ {e}", ephemeral=True)
         return
@@ -235,7 +229,9 @@ async def short(interaction: discord.Interaction, symbol: str, qty: int):
 async def cover(interaction: discord.Interaction, symbol: str, qty: int):
     st = _store(interaction)
     try:
-        s, pos, bankroll, realized, release = await st.cover_short(user_id=interaction.user.id, symbol=symbol, qty=qty)
+        s, pos, bankroll, realized, release = await st.cover_short(
+            user_id=interaction.user.id, symbol=symbol, qty=qty
+        )
     except FunMarketError as e:
         await interaction.response.send_message(f"❌ {e}", ephemeral=True)
         return
@@ -268,7 +264,7 @@ async def trades(interaction: discord.Interaction, limit: int = 10, user: discor
         return
 
     lines = []
-    for ts, uid, sym, side, qty_i, price, cash_delta, rpnl, note in rows:
+    for ts, _uid, sym, side, qty_i, price, cash_delta, rpnl, note in rows:
         note_s = f" — {note}" if note else ""
         lines.append(
             f"<t:{int(ts)}:R> • **{side}** ${sym} x{int(qty_i)} @ ${int(price)} • "
@@ -284,8 +280,6 @@ async def trades(interaction: discord.Interaction, limit: int = 10, user: discor
         footer_hint="ICSE",
     )
     await interaction.response.send_message(embed=embed, ephemeral=(target.id == interaction.user.id))
-
-
 
 
 @icse.command(name="history", description="Show recent admin price updates for ICSE stocks.")
@@ -336,7 +330,9 @@ async def admin_move(interaction: discord.Interaction, symbol: str, change: str,
 
     delta = parse_signed_int(change)
     if delta is None:
-        await interaction.response.send_message("❌ Invalid change. Use `+10`, `-5`, or `25`.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Invalid change. Use `+10`, `-5`, or `25`.", ephemeral=True
+        )
         return
 
     st = _store(interaction)
@@ -352,7 +348,10 @@ async def admin_move(interaction: discord.Interaction, symbol: str, change: str,
         settings,
         title=title_text,
         headline=f"**${s.symbol}** • **{sign}{int(delta)} → ${s.price}**",
-        reason=(f"{s.name}\nWeek: {s.weekly_change_abs:+d} ({_fmt_pct(s.weekly_change_pct)})" + (f"\n{reason}" if reason else "")),
+        reason=(
+            f"{s.name}\nWeek: {s.weekly_change_abs:+d} ({_fmt_pct(s.weekly_change_pct)})"
+            + (f"\n{reason}" if reason else "")
+        ),
         footer_hint=f"Moved by {interaction.user.name}",
     )
     await interaction.response.send_message(embed=embed)
@@ -378,7 +377,10 @@ async def admin_set(interaction: discord.Interaction, symbol: str, value: int, r
         settings,
         title=f"🧾 ${s.symbol} Set",
         headline=f"**${s.symbol}** • **${s.price}**",
-        reason=(f"{s.name}\nWeek: {s.weekly_change_abs:+d} ({_fmt_pct(s.weekly_change_pct)})" + (f"\n{reason}" if reason else "")),
+        reason=(
+            f"{s.name}\nWeek: {s.weekly_change_abs:+d} ({_fmt_pct(s.weekly_change_pct)})"
+            + (f"\n{reason}" if reason else "")
+        ),
         footer_hint=f"Set by {interaction.user.name}",
     )
     await interaction.response.send_message(embed=embed)
@@ -413,14 +415,16 @@ async def weekroll_cmd(interaction: discord.Interaction, note: str | None = None
 
     st = _store(interaction)
     wk = await st.week_rollover(user_id=interaction.user.id, note=note)
-    await interaction.response.send_message(f"✅ Weekly baseline reset for all active stocks. New week key: **{wk}**.")
+    await interaction.response.send_message(
+        f"✅ Weekly baseline reset for all active stocks. New week key: **{wk}**."
+    )
 
 
 @icse.command(name="stock", description="Show the current Instigate Cafe ($IC) stock price and history.")
 async def stock(interaction: discord.Interaction):
     st = _store(interaction)
     settings = interaction.client.settings  # type: ignore[attr-defined]
-    
+
     try:
         s = await st.get_stock("IC")
     except FunMarketError as e:
@@ -441,13 +445,21 @@ async def stock(interaction: discord.Interaction):
     reason_str = ""
     if rows:
         lines = []
-        for ts, sym, uid, delta, new_value, reason in rows:
+        for ts, _sym, uid, delta, new_value, reason in rows:
             sign = "+" if int(delta) >= 0 else ""
             reason_s = f" — {reason}" if reason else ""
-            lines.append(f"<t:{int(ts)}:R> <@{int(uid)}>: **{sign}{int(delta)}** → **${int(new_value)}**{reason_s}")
+            lines.append(
+                f"<t:{int(ts)}:R> <@{int(uid)}>: **{sign}{int(delta)}** → **${int(new_value)}**{reason_s}"
+            )
         reason_str = "\n".join(lines)
     else:
         reason_str = "No recent history."
 
-    embed = stock_embed(settings, title=f"📈 Instigate Cafe Stock ($IC)", headline=headline, reason=reason_str, footer_hint="ICSE")
+    embed = stock_embed(
+        settings,
+        title="📈 Instigate Cafe Stock ($IC)",
+        headline=headline,
+        reason=reason_str,
+        footer_hint="ICSE",
+    )
     await interaction.response.send_message(embed=embed)
