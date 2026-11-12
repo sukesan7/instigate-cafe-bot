@@ -267,9 +267,11 @@ class FakeFollowup:
 class FakeClient:
     """Minimal bot client exposing `.settings`, `.db`, `.user`, and registered offline channels."""
 
-    def __init__(self, *, settings: Any, db: Any | None = None):
+    def __init__(self, *, settings: Any, db: Any | None = None, services: Any | None = None):
         self.settings = settings
         self.db = db
+        if services is not None:
+            self.services = services
         self.user = SimpleNamespace(id=999000000000000001, display_name="InstigatorTest")
         self.guilds: list[Any] = []
         self._channels: dict[int, Any] = {}

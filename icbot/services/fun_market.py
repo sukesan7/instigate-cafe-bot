@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -11,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import aiosqlite
 
 from icbot.db import Database
+from icbot.errors import BotError
 from icbot.services.fun_market_catalog import catalog_map, normalize_symbol
 
 log = logging.getLogger(__name__)
@@ -19,7 +21,7 @@ SHORT_COLLATERAL_RATIO = 1.5
 PRICE_FLOOR = 1
 
 
-class FunMarketError(RuntimeError):
+class FunMarketError(BotError, RuntimeError):
     pass
 
 
@@ -64,25 +66,32 @@ class PortfolioSnapshot:
 
 class FunMarketStore:
     def __init__(
-        self, db: Database, *, starting_bankroll: int = 1000, tz_name: str = "America/Toronto"
+        self,
+        db: Database,
+        *,
+        starting_bankroll: int = 1000,
+        tz_name: str = "America/Toronto",
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.db = db
         self.starting_bankroll = int(starting_bankroll or 1000)
         self.tz_name = str(tz_name or "America/Toronto")
+        self._clock = clock
 
     # ---------------------------
     # Time / symbols
     # ---------------------------
     def _now(self) -> int:
-        return int(time.time())
+        return int(self._clock() if self._clock is not None else time.time())
 
     def _week_key(self) -> str:
+        now_ts = self._now()
         try:
-            dt = datetime.now(ZoneInfo(self.tz_name))
+            dt = datetime.fromtimestamp(now_ts, tz=ZoneInfo(self.tz_name))
             iso = dt.isocalendar()
             return f"{iso.year}-W{iso.week:02d}"
         except (ZoneInfoNotFoundError, KeyError, ValueError):
-            dt = datetime.now(UTC)
+            dt = datetime.fromtimestamp(now_ts, tz=UTC)
             iso = dt.isocalendar()
             return f"{iso.year}-W{iso.week:02d}"
 
@@ -96,7 +105,7 @@ class FunMarketStore:
         if row is None:
             await conn.execute(
                 "INSERT INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
-                (user_id, self.starting_bankroll, int(time.time())),
+                (user_id, self.starting_bankroll, self._now()),
             )
 
     async def _get_bankroll_conn(self, conn: aiosqlite.Connection, user_id: int) -> int:
@@ -663,7 +672,7 @@ class FunMarketStore:
         if cash_row is None:
             await self.db.execute(
                 "INSERT OR IGNORE INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
-                (int(user_id), self.starting_bankroll, int(time.time())),
+                (int(user_id), self.starting_bankroll, self._now()),
             )
             cash = self.starting_bankroll
 

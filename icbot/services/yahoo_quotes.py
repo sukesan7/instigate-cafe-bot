@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+
+from icbot.errors import ProviderError, redact_secrets
 
 """Yahoo Finance quote fetcher.
 
@@ -40,6 +43,24 @@ CRUMB_TTL_SECONDS = 30 * 60  # 30 minutes
 
 # Yahoo gets upset when you request huge symbol lists.
 MAX_SYMBOLS_PER_REQUEST = 60
+
+
+@dataclass
+class YahooCrumbCache:
+    """Per-container Yahoo Finance crumb cache."""
+
+    value: str | None = None
+    expires_at: float = 0.0
+    lock: asyncio.Lock | None = None
+
+    def get_lock(self) -> asyncio.Lock:
+        if self.lock is None:
+            self.lock = asyncio.Lock()
+        return self.lock
+
+    def clear(self) -> None:
+        self.value = None
+        self.expires_at = 0.0
 
 
 @dataclass(frozen=True)
@@ -133,39 +154,60 @@ async def close_session() -> None:
 
 async def _refresh_crumb(session: aiohttp.ClientSession, debug: bool) -> str:
     """Refresh cookie+crumb."""
+    headers = _yf_headers()
     # Step 1: hit fc.yahoo.com to populate cookies
-    async with session.get(YF_FC_URL, allow_redirects=True) as _r:
+    async with session.get(YF_FC_URL, allow_redirects=True, headers=headers) as _r:
         await _r.read()
 
     # Step 2: request crumb
-    async with session.get(YF_CRUMB_URL, allow_redirects=True) as r:
+    async with session.get(YF_CRUMB_URL, allow_redirects=True, headers=headers) as r:
         if r.status != 200:
             txt = await r.text(errors="ignore")
-            raise RuntimeError(f"crumb fetch failed: status={r.status} body={txt[:200]!r}")
+            safe_txt = redact_secrets(txt[:200])
+            raise ProviderError(f"crumb fetch failed: status={r.status} body={safe_txt!r}")
         crumb = (await r.text(errors="ignore")).strip()
         if not crumb or "unauthorized" in crumb.lower():
-            raise RuntimeError(f"crumb invalid: {crumb[:80]!r}")
+            raise ProviderError(f"crumb invalid: {redact_secrets(crumb[:80])!r}")
 
     if debug:
         print("[YF] crumb refreshed")
     return crumb
 
 
-async def _get_crumb(session: aiohttp.ClientSession, debug: bool) -> str:
+async def _get_crumb(
+    session: aiohttp.ClientSession,
+    debug: bool,
+    *,
+    crumb_cache: YahooCrumbCache | None = None,
+    clock: Callable[[], float] | None = None,
+) -> str:
     """Return a cached crumb if still fresh; otherwise refresh."""
+    now_fn = clock if clock is not None else time.time
+    if crumb_cache is not None:
+        now = float(now_fn())
+        if crumb_cache.value and now < crumb_cache.expires_at:
+            return crumb_cache.value
+        async with crumb_cache.get_lock():
+            now = float(now_fn())
+            if crumb_cache.value and now < crumb_cache.expires_at:
+                return crumb_cache.value
+            crumb_cache.value = await _refresh_crumb(session, debug)
+            crumb_cache.expires_at = float(now_fn()) + CRUMB_TTL_SECONDS
+            return crumb_cache.value
+
     global _CRUMB, _CRUMB_EXP_TS
-    now = time.time()
+    now = float(now_fn())
 
     if _CRUMB and now < _CRUMB_EXP_TS:
         return _CRUMB
 
     async with _CRUMB_LOCK:
-        now = time.time()
+        now = float(now_fn())
         if _CRUMB and now < _CRUMB_EXP_TS:
             return _CRUMB
 
         _CRUMB = await _refresh_crumb(session, debug)
-        _CRUMB_EXP_TS = time.time() + CRUMB_TTL_SECONDS
+        _CRUMB_EXP_TS = float(now_fn()) + CRUMB_TTL_SECONDS
         return _CRUMB
 
 
@@ -215,17 +257,25 @@ def _quotes_from_payload(data: Any) -> dict[str, Quote]:
     return out
 
 
-async def _fetch_quotes_chunk(symbols: list[str], *, debug: bool) -> dict[str, Quote]:
-    session = await _get_session()
-    crumb = await _get_crumb(session, debug)
+async def _fetch_quotes_chunk(
+    symbols: list[str],
+    *,
+    debug: bool,
+    session: aiohttp.ClientSession | None = None,
+    crumb_cache: YahooCrumbCache | None = None,
+    clock: Callable[[], float] | None = None,
+) -> dict[str, Quote]:
+    active_session = session if session is not None and not session.closed else await _get_session()
+    crumb = await _get_crumb(active_session, debug, crumb_cache=crumb_cache, clock=clock)
 
     params = {"symbols": ",".join(symbols), "crumb": crumb}
+    headers = _yf_headers()
 
     last_status = 0
     last_body = ""
 
     for url in YF_QUOTE_ENDPOINTS:
-        async with session.get(url, params=params) as r:
+        async with active_session.get(url, params=params, headers=headers) as r:
             last_status = r.status
             if r.status == 200:
                 data = await r.json()
@@ -234,20 +284,30 @@ async def _fetch_quotes_chunk(symbols: list[str], *, debug: bool) -> dict[str, Q
                 return _quotes_from_payload(data)
 
             txt = await r.text(errors="ignore")
-            last_body = txt[:200]
+            last_body = redact_secrets(txt[:200])
             if debug:
                 print(f"[YF] quote status={r.status} via {url} body={last_body!r}")
 
             # If Yahoo suddenly rejects the crumb, refresh once and let the next poll retry cleanly
             if r.status in (401, 403):
-                global _CRUMB, _CRUMB_EXP_TS
-                _CRUMB = None
-                _CRUMB_EXP_TS = 0.0
+                if crumb_cache is not None:
+                    crumb_cache.clear()
+                else:
+                    global _CRUMB, _CRUMB_EXP_TS
+                    _CRUMB = None
+                    _CRUMB_EXP_TS = 0.0
 
-    raise RuntimeError(f"Yahoo quote fetch failed (last_status={last_status}, body={last_body!r})")
+    raise ProviderError(f"Yahoo quote fetch failed (last_status={last_status}, body={last_body!r})")
 
 
-async def fetch_quotes(symbols: list[str], *, debug: bool = False) -> dict[str, Quote]:
+async def fetch_quotes(
+    symbols: list[str],
+    *,
+    debug: bool = False,
+    session: aiohttp.ClientSession | None = None,
+    crumb_cache: YahooCrumbCache | None = None,
+    clock: Callable[[], float] | None = None,
+) -> dict[str, Quote]:
     """Fetch quotes for 1..N symbols.
 
     If the list is large, it is split into multiple requests and the results merged.
@@ -267,18 +327,23 @@ async def fetch_quotes(symbols: list[str], *, debug: bool = False) -> dict[str, 
         uniq.append(s)
 
     if len(uniq) <= MAX_SYMBOLS_PER_REQUEST:
-        return await _fetch_quotes_chunk(uniq, debug=debug)
+        return await _fetch_quotes_chunk(
+            uniq, debug=debug, session=session, crumb_cache=crumb_cache, clock=clock
+        )
 
     out: dict[str, Quote] = {}
     for i in range(0, len(uniq), MAX_SYMBOLS_PER_REQUEST):
         chunk = uniq[i : i + MAX_SYMBOLS_PER_REQUEST]
         try:
-            part = await _fetch_quotes_chunk(chunk, debug=debug)
+            part = await _fetch_quotes_chunk(
+                chunk, debug=debug, session=session, crumb_cache=crumb_cache, clock=clock
+            )
             out.update(part)
         except (
             aiohttp.ClientError,
             TimeoutError,
             json.JSONDecodeError,
+            ProviderError,
             RuntimeError,
             AttributeError,
             KeyError,
@@ -287,6 +352,8 @@ async def fetch_quotes(symbols: list[str], *, debug: bool = False) -> dict[str, 
         ) as e:
             # Best-effort: keep the rest of the chunks; caller can decide if partial is ok.
             if debug:
-                print(f"[YF] chunk fetch failed: {e!r} chunk={chunk[:5]}...(+{max(0, len(chunk) - 5)})")
+                print(
+                    f"[YF] chunk fetch failed: {redact_secrets(repr(e))} chunk={chunk[:5]}...(+{max(0, len(chunk) - 5)})"
+                )
             continue
     return out

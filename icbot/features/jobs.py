@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import time
 from typing import Any
 
 import discord
 from discord import app_commands
 
 from icbot.app import ic
+from icbot.container import get_container, resolve_guild_settings
 from icbot.tasks.job_alerts import job_matches_env_filters
 
 
@@ -22,10 +22,11 @@ async def _table_columns(db: Any, table: str) -> list[str]:
     return [r[1] for r in rows]
 
 
-def _format_age(ts: int | None) -> str:
+def _format_age(ts: int | None, *, now: int | None = None) -> str:
     if not ts or ts <= 0:
         return ""
-    delta = int(time.time()) - int(ts)
+    cur = int(now) if now is not None else 0
+    delta = max(0, cur - int(ts))
     if delta < 60:
         return f"{delta}s ago"
     if delta < 3600:
@@ -58,11 +59,15 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
     await interaction.response.defer(thinking=True)
 
     bot = interaction.client
-    settings = getattr(bot, "settings", None)
+    base_settings = getattr(bot, "settings", None)
     db = getattr(bot, "db", None)
-    if settings is None or db is None:
+    if base_settings is None or db is None:
         await interaction.followup.send("❌ Bot not initialized (missing settings/db).")
         return
+
+    settings = await resolve_guild_settings(bot, interaction)
+    container = get_container(bot)
+    now_unix = int(container.clock())
 
     cols = await _table_columns(db, "job_seen")
 
@@ -101,7 +106,7 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
         await interaction.followup.send("No jobs found in `job_seen` yet.")
         return
 
-    # Same filters as the pollers (from .env via settings).
+    # Same filters as the pollers (resolved per guild/process settings).
     loc_allow = list(getattr(settings, "jobs_location_allowlist", None) or []) or None
     kw_allow = list(getattr(settings, "jobs_keywords_allowlist", None) or []) or None
     kw_deny = list(getattr(settings, "jobs_keywords_denylist", None) or []) or None
@@ -134,7 +139,7 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
             continue
 
         seen = j.get(col_seen) if col_seen else None
-        age = _format_age(int(seen)) if isinstance(seen, (int, float)) else ""
+        age = _format_age(int(seen), now=now_unix) if isinstance(seen, (int, float)) else ""
 
         # Build clean embed
         e = job_alert_embed(
@@ -155,7 +160,7 @@ async def jobs_cmd(interaction: discord.Interaction, limit: app_commands.Range[i
     if not embeds:
         await interaction.followup.send(
             "No SWE/CS roles matched the current filters in the most recent scan.\n"
-            "Check `.env` allow/deny/location lists (you might be filtering too aggressively)."
+            "Check guild or process job filter settings (you might be filtering too aggressively)."
         )
         return
 

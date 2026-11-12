@@ -3,7 +3,6 @@ import json
 import logging
 import re
 import urllib.parse
-from typing import cast
 
 import aiohttp
 import aiosqlite
@@ -14,16 +13,18 @@ from bs4 import BeautifulSoup
 from discord import app_commands
 
 from icbot.app import ic
-from icbot.config import Settings
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
+from icbot.errors import format_exception_safe, redact_secrets
 
 log = logging.getLogger(__name__)
 
 DB_PATH = "tmu_grades.db"
 
 
-async def _init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
+async def _init_db(db_path: str | None = None):
+    eff_db = db_path or DB_PATH
+    async with aiosqlite.connect(eff_db) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS course_cache (
                 course_code TEXT PRIMARY KEY,
@@ -35,14 +36,28 @@ async def _init_db():
         await db.commit()
 
 
-async def fetch_course_data(course_code: str) -> dict | None:
+async def _fetch_grades_html(url: str, headers: dict[str, str], session: aiohttp.ClientSession) -> str | None:
+    async with session.get(url, headers=headers) as resp:
+        if resp.status == 404:
+            return None  # Course not found
+        resp.raise_for_status()
+        return await resp.text()
+
+
+async def fetch_course_data(
+    course_code: str,
+    *,
+    db_path: str | None = None,
+    session: aiohttp.ClientSession | None = None,
+) -> dict | None:
     """Fetch from TMU Grades or return cached payload."""
-    await _init_db()  # Ensure DB is ready
+    eff_db = db_path or DB_PATH
+    await _init_db(eff_db)  # Ensure DB is ready
     course_code = course_code.lower().strip()
 
     # Check cache first
     async with (
-        aiosqlite.connect(DB_PATH) as db,
+        aiosqlite.connect(eff_db) as db,
         db.execute(
             "SELECT title, parsed_data FROM course_cache WHERE course_code = ?", (course_code,)
         ) as cursor,
@@ -56,11 +71,14 @@ async def fetch_course_data(course_code: str) -> dict | None:
     url = f"https://tmu.grades.zone/course/{urllib.parse.quote(course_code)}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-    async with aiohttp.ClientSession() as session, session.get(url, headers=headers) as resp:
-        if resp.status == 404:
-            return None  # Course not found
-        resp.raise_for_status()
-        html = await resp.text()
+    if session is not None and not session.closed:
+        html = await _fetch_grades_html(url, headers, session)
+    else:
+        async with aiohttp.ClientSession() as tmp_session:
+            html = await _fetch_grades_html(url, headers, tmp_session)
+
+    if html is None:
+        return None
 
     # Parse HTML
     clean_html = html.replace('\\"', '"')
@@ -112,7 +130,7 @@ async def fetch_course_data(course_code: str) -> dict | None:
         )
 
     # Save to Cache
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(eff_db) as db:
         await db.execute(
             """
             INSERT OR REPLACE INTO course_cache (course_code, title, parsed_data)
@@ -194,10 +212,17 @@ def generate_chart(course_title: str, professors: list) -> io.BytesIO:
 async def grades_command(interaction: discord.Interaction, course: str):
     await interaction.response.defer(thinking=True)
 
-    settings = cast(Settings, getattr(interaction.client, "settings", None) or Settings())
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    container = get_container(interaction.client)
+    eff_db_path = DB_PATH if DB_PATH != "tmu_grades.db" else settings.grades_db_path
+    shared_session = (
+        container.http_session
+        if container.http_session is not None and not container.http_session.closed
+        else None
+    )
 
     try:
-        data = await fetch_course_data(course)
+        data = await fetch_course_data(course, db_path=eff_db_path, session=shared_session)
         if not data:
             await interaction.followup.send(
                 embed=system_embed(
@@ -247,8 +272,13 @@ async def grades_command(interaction: discord.Interaction, course: str):
         TypeError,
         ValueError,
         RuntimeError,
-    ):
-        log.exception("Error fetching grades for %s", course)
+    ) as exc:
+        secrets = settings.secret_values()
+        log.warning(
+            "Error fetching grades for %s: %s",
+            redact_secrets(course, secrets),
+            format_exception_safe(exc, secrets),
+        )
         await interaction.followup.send(
             embed=system_embed(
                 settings,

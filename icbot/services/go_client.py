@@ -8,10 +8,12 @@ from urllib.parse import urlencode
 
 import aiohttp
 
+from icbot.errors import ProviderError, redact_secrets
+
 log = logging.getLogger(__name__)
 
 
-class GOFetchError(RuntimeError):
+class GOFetchError(ProviderError):
     pass
 
 
@@ -114,6 +116,7 @@ async def fetch_service_alerts(
         "X-API-Key": access_key,
     }
 
+    secrets = (access_key,)
     try:
         async with session.get(
             url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout_seconds)
@@ -121,13 +124,18 @@ async def fetch_service_alerts(
             # Some GO endpoints return 200 + ErrorCode in Metadata, but also can return non-200.
             text = await resp.text()
             if resp.status != 200:
-                raise GOFetchError(f"HTTP {resp.status} via GET {url} :: {text[:300]}")
+                safe_url = redact_secrets(url, secrets)
+                safe_text = redact_secrets(text[:300], secrets)
+                raise GOFetchError(f"HTTP {resp.status} via GET {safe_url} :: {safe_text}")
             try:
                 payload = await resp.json(content_type=None)
             except (aiohttp.ContentTypeError, json.JSONDecodeError, ValueError) as e:
-                raise GOFetchError(f"invalid json: {e!r} :: {text[:300]}") from e
+                safe_text = redact_secrets(text[:300], secrets)
+                safe_err = redact_secrets(repr(e), secrets)
+                raise GOFetchError(f"invalid json: {safe_err} :: {safe_text}") from e
     except (TimeoutError, aiohttp.ClientError) as e:
-        raise GOFetchError(f"network error: {e!r}") from e
+        safe_err = redact_secrets(repr(e), secrets)
+        raise GOFetchError(f"network error: {safe_err}") from e
 
     msgs = _parse_messages(payload)
     return msgs

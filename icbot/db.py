@@ -244,6 +244,17 @@ class Database:
             if row is None:
                 await db.execute("INSERT INTO meta (key, value) VALUES ('stock_value', ?)", ("0",))
 
+            # Per-guild non-secret configuration overrides (JSON object keyed by guild_id)
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS guild_settings (
+                    guild_id      INTEGER PRIMARY KEY,
+                    settings_json TEXT    NOT NULL,
+                    updated_at    INTEGER NOT NULL
+                )
+                """
+            )
+
             await db.commit()
 
     async def execute(self, sql: str, params: Sequence[Any] = ()) -> None:

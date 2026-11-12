@@ -5,8 +5,10 @@ import discord
 from discord import app_commands
 
 from icbot.app import ic
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
-from icbot.services.gemini_client import GeminiError, gemini_generate_text
+from icbot.errors import safe_error_summary
+from icbot.services.gemini_client import GeminiError
 
 # 5MB limit
 MAX_FILE_SIZE = 5 * 1024 * 1024
@@ -15,12 +17,14 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 class ResumeReviewer:
     @staticmethod
     async def review(interaction: discord.Interaction, attachment: discord.Attachment, discipline: str):
-        settings = getattr(interaction.client, "settings", None)
-        if not settings or not settings.gemini_api_key:
+        base_settings = getattr(interaction.client, "settings", None)
+        settings = await resolve_guild_settings(interaction.client, interaction)
+        container = get_container(interaction.client)
+        if not base_settings or not settings.gemini_api_key:
             await interaction.followup.send("❌ Gemini API is not configured.", ephemeral=True)
             return
 
-        if getattr(interaction.client, "_llm_killed", False):
+        if container.llm_killed or getattr(interaction.client, "_llm_killed", False):
             await interaction.followup.send(
                 "🛑 **Resume features are currently paused by an administrator.** Please try again later.",
                 ephemeral=True,
@@ -69,7 +73,7 @@ class ResumeReviewer:
             ats_prompt = "You are a strict ATS (Applicant Tracking System). Determine if the provided document is a valid resume (specifically for software engineering or related tech roles). Reply ONLY with 'PASS' if it is a valid resume, or 'FAIL' followed by a short reason if it is not."
 
         try:
-            ats_res = await gemini_generate_text(
+            ats_res = await container.gemini_generate(
                 api_key=settings.gemini_api_key,
                 model=model,
                 prompt=ats_prompt,
@@ -86,8 +90,9 @@ class ResumeReviewer:
                 await interaction.followup.send(f"❌ **ATS Scan Failed**: {reason}", ephemeral=True)
                 return
         except (GeminiError, TimeoutError, aiohttp.ClientError, ValueError) as e:
+            safe = safe_error_summary(e, settings.secret_values())
             await interaction.followup.send(
-                f"❌ Failed to reach Gemini for ATS scan ({type(e).__name__}): {e}", ephemeral=True
+                f"❌ Failed to reach Gemini for ATS scan ({type(e).__name__}): {safe}", ephemeral=True
             )
             return
 
@@ -126,7 +131,7 @@ class ResumeReviewer:
                 review_prompt = "You are a Senior Software Engineer reviewing a resume. Provide Overall Rating, Pros, Cons, and Actionable feedback."
 
         try:
-            review_res = await gemini_generate_text(
+            review_res = await container.gemini_generate(
                 api_key=settings.gemini_api_key,
                 model=model,
                 prompt="Based on the attached resume, please provide your review.",
@@ -136,8 +141,9 @@ class ResumeReviewer:
                 timeout_seconds=120,
             )
         except (GeminiError, TimeoutError, aiohttp.ClientError, ValueError) as e:
+            safe = safe_error_summary(e, settings.secret_values())
             await interaction.followup.send(
-                f"❌ Failed to reach Gemini for review ({type(e).__name__}): {e}", ephemeral=True
+                f"❌ Failed to reach Gemini for review ({type(e).__name__}): {safe}", ephemeral=True
             )
             return
 

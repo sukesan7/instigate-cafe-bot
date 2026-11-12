@@ -102,9 +102,18 @@ def _disable_outbound_network(request: pytest.FixtureRequest, monkeypatch: pytes
 
 def _reset_service_globals() -> None:
     """Clear cached HTTP sessions, locks bound to closed loops, and in-memory TTL/session caches."""
+    if "icbot.container" in sys.modules:
+        container_mod = sys.modules["icbot.container"]
+        container_mod._FALLBACK_NOTES_CACHE.clear()
+        container_mod._FALLBACK_RSS_CACHE.clear()
+
     if "icbot.features.notes" in sys.modules:
         mod = sys.modules["icbot.features.notes"]
         mod._NOTES_CACHE = (0.0, {})
+
+    if "icbot.features.sports" in sys.modules:
+        sports_mod = sys.modules["icbot.features.sports"]
+        sports_mod._RSS_CACHE.clear()
 
     if "icbot.features.blackjack" in sys.modules:
         bj_mod = sys.modules["icbot.features.blackjack"]

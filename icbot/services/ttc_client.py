@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import aiohttp
 
+from icbot.errors import ProviderError
+
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -25,7 +27,7 @@ class TTCItem:
     published_iso: str | None
 
 
-class TTCFetchError(RuntimeError):
+class TTCFetchError(ProviderError):
     pass
 
 

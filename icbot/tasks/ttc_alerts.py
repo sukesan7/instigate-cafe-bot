@@ -3,13 +3,26 @@ from __future__ import annotations
 import asyncio
 import re
 import sqlite3
+from contextlib import asynccontextmanager
 
 import aiohttp
 import aiosqlite
 import discord
 
+from icbot.container import get_container
 from icbot.embeds import ttc_alert as ttc_alert_embed
+from icbot.errors import format_exception_safe
 from icbot.services.ttc_client import TTCFetchError, TTCItem, fetch_account_status_items, resolve_account_id
+
+
+@asynccontextmanager
+async def _scoped_http_session(session: aiohttp.ClientSession | None):
+    if session is not None and not session.closed:
+        yield session
+        return
+    async with aiohttp.ClientSession() as created:
+        yield created
+
 
 _MAJOR_PATTERNS = [
     # "Hard" major-disruption signals
@@ -90,6 +103,8 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
     db = getattr(bot, "db", None)
     if settings is None or db is None:
         return
+    container = get_container(bot)
+    secrets = settings.secret_values() if hasattr(settings, "secret_values") else ()
 
     channel_id = int(getattr(settings, "ttc_alerts_channel_id", 0) or 0)
     if not channel_id:
@@ -118,7 +133,7 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
         return
 
     # Resolve account id once (cached in DB)
-    async with aiohttp.ClientSession() as session:
+    async with _scoped_http_session(container.http_session) as session:
         account_id = await _get_meta(db, "ttc_account_id")
         if not account_id:
             try:
@@ -132,7 +147,7 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
                 sqlite3.Error,
                 ValueError,
             ) as e:
-                print(f"[TTC] resolve account id failed: {e!r}")
+                print(f"[TTC] resolve account id failed: {format_exception_safe(e, secrets)}")
                 return
 
         last_id = await _get_meta(db, "ttc_last_status_id")
@@ -160,11 +175,11 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
                 await asyncio.sleep(1.5 * (attempt + 1))
             except TTCFetchError as e:
                 # These are usually config/rate-limit issues; no point retrying rapidly
-                print(f"[TTC] fetch failed: {e!r}")
+                print(f"[TTC] fetch failed: {format_exception_safe(e, secrets)}")
                 return
 
         if last_err is not None:
-            print(f"[TTC] fetch failed: {last_err!r}")
+            print(f"[TTC] fetch failed: {format_exception_safe(last_err, secrets)}")
             return
 
         if debug:
@@ -207,7 +222,7 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
                         posted = True
                         break
                     except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-                        print(f"[TTC] post failed: {e!r}")
+                        print(f"[TTC] post failed: {format_exception_safe(e, secrets)}")
                         break
 
                 # even if nothing matched, still checkpoint to prevent spam on restart
@@ -243,5 +258,5 @@ async def poll_and_post_ttc(bot: discord.Client) -> None:
             try:
                 await channel.send(embed=embed)  # type: ignore[call-arg]
             except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-                print(f"[TTC] post failed: {e!r}")
+                print(f"[TTC] post failed: {format_exception_safe(e, secrets)}")
                 return

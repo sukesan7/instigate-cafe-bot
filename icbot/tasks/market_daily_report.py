@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -11,7 +12,9 @@ import aiohttp
 import aiosqlite
 import discord
 
+from icbot.container import ServiceContainer, get_container
 from icbot.embeds import system as system_embed
+from icbot.errors import format_exception_safe
 from icbot.services.crypto_fng import fetch_fear_greed
 from icbot.services.fun_market import FunMarketError, FunMarketStore
 from icbot.services.yahoo_quotes import Quote, fetch_quotes
@@ -46,14 +49,19 @@ async def _set_meta(db, key: str, value: str) -> None:
     await db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
 
-async def _fun_market_lines(settings, db) -> list[str]:
+async def _fun_market_lines(settings, db, *, services: ServiceContainer | None = None) -> list[str]:
     """All fun stocks for the daily report, including IC."""
     try:
-        store = FunMarketStore(
-            db,
-            starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
-            tz_name=str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"),
-        )
+        if services is not None:
+            store = services.fun_market_store(settings, db=db)
+        else:
+            store = FunMarketStore(
+                db,
+                starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
+                tz_name=str(
+                    getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"
+                ),
+            )
         rows = await store.list_stocks(active_only=True)
     except (FunMarketError, aiosqlite.Error, sqlite3.Error, TypeError, ValueError):
         return []
@@ -75,14 +83,23 @@ async def _fun_market_lines(settings, db) -> list[str]:
     return lines
 
 
-async def _apply_sp500_move(settings, db, *, bot_id: int = 0, debug: bool = False) -> None:
+async def _apply_sp500_move(
+    settings,
+    db,
+    *,
+    bot_id: int = 0,
+    debug: bool = False,
+    services: ServiceContainer | None = None,
+) -> None:
     """Apply the S&P 500 daily % move to all active fun-market stocks.
 
     Called right after the daily report is posted.  Deduped per local date
     via meta key 'fun_auto_move_last_date'.
     """
     tz_name = str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto")
-    today = _local_date_str(tz_name)
+    clock = services.clock if services is not None else None
+    today = _local_date_str(tz_name, now_unix=clock() if clock is not None else None)
+    secrets = settings.secret_values() if hasattr(settings, "secret_values") else ()
 
     # Dedupe: only run once per day
     last = await _get_meta(db, "fun_auto_move_last_date")
@@ -91,13 +108,29 @@ async def _apply_sp500_move(settings, db, *, bot_id: int = 0, debug: bool = Fals
             print(f"[DAILY] fun-market auto-move already applied for {today}")
         return
 
+    open_session = (
+        services.http_session
+        if services is not None and services.http_session is not None and not services.http_session.closed
+        else None
+    )
+    crumb_cache = services.yahoo_crumb if services is not None else None
+
     # Fetch SPY quote (likely cached from the report build moments ago)
     try:
-        quotes = await fetch_quotes(["SPY"], debug=debug)
+        if services is not None and services.fetch_quotes_fn is not None:
+            quotes = await services.fetch_quotes_fn(["SPY"], debug=debug)
+        else:
+            quotes = await fetch_quotes(
+                ["SPY"],
+                debug=debug,
+                session=open_session,
+                crumb_cache=crumb_cache,
+                clock=clock,
+            )
         spy = quotes.get("SPY")
     except (aiohttp.ClientError, TimeoutError, RuntimeError, json.JSONDecodeError, ValueError) as e:
         if debug:
-            print(f"[DAILY] SPY fetch failed for auto-move: {e!r}")
+            print(f"[DAILY] SPY fetch failed for auto-move: {format_exception_safe(e, secrets)}")
         return
 
     if spy is None or spy.regular_change_pct is None:
@@ -107,17 +140,20 @@ async def _apply_sp500_move(settings, db, *, bot_id: int = 0, debug: bool = Fals
 
     pct = spy.regular_change_pct  # e.g. +1.25 or -0.80
 
-    store = FunMarketStore(
-        db,
-        starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
-        tz_name=tz_name,
-    )
+    if services is not None:
+        store = services.fun_market_store(settings, db=db)
+    else:
+        store = FunMarketStore(
+            db,
+            starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
+            tz_name=tz_name,
+        )
 
     try:
         stocks = await store.list_stocks(active_only=True)
     except (FunMarketError, aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as e:
         if debug:
-            print(f"[DAILY] list_stocks failed for auto-move: {e!r}")
+            print(f"[DAILY] list_stocks failed for auto-move: {format_exception_safe(e, secrets)}")
         return
 
     moved = 0
@@ -143,7 +179,7 @@ async def _apply_sp500_move(settings, db, *, bot_id: int = 0, debug: bool = Fals
             moved += 1
         except (FunMarketError, aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as e:
             if debug:
-                print(f"[DAILY] auto-move {s.symbol}: {e!r}")
+                print(f"[DAILY] auto-move {s.symbol}: {format_exception_safe(e, secrets)}")
 
     await _set_meta(db, "fun_auto_move_last_date", today)
     if debug:
@@ -217,14 +253,15 @@ def _regular_move(q: Quote) -> _Move:
     return _Move(symbol=q.symbol, price=q.regular_price, pct=q.regular_change_pct)
 
 
-def _local_date_str(tz_name: str) -> str:
+def _local_date_str(tz_name: str, *, now_unix: float | None = None) -> str:
     # zoneinfo is stdlib on py3.9+.
+    now_dt = datetime.fromtimestamp(now_unix, tz=UTC) if now_unix is not None else datetime.now(UTC)
     try:
         tz = ZoneInfo(tz_name)
-        return datetime.now(tz=tz).strftime("%Y-%m-%d")
+        return now_dt.astimezone(tz).strftime("%Y-%m-%d")
     except (ZoneInfoNotFoundError, KeyError, ValueError):
         # Fallback: UTC date (still dedupes within a given runtime)
-        return datetime.now(UTC).strftime("%Y-%m-%d")
+        return now_dt.strftime("%Y-%m-%d")
 
 
 # ------------------------------------------------------------------------------
@@ -258,6 +295,7 @@ async def build_market_report_embed(
     title: str,
     subtitle: str,
     debug: bool = False,
+    services: ServiceContainer | None = None,
 ) -> discord.Embed:
     """
     Build the report embed without sending or writing meta state.
@@ -269,12 +307,31 @@ async def build_market_report_embed(
     fear = ["^VIX", "^VIX9D", "^VVIX"]
     symbols = list(dict.fromkeys(indices + fear + tickers))
 
-    quotes = await fetch_quotes(symbols, debug=debug)
+    open_session = (
+        services.http_session
+        if services is not None and services.http_session is not None and not services.http_session.closed
+        else None
+    )
+    crumb_cache = services.yahoo_crumb if services is not None else None
+    clock: Callable[[], float] | None = services.clock if services is not None else None
+    quotes_fn = services.fetch_quotes_fn if services is not None else None
+    fng_fn = services.fetch_fear_greed_fn if services is not None else None
+
+    if quotes_fn is not None:
+        quotes = await quotes_fn(symbols, debug=debug)
+    else:
+        quotes = await fetch_quotes(
+            symbols,
+            debug=debug,
+            session=open_session,
+            crumb_cache=crumb_cache,
+            clock=clock,
+        )
 
     # Optional crypto fear&greed
     fng_text: str | None = None
     try:
-        fng = await fetch_fear_greed()
+        fng = await fng_fn() if fng_fn is not None else await fetch_fear_greed(session=open_session)
         if fng:
             fng_text = f"**{fng.value}** — {fng.value_classification}"
     except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError, KeyError):
@@ -331,7 +388,9 @@ async def build_market_report_embed(
     if fng_text:
         fields.append(("🌐 Crypto F&G", fng_text, True))
 
-    fun_lines = await _fun_market_lines(settings, db)
+    fun_lines = await _fun_market_lines(
+        settings, db, services=services if isinstance(services, ServiceContainer) else None
+    )
     if fun_lines:
         fields.append(("🏛️ Instigate Cafe Stock Exchange", "\n".join(fun_lines), False))
 
@@ -357,6 +416,8 @@ async def post_daily_market_report(bot: discord.Client) -> None:
     db = getattr(bot, "db", None)
     if settings is None or db is None:
         return
+    container = get_container(bot)
+    secrets = settings.secret_values() if hasattr(settings, "secret_values") else ()
 
     if not bool(getattr(settings, "market_daily_report_enabled", False)):
         return
@@ -381,7 +442,7 @@ async def post_daily_market_report(bot: discord.Client) -> None:
         return
 
     tz_name = str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto")
-    today = _local_date_str(tz_name)
+    today = _local_date_str(tz_name, now_unix=container.clock())
 
     last = await _get_meta(db, "daily_report_last_date")
     if last == today:
@@ -400,6 +461,7 @@ async def post_daily_market_report(bot: discord.Client) -> None:
             title="📊 Daily Market Report",
             subtitle=f"End-of-day snapshot • {today} ({tz_name})",
             debug=debug,
+            services=container,
         )
     except (
         aiohttp.ClientError,
@@ -411,7 +473,7 @@ async def post_daily_market_report(bot: discord.Client) -> None:
         TypeError,
     ) as e:
         if debug:
-            print(f"[DAILY] build embed failed: {e!r}")
+            print(f"[DAILY] build embed failed: {format_exception_safe(e, secrets)}")
         return
 
     try:
@@ -423,7 +485,7 @@ async def post_daily_market_report(bot: discord.Client) -> None:
         # Auto-move fun-market stocks by S&P 500 daily %
         try:
             bot_id = bot.user.id if bot.user else 0
-            await _apply_sp500_move(settings, db, bot_id=bot_id, debug=debug)
+            await _apply_sp500_move(settings, db, bot_id=bot_id, debug=debug, services=container)
         except (
             aiohttp.ClientError,
             TimeoutError,
@@ -435,7 +497,7 @@ async def post_daily_market_report(bot: discord.Client) -> None:
             TypeError,
         ) as e:
             if debug:
-                print(f"[DAILY] auto-move error: {e!r}")
+                print(f"[DAILY] auto-move error: {format_exception_safe(e, secrets)}")
 
         return
 
@@ -477,7 +539,7 @@ async def post_daily_market_report(bot: discord.Client) -> None:
             ValueError,
         ) as e:
             if debug:
-                print(f"[DAILY] send failed (forbidden fallback): {e!r}")
+                print(f"[DAILY] send failed (forbidden fallback): {format_exception_safe(e, secrets)}")
 
     except (
         discord.DiscordException,
@@ -488,4 +550,4 @@ async def post_daily_market_report(bot: discord.Client) -> None:
         ValueError,
     ) as e:
         if debug:
-            print(f"[DAILY] send failed: {e!r}")
+            print(f"[DAILY] send failed: {format_exception_safe(e, secrets)}")

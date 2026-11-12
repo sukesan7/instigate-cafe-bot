@@ -1,30 +1,18 @@
 from __future__ import annotations
 
 import logging
-import time
 
 import aiosqlite
 import discord
 from discord import app_commands
 
 from icbot.app import ic
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 from icbot.services.fun_market import FunMarketError
-from icbot.services.user_service import (
-    DailyAlreadyClaimedError,
-    UserStore,
-)
+from icbot.services.user_service import DailyAlreadyClaimedError
 
 log = logging.getLogger(__name__)
-
-
-def _make_user_store(interaction: discord.Interaction) -> UserStore:
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    return UserStore(
-        interaction.client.db,  # type: ignore[attr-defined]
-        starting_balance=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
-        daily_claim_amount=int(getattr(settings, "daily_claim_amount", 100) or 100),
-    )
 
 
 # ==========
@@ -38,7 +26,10 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
     await interaction.response.defer(thinking=True)
 
     target = user or interaction.user
-    store = _make_user_store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    container = get_container(interaction.client)
+    store = container.user_store(settings)
+    db = container.db or getattr(interaction.client, "db", None)
 
     # Ensure the target user exists (auto-create if missing)
     profile = await store.ensure_user(
@@ -47,9 +38,6 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
         avatar_url=str(target.display_avatar.url) if target.display_avatar else "",
     )
 
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    db = interaction.client.db  # type: ignore[attr-defined]
-
     # ---- Balance ----
     fields: list[tuple[str, str] | tuple[str, str, bool]] = [
         ("💰 Balance", f"**${profile.balance:,}**", True),
@@ -57,13 +45,7 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
 
     # ---- Stock Portfolio summary ----
     try:
-        from icbot.services.fun_market import FunMarketStore
-
-        fm = FunMarketStore(
-            db,
-            starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
-            tz_name=str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"),
-        )
+        fm = container.fun_market_store(settings)
         port = await fm.portfolio(user_id=target.id)
         num_positions = len(port.positions)
         if num_positions > 0:
@@ -79,9 +61,13 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
 
     # ---- Blackjack stats ----
     try:
-        bj_row = await db.fetchone(
-            "SELECT hands_played, wins, losses, pushes, reset_count FROM blackjack_users WHERE user_id=?",
-            (target.id,),
+        bj_row = (
+            await db.fetchone(
+                "SELECT hands_played, wins, losses, pushes, reset_count FROM blackjack_users WHERE user_id=?",
+                (target.id,),
+            )
+            if db is not None
+            else None
         )
         if bj_row:
             hands, wins, losses, pushes, resets = (int(x) for x in bj_row)
@@ -96,7 +82,7 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
         fields.append(("🃏 Blackjack", "N/A", False))
 
     # ---- Daily claim status ----
-    now = int(time.time())
+    now = int(container.clock())
     if profile.daily_claim_ts > 0:
         next_available = profile.daily_claim_ts + 24 * 60 * 60
         if now >= next_available:
@@ -132,7 +118,9 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
 
 @ic.command(name="dailyclaim", description="Claim your daily $100 reward.")
 async def daily_cmd(interaction: discord.Interaction):
-    store = _make_user_store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    container = get_container(interaction.client)
+    store = container.user_store(settings)
 
     # Ensure user exists first
     await store.ensure_user(
@@ -140,8 +128,6 @@ async def daily_cmd(interaction: discord.Interaction):
         display_name=interaction.user.display_name,
         avatar_url=str(interaction.user.display_avatar.url) if interaction.user.display_avatar else "",
     )
-
-    settings = interaction.client.settings  # type: ignore[attr-defined]
 
     try:
         amount, new_balance = await store.claim_daily(interaction.user.id)

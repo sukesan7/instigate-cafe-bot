@@ -17,12 +17,16 @@ class LoreEntry:
     response_rules: tuple[str, ...]
 
 
-def _candidate_paths() -> list[Path]:
-    """Find lore pack file paths in a few common locations."""
-    env = (os.getenv("LORE_PATH") or "").strip()
+def _candidate_paths(lore_path: str | None = None) -> list[Path]:
+    """Find lore pack file paths in explicit argument, env, or common repo locations."""
     paths: list[Path] = []
-    if env:
-        paths.append(Path(env))
+    explicit = (lore_path or "").strip()
+    if explicit:
+        paths.append(Path(explicit))
+    else:
+        env = (os.getenv("LORE_PATH") or "").strip()
+        if env:
+            paths.append(Path(env))
 
     # Common defaults (repo root)
     cwd = Path.cwd()
@@ -60,28 +64,36 @@ def _candidate_paths() -> list[Path]:
 
 
 _LORE_CACHE: list[LoreEntry] | None = None
+_LORE_CACHE_BY_PATH: dict[str, list[LoreEntry]] = {}
 
 
-def load_lore() -> list[LoreEntry]:
+def load_lore(lore_path: str | None = None) -> list[LoreEntry]:
     global _LORE_CACHE
-    if _LORE_CACHE is not None:
+    explicit = (lore_path or "").strip()
+    if not explicit and _LORE_CACHE is not None:
         return _LORE_CACHE
 
     pack_path = None
-    for p in _candidate_paths():
+    for p in _candidate_paths(explicit or None):
         if p.exists() and p.is_file():
             pack_path = p
             break
 
     if pack_path is None:
-        _LORE_CACHE = []
-        return _LORE_CACHE
+        if not explicit:
+            _LORE_CACHE = []
+        return []
+
+    resolved_key = str(pack_path.resolve())
+    if explicit and resolved_key in _LORE_CACHE_BY_PATH:
+        return _LORE_CACHE_BY_PATH[resolved_key]
 
     try:
         data = json.loads(pack_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
-        _LORE_CACHE = []
-        return _LORE_CACHE
+        if not explicit:
+            _LORE_CACHE = []
+        return []
 
     entries: list[LoreEntry] = []
     for e in data.get("entries") or []:
@@ -100,8 +112,11 @@ def load_lore() -> list[LoreEntry]:
             )
         )
 
-    _LORE_CACHE = entries
-    return _LORE_CACHE
+    if explicit:
+        _LORE_CACHE_BY_PATH[resolved_key] = entries
+    else:
+        _LORE_CACHE = entries
+    return entries
 
 
 def _normalize_text(s: str) -> str:
@@ -111,9 +126,15 @@ def _normalize_text(s: str) -> str:
     return s
 
 
-def match_lore(texts: Iterable[str], *, max_entries: int = 5, max_chars: int = 1400) -> str:
+def match_lore(
+    texts: Iterable[str],
+    *,
+    max_entries: int = 5,
+    max_chars: int = 1400,
+    lore_path: str | None = None,
+) -> str:
     """Return a compact lore snippet for the prompt based on trigger matches."""
-    lore = load_lore()
+    lore = load_lore(lore_path=lore_path)
     if not lore:
         return ""
 

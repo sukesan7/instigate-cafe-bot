@@ -3,20 +3,29 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from collections.abc import Callable
+from contextlib import asynccontextmanager
 
 import aiohttp
 import discord
 from discord import app_commands
 
 from icbot.app import ic
+from icbot.container import NotesCache, get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 
-# Global cache: (timestamp: float, links: dict[str, list[tuple[str, str]]])
-# Format of `links` dictionary:
-# Key = site_title (e.g. "Jasper Cruz Notes")
-# Value = list of tuples (course_code_upper, url)
+# Module-level fallback cache for direct external callers that omit a NotesCache instance.
 _NOTES_CACHE: tuple[float, dict[str, list[tuple[str, str]]]] = (0.0, {})
 _CACHE_TTL_SECONDS = 6 * 3600  # 6 hours TTL
+
+
+@asynccontextmanager
+async def _scoped_http_session(session: aiohttp.ClientSession | None):
+    if session is not None and not session.closed:
+        yield session
+        return
+    async with aiohttp.ClientSession() as temp_session:
+        yield temp_session
 
 
 async def fetch_notes_from_site(
@@ -72,21 +81,31 @@ async def fetch_notes_from_site(
         return []
 
 
-async def get_all_notes(settings) -> dict[str, list[tuple[str, str]]]:
-    """Retrieve all parsed notes, utilizing the in-memory cache if fresh."""
+async def get_all_notes(
+    settings,
+    *,
+    cache: NotesCache | None = None,
+    session: aiohttp.ClientSession | None = None,
+    clock: Callable[[], float] | None = None,
+) -> dict[str, list[tuple[str, str]]]:
+    """Retrieve all parsed notes, utilizing an injected or fallback in-memory cache if fresh."""
     global _NOTES_CACHE
-    now = time.time()
+    now = clock() if clock is not None else time.time()
 
-    # Return cache if valid
-    cache_ts, cache_data = _NOTES_CACHE
-    if cache_data and (now - cache_ts) < _CACHE_TTL_SECONDS:
-        return cache_data
-
-    # We need to rebuild the cache
     sites_raw = getattr(settings, "notes_sites", None)
     if not sites_raw:
         print("[NOTES] No NOTES_SITES configured in env.")
         return {}
+
+    sites_key = tuple(str(s).strip() for s in sites_raw if str(s).strip())
+    if cache is not None:
+        cached = cache.get(sites_key, now=now, ttl_seconds=_CACHE_TTL_SECONDS)
+        if cached is not None:
+            return cached
+    else:
+        cache_ts, cache_data = _NOTES_CACHE
+        if cache_data and (now - cache_ts) < _CACHE_TTL_SECONDS:
+            return cache_data
 
     # Parse site configs: "Title|URL"
     sites: list[tuple[str, str]] = []
@@ -103,9 +122,9 @@ async def get_all_notes(settings) -> dict[str, list[tuple[str, str]]]:
 
     new_cache: dict[str, list[tuple[str, str]]] = {}
 
-    # Fetch concurrently
-    async with aiohttp.ClientSession() as session:
-        tasks = [fetch_notes_from_site(session, title, url) for title, url in sites]
+    # Fetch concurrently using shared session when available
+    async with _scoped_http_session(session) as http_session:
+        tasks = [fetch_notes_from_site(http_session, title, url) for title, url in sites]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for (title, _url), res in zip(sites, results, strict=True):
@@ -116,8 +135,11 @@ async def get_all_notes(settings) -> dict[str, list[tuple[str, str]]]:
             elif res:
                 new_cache[title] = res
 
-    # Update cache
-    _NOTES_CACHE = (now, new_cache)
+    if cache is not None:
+        if new_cache:
+            cache.set(sites_key, now=now, data=new_cache)
+    else:
+        _NOTES_CACHE = (now, new_cache)
     return new_cache
 
 
@@ -133,12 +155,23 @@ async def notes_cmd(interaction: discord.Interaction, course: str):
         await interaction.followup.send("❌ Please provide a more specific course code.", ephemeral=True)
         return
 
-    settings = getattr(interaction.client, "settings", None)
-    if settings is None:
+    if getattr(interaction.client, "settings", None) is None:
         await interaction.followup.send("❌ Bot not initialized (missing settings).", ephemeral=True)
         return
 
-    all_notes = await get_all_notes(settings)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    container = get_container(interaction.client)
+    open_session = (
+        container.http_session
+        if container.http_session is not None and not container.http_session.closed
+        else None
+    )
+    all_notes = await get_all_notes(
+        settings,
+        cache=container.notes_cache,
+        session=open_session,
+        clock=container.clock,
+    )
 
     if not all_notes:
         await interaction.followup.send(

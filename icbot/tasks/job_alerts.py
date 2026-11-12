@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Protocol, TypeVar, cast
 
@@ -11,7 +12,9 @@ import aiohttp
 import aiosqlite
 import discord
 
+from icbot.container import get_container
 from icbot.embeds import job_alert as job_alert_embed
+from icbot.errors import format_exception_safe
 from icbot.services.jobs_ats_client import JobPosting, fetch_greenhouse_jobs, fetch_lever_jobs
 
 log = logging.getLogger(__name__)
@@ -71,8 +74,17 @@ def _jobs_channel_id(settings) -> int:
     return 0
 
 
-def _now_unix() -> int:
-    return int(datetime.now(tz=UTC).timestamp())
+def _now_unix(clock: Callable[[], float] | None = None) -> int:
+    return int(clock()) if clock is not None else int(datetime.now(tz=UTC).timestamp())
+
+
+@asynccontextmanager
+async def _scoped_jobs_session(session: aiohttp.ClientSession | None):
+    if session is not None and not session.closed:
+        yield session
+        return
+    async with aiohttp.ClientSession(headers={"User-Agent": "InstigateCafeBot/1.0"}) as created:
+        yield created
 
 
 # ---- Classification (labels only; NOT a filter gate) ----
@@ -377,9 +389,14 @@ async def _has_seen(db, source: str, external_id: str) -> bool:
 _MARK_SEEN_MODE: str | None = None  # "extended" | "basic"
 
 
-async def _mark_seen(db, jobs: Sequence[_JobRecord]) -> None:
+async def _mark_seen(
+    db,
+    jobs: Sequence[_JobRecord],
+    *,
+    clock: Callable[[], float] | None = None,
+) -> None:
     global _MARK_SEEN_MODE
-    now = _now_unix()
+    now = _now_unix(clock)
 
     if not jobs:
         return
@@ -462,6 +479,8 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
     db = getattr(bot, "db", None)
     if settings is None or db is None:
         return
+    container = get_container(bot)
+    secrets = settings.secret_values() if hasattr(settings, "secret_values") else ()
 
     channel_id = _jobs_channel_id(settings)
     if not channel_id:
@@ -489,10 +508,19 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
     bootstrap_post = bool(getattr(settings, "jobs_bootstrap_post", False))
     require_early_career = bool(getattr(settings, "jobs_require_early_career", False))
 
-    bad_sources: set[str] = getattr(bot, "_jobs_bad_sources", set())
+    bad_sources = container.jobs_bad_sources
+    existing_bad = getattr(bot, "_jobs_bad_sources", None)
+    if isinstance(existing_bad, set) and existing_bad is not bad_sources:
+        bad_sources.update(existing_bad)
     cast(Any, bot)._jobs_bad_sources = bad_sources
 
-    async with aiohttp.ClientSession(headers={"User-Agent": "InstigateCafeBot/1.0"}) as session:
+    open_session = (
+        container.http_session
+        if container.http_session is not None and not container.http_session.closed
+        else None
+    )
+
+    async with _scoped_jobs_session(open_session) as session:
         all_jobs: list[JobPosting] = []
 
         for token in gh:
@@ -503,11 +531,15 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
             if src_key in bad_sources:
                 continue
             try:
-                all_jobs.extend(await fetch_greenhouse_jobs(session, token, timeout_seconds=12, limit=120))
+                all_jobs.extend(
+                    await fetch_greenhouse_jobs(
+                        session, token, timeout_seconds=12, limit=120, clock=container.clock
+                    )
+                )
             except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
                 if _looks_like_not_found(e):
                     bad_sources.add(src_key)
-                print(f"[JOBS] greenhouse fetch failed: {e!r}")
+                print(f"[JOBS] greenhouse fetch failed: {format_exception_safe(e, secrets)}")
 
         for site in lv:
             site = (site or "").strip()
@@ -517,11 +549,15 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
             if src_key in bad_sources:
                 continue
             try:
-                all_jobs.extend(await fetch_lever_jobs(session, site, timeout_seconds=12, limit=120))
+                all_jobs.extend(
+                    await fetch_lever_jobs(
+                        session, site, timeout_seconds=12, limit=120, clock=container.clock
+                    )
+                )
             except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
                 if _looks_like_not_found(e):
                     bad_sources.add(src_key)
-                print(f"[JOBS] lever fetch failed: {e!r}")
+                print(f"[JOBS] lever fetch failed: {format_exception_safe(e, secrets)}")
 
     if not all_jobs:
         print("[JOBS] fetched 0 postings (all sources empty or invalid).")
@@ -542,7 +578,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
         # ---- First time we ever see this source ----
         if not has_any:
             if not bootstrap_post:
-                await _mark_seen(db, jobs)
+                await _mark_seen(db, jobs, clock=container.clock)
                 print(f"[JOBS] baseline checkpointed {len(jobs)} jobs for {source} (no bootstrap post).")
                 continue
 
@@ -573,7 +609,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 posts_left -= 1
                 posted_total += 1
 
-            await _mark_seen(db, jobs)
+            await _mark_seen(db, jobs, clock=container.clock)
             if sample:
                 print(f"[JOBS] bootstrap posted {len(sample)} and checkpointed {len(jobs)} for {source}.")
             else:
@@ -597,7 +633,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                 kw_deny=kw_deny,
                 require_early_career=require_early_career,
             ):
-                await _mark_seen(db, [j])
+                await _mark_seen(db, [j], clock=container.clock)
                 continue
 
             cats = _classify(j.text_blob) or ["General"]
@@ -613,7 +649,7 @@ async def poll_and_post_jobs(bot: discord.Client) -> None:
                     source=j.source,
                 )
             )
-            await _mark_seen(db, [j])
+            await _mark_seen(db, [j], clock=container.clock)
 
             posts_left -= 1
             posted_total += 1

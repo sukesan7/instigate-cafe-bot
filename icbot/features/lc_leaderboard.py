@@ -6,6 +6,7 @@ import logging
 import discord
 
 from icbot.app import ic
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 
 log = logging.getLogger(__name__)
@@ -147,16 +148,8 @@ async def _send_interactive_leaderboard(interaction: discord.Interaction) -> Non
 
     await interaction.response.defer()
 
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    db = interaction.client.db  # type: ignore[attr-defined]
-
-    from icbot.services.fun_market import FunMarketStore
-
-    fm = FunMarketStore(
-        db,
-        starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
-        tz_name=str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"),
-    )
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    fm = get_container(interaction.client).fun_market_store(settings)
     snaps = await fm.leaderboard_by_networth(limit=100)
 
     view = LeaderboardView(

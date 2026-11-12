@@ -4,12 +4,15 @@ import asyncio
 import logging
 import re
 import ssl
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import aiohttp
 import discord
 
+from icbot.container import get_container
 from icbot.embeds import go_alert as go_alert_embed
+from icbot.errors import format_exception_safe
 from icbot.services.go_client import GOFetchError, GOMessage, fetch_service_alerts
 
 log = logging.getLogger(__name__)
@@ -206,6 +209,20 @@ async def _resolve_channel(bot: discord.Client, channel_id: int):
         return None
 
 
+@asynccontextmanager
+async def _scoped_go_session(
+    shared_session: aiohttp.ClientSession | None,
+    settings,
+):
+    verify = bool(getattr(settings, "go_ssl_verify", True))
+    cafile = str(getattr(settings, "go_ca_bundle_path", "") or "").strip()
+    if verify and not cafile and shared_session is not None and not shared_session.closed:
+        yield shared_session
+        return
+    async with aiohttp.ClientSession(connector=_make_go_connector(settings)) as session:
+        yield session
+
+
 async def poll_and_post_go_alerts(bot: discord.Client) -> None:
     """Poll GO Transit Service Alerts and post to a channel."""
     settings = getattr(bot, "settings", None)
@@ -213,6 +230,8 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
     if settings is None or db is None:
         print("[GO] missing bot.settings or bot.db")
         return
+    container = get_container(bot)
+    secrets = settings.secret_values() if hasattr(settings, "secret_values") else ()
 
     api_base = str(getattr(settings, "go_api_base", "") or "").strip()
     access_key = str(getattr(settings, "go_api_key", "") or "").strip()
@@ -247,7 +266,7 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
     # Fetch with small retry on transient issues
     msgs: list[GOMessage] = []
     last_err: BaseException | None = None
-    async with aiohttp.ClientSession(connector=_make_go_connector(settings)) as session:
+    async with _scoped_go_session(container.http_session, settings) as session:
         for attempt in range(3):
             try:
                 msgs = await fetch_service_alerts(session, api_base, access_key, timeout_seconds=18)
@@ -258,7 +277,7 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
                 await asyncio.sleep(1.5 * (attempt + 1))
 
     if last_err is not None:
-        print(f"[GO] fetch failed: {last_err!r}")
+        print(f"[GO] fetch failed: {format_exception_safe(last_err, secrets)}")
         return
 
     if not msgs:
@@ -324,7 +343,7 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
                     posted = True
                     break
                 except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-                    print(f"[GO] post failed: {e!r}")
+                    print(f"[GO] post failed: {format_exception_safe(e, secrets)}")
                     break
             _ = posted
 
@@ -360,7 +379,7 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
                     await channel.send(embed=embed)  # type: ignore[call-arg]
                     break
                 except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-                    print(f"[GO] post failed: {e!r}")
+                    print(f"[GO] post failed: {format_exception_safe(e, secrets)}")
                     return
         return
 
@@ -393,5 +412,5 @@ async def poll_and_post_go_alerts(bot: discord.Client) -> None:
         try:
             await channel.send(embed=embed)  # type: ignore[call-arg]
         except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-            print(f"[GO] post failed: {e!r}")
+            print(f"[GO] post failed: {format_exception_safe(e, secrets)}")
             return

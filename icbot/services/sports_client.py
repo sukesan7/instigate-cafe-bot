@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
+
+from icbot.errors import ProviderError, redact_secrets
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +25,7 @@ class SportEvent:
     away_team: str
 
 
-class OddsAPIError(RuntimeError):
+class OddsAPIError(ProviderError):
     pass
 
 
@@ -36,54 +39,73 @@ class OddsAPIClient:
     Later, you can add /ic sportsbook by using /odds (quota-based).
     """
 
-    def __init__(self, api_key: str, *, timeout_seconds: int = 10, cache_ttl_seconds: int = 600):
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        timeout_seconds: int = 10,
+        cache_ttl_seconds: int = 600,
+        session: aiohttp.ClientSession | None = None,
+        clock: Callable[[], float] | None = None,
+    ):
         self.api_key = (api_key or "").strip()
         self.timeout_seconds = timeout_seconds
         self.cache_ttl_seconds = cache_ttl_seconds
+        self._session = session
+        self._clock = clock
         self._cache: dict[str, tuple[float, Any]] = {}
+
+    def _now(self) -> float:
+        return self._clock() if self._clock is not None else time.time()
 
     def _cache_get(self, key: str) -> Any | None:
         v = self._cache.get(key)
         if not v:
             return None
         ts, data = v
-        if (time.time() - ts) <= self.cache_ttl_seconds:
+        if (self._now() - ts) <= self.cache_ttl_seconds:
             return data
         self._cache.pop(key, None)
         return None
 
     def _cache_set(self, key: str, data: Any) -> None:
-        self._cache[key] = (time.time(), data)
+        self._cache[key] = (self._now(), data)
 
     async def _get_json(self, path: str, params: dict[str, Any]) -> Any:
         if not self.api_key:
             raise OddsAPIError("Missing ODDS_API_KEY")
 
         url = f"{ODDS_BASE_URL}{path}"
-        params = dict(params or {})
-        params["apiKey"] = self.api_key
-
-        cache_key = f"{url}?{sorted(params.items())}"
+        req_params = dict(params or {})
+        cache_key = f"{url}?{sorted(req_params.items())}"
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
 
+        req_params["apiKey"] = self.api_key
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
         headers = {
             "User-Agent": "InstigateCafeBot/1.0 (+discord bot; personal project)",
             "Accept": "application/json",
         }
 
-        async with (
-            aiohttp.ClientSession(timeout=timeout, headers=headers) as session,
-            session.get(url, params=params) as resp,
-        ):
-            # Helpful error text (Odds API uses structured JSON errors often)
-            text = await resp.text()
-            if resp.status >= 400:
-                raise OddsAPIError(f"Odds API error {resp.status}: {text[:400]}")
+        owns_session = self._session is None or self._session.closed
+        active_session = (
+            self._session if not owns_session else aiohttp.ClientSession(timeout=timeout, headers=headers)
+        )
+        assert active_session is not None
+        try:
+            async with active_session.get(url, params=req_params, timeout=timeout, headers=headers) as resp:
+                # Helpful error text (Odds API uses structured JSON errors often)
+                text = await resp.text()
+                if resp.status >= 400:
+                    safe_text = redact_secrets(text[:400], (self.api_key,))
+                    raise OddsAPIError(f"Odds API error {resp.status}: {safe_text}")
 
-            data = await resp.json()
+                data = await resp.json()
+        finally:
+            if owns_session:
+                await active_session.close()
 
         self._cache_set(cache_key, data)
         return data

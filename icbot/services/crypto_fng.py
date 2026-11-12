@@ -6,6 +6,8 @@ from typing import Any
 
 import aiohttp
 
+from icbot.errors import ProviderError, redact_secrets
+
 """Crypto Fear & Greed Index (alternative.me).
 
 Public endpoint (no key): https://api.alternative.me/fng/
@@ -59,12 +61,13 @@ def _to_int(v: Any) -> int | None:
         return None
 
 
-async def fetch_fear_greed() -> FearGreed | None:
-    session = await _get_session()
-    async with session.get(FNG_URL) as r:
+async def fetch_fear_greed(*, session: aiohttp.ClientSession | None = None) -> FearGreed | None:
+    active_session = session if session is not None and not session.closed else await _get_session()
+    async with active_session.get(FNG_URL, headers={"User-Agent": "InstigateCafeBot/0.2.3"}) as r:
         if r.status != 200:
             txt = await r.text(errors="ignore")
-            raise RuntimeError(f"fng fetch failed status={r.status} body={txt[:200]!r}")
+            safe_txt = redact_secrets(txt[:200])
+            raise ProviderError(f"fng fetch failed status={r.status} body={safe_txt!r}")
         data = await r.json()
 
     items = (data or {}).get("data") or []

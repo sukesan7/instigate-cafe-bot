@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from typing import Any
 
 import aiohttp
@@ -6,6 +7,7 @@ import discord
 from discord import app_commands
 
 from icbot.app import ic
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 
 log = logging.getLogger(__name__)
@@ -177,19 +179,34 @@ def build_prof_embed(settings, prof_data: dict[str, Any], university_name: str) 
     return embed
 
 
+@asynccontextmanager
+async def _scoped_http_session(session: aiohttp.ClientSession | None):
+    if session is not None and not session.closed:
+        yield session
+        return
+    async with aiohttp.ClientSession() as temp_session:
+        yield temp_session
+
+
 @ic.command(name="prof", description="Lookup a professor's rating on RateMyProfessors.")
 @app_commands.describe(name="The name of the professor to lookup.")
 async def prof_cmd(interaction: discord.Interaction, name: str):
     await interaction.response.defer(thinking=True)
 
-    settings = getattr(interaction.client, "settings", None)
-    if settings is None:
+    if getattr(interaction.client, "settings", None) is None:
         await interaction.followup.send("❌ Bot not initialized properly.", ephemeral=True)
         return
 
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    container = get_container(interaction.client)
     university_name = getattr(settings, "rmp_university", "Toronto Metropolitan University")
+    open_session = (
+        container.http_session
+        if container.http_session is not None and not container.http_session.closed
+        else None
+    )
 
-    async with aiohttp.ClientSession() as session:
+    async with _scoped_http_session(open_session) as session:
         # 1. Fetch school ID
         school_id = await get_school_id(session, university_name)
         if not school_id:

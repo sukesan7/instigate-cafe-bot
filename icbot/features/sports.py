@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import logging
-import os
-import time
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import aiohttp
 import discord
 
 from icbot.app import sports
+from icbot.config import Settings
+from icbot.container import RssCache, get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
+from icbot.errors import format_exception_safe, safe_error_summary
 from icbot.services.sports_client import OddsAPIClient, OddsAPIError
 
 log = logging.getLogger(__name__)
@@ -24,7 +27,7 @@ SPORT_KEYS = {
     "boxing": "boxing_boxing",
 }
 
-# Default RSS feeds (override via env if you want)
+# Default RSS feeds (override via SPORTS_RSS_<SPORT> env vars or guild overrides)
 DEFAULT_RSS = {
     "nba": ["https://www.espn.com/espn/rss/nba/news"],
     "nfl": ["https://www.espn.com/espn/rss/nfl/news"],
@@ -33,7 +36,7 @@ DEFAULT_RSS = {
     "boxing": ["https://www.espn.com/espn/rss/boxing/news"],
 }
 
-# Simple in-process cache for RSS so we don't spam
+# Module fallback cache when _get_news is called directly without an RssCache instance
 _RSS_CACHE: dict[str, tuple[float, list[tuple[str, str]]]] = {}
 _RSS_TTL_SECONDS = 600
 
@@ -50,29 +53,44 @@ def _clip(s: str, n: int) -> str:
 
 
 def _get_settings(interaction: discord.Interaction):
-    # Your bot stores settings on interaction.client (from main.py)
     return getattr(interaction.client, "settings", None)
 
 
-def _get_odds_client(interaction: discord.Interaction) -> OddsAPIClient:
-    settings = _get_settings(interaction)
-    api_key = ""
-    # Try settings first (if you later add it to Settings), else env
-    api_key = getattr(settings, "odds_api_key", "") if settings else ""
-    api_key = (api_key or os.getenv("ODDS_API_KEY", "") or "").strip()
-    return OddsAPIClient(api_key=api_key, cache_ttl_seconds=600)
+def _get_odds_client(interaction: discord.Interaction, settings: Settings | None = None) -> OddsAPIClient:
+    return get_container(interaction.client).build_odds_client(settings)
 
 
-def _rss_urls_for(sport: str) -> list[str]:
-    sport = sport.lower().strip()
-    env_key = f"SPORTS_RSS_{sport.upper()}"
-    override = (os.getenv(env_key, "") or "").strip()
-    if override:
-        return [u.strip() for u in override.split(",") if u.strip()]
-    return DEFAULT_RSS.get(sport, [])
+def _rss_urls_for(sport: str, settings: Settings | None = None) -> list[str]:
+    sport_key = sport.lower().strip()
+    if settings is not None:
+        getter = getattr(settings, "sports_rss_urls", None)
+        if callable(getter):
+            configured = getter(sport_key)
+            if configured:
+                return list(configured)
+    return list(DEFAULT_RSS.get(sport_key, []))
 
 
-async def _fetch_rss_items(url: str, *, limit: int = 5) -> list[tuple[str, str]]:
+@asynccontextmanager
+async def _scoped_rss_session(
+    session: aiohttp.ClientSession | None,
+    *,
+    timeout: aiohttp.ClientTimeout,
+    headers: dict[str, str],
+):
+    if session is not None and not session.closed:
+        yield session
+        return
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as temp_session:
+        yield temp_session
+
+
+async def _fetch_rss_items(
+    url: str,
+    *,
+    limit: int = 5,
+    session: aiohttp.ClientSession | None = None,
+) -> list[tuple[str, str]]:
     """
     Return list[(title, link)] from RSS/Atom feed.
     Robust enough for simple headline pulls.
@@ -83,7 +101,10 @@ async def _fetch_rss_items(url: str, *, limit: int = 5) -> list[tuple[str, str]]
         "Accept": "application/rss+xml, application/atom+xml, text/xml, */*",
     }
 
-    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session, session.get(url) as resp:
+    async with (
+        _scoped_rss_session(session, timeout=timeout, headers=headers) as http_session,
+        http_session.get(url, headers=headers, timeout=timeout) as resp,
+    ):
         text = await resp.text()
         if resp.status >= 400:
             return []
@@ -121,20 +142,34 @@ async def _fetch_rss_items(url: str, *, limit: int = 5) -> list[tuple[str, str]]
     return items
 
 
-async def _get_news(sport: str, *, limit: int = 5) -> list[tuple[str, str]]:
-    urls = _rss_urls_for(sport)
+async def _get_news(
+    sport: str,
+    *,
+    limit: int = 5,
+    settings: Settings | None = None,
+    cache: RssCache | None = None,
+    session: aiohttp.ClientSession | None = None,
+    clock: Callable[[], float] | None = None,
+) -> list[tuple[str, str]]:
+    urls = _rss_urls_for(sport, settings=settings)
     if not urls:
         return []
 
+    now = clock() if clock is not None else datetime.now(UTC).timestamp()
     cache_key = f"{sport}:{','.join(urls)}:{limit}"
-    cached = _RSS_CACHE.get(cache_key)
-    if cached and (time.time() - cached[0]) <= _RSS_TTL_SECONDS:
-        return cached[1]
+    if cache is not None:
+        cached = cache.get(cache_key, now=now, ttl_seconds=_RSS_TTL_SECONDS)
+        if cached is not None:
+            return cached
+    else:
+        cached_tuple = _RSS_CACHE.get(cache_key)
+        if cached_tuple and (now - cached_tuple[0]) <= _RSS_TTL_SECONDS:
+            return cached_tuple[1]
 
     results: list[tuple[str, str]] = []
     seen = set()
     for url in urls:
-        items = await _fetch_rss_items(url, limit=limit)
+        items = await _fetch_rss_items(url, limit=limit, session=session)
         for title, link in items:
             if link in seen:
                 continue
@@ -145,7 +180,10 @@ async def _get_news(sport: str, *, limit: int = 5) -> list[tuple[str, str]]:
         if len(results) >= limit:
             break
 
-    _RSS_CACHE[cache_key] = (time.time(), results)
+    if cache is not None:
+        cache.set(cache_key, now=now, items=results)
+    else:
+        _RSS_CACHE[cache_key] = (now, results)
     return results
 
 
@@ -170,33 +208,44 @@ def _format_news(items: list[tuple[str, str]]) -> str:
 
 
 async def _send_sport(interaction: discord.Interaction, sport: str, title: str):
-    settings = _get_settings(interaction)
-    if settings is None:
+    if _get_settings(interaction) is None:
         await interaction.response.send_message("Bot settings not initialized.", ephemeral=True)
         return
 
-    client = _get_odds_client(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    container = get_container(interaction.client)
+    secrets = settings.secret_values()
     sport_key = SPORT_KEYS[sport]
 
-    try:
-        events = await client.get_upcoming(sport_key, limit=5, days_from=7)
-    except OddsAPIError as e:
-        emb = system_embed(
-            settings,
-            title=f"{title}",
-            summary="Could not fetch upcoming games.",
-            fields=[("Error", _clip(str(e), 900))],
-            footer_hint="Sports",
-        )
-        await interaction.response.send_message(embed=emb)
-        return
+    if (getattr(settings, "odds_api_key", "") or "").strip():
+        client = container.build_odds_client(settings)
+        try:
+            events = await client.get_upcoming(sport_key, limit=5, days_from=7)
+            upcoming_text = _format_upcoming(events)
+        except (OddsAPIError, TimeoutError, aiohttp.ClientError, ValueError) as e:
+            upcoming_text = f"Upcoming games unavailable: {_clip(safe_error_summary(e, secrets), 900)}"
+    else:
+        upcoming_text = "Upcoming games unavailable (ODDS_API_KEY is not configured)."
 
-    # News is optional: if RSS fails, we still show games
-    news_items = []
+    open_session = (
+        container.http_session
+        if container.http_session is not None and not container.http_session.closed
+        else None
+    )
+
+    # News is optional: if RSS fails, we still show games or status cleanly
+    news_items: list[tuple[str, str]] = []
     try:
-        news_items = await _get_news(sport, limit=5)
+        news_items = await _get_news(
+            sport,
+            limit=5,
+            settings=settings,
+            cache=container.rss_cache,
+            session=open_session,
+            clock=container.clock,
+        )
     except (aiohttp.ClientError, TimeoutError, ET.ParseError, ValueError) as exc:
-        log.debug("Sports RSS fetch failed for %s: %s", sport, exc)
+        log.debug("Sports RSS fetch failed for %s: %s", sport, format_exception_safe(exc, secrets))
         news_items = []
 
     emb = system_embed(
@@ -204,7 +253,7 @@ async def _send_sport(interaction: discord.Interaction, sport: str, title: str):
         title=title,
         summary="Upcoming games + latest headlines.",
         fields=[
-            ("Upcoming (next 5)", _format_upcoming(events)),
+            ("Upcoming (next 5)", upcoming_text),
             ("News (latest 5)", _format_news(news_items)),
         ],
         footer_hint=f"Sports • {sport.upper()}",

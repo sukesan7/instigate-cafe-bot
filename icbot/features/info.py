@@ -1,10 +1,9 @@
-import os
-from typing import cast
+from __future__ import annotations
 
 import discord
 
 from icbot.app import ic
-from icbot.config import Settings
+from icbot.container import resolve_guild_settings
 from icbot.embeds import system as system_embed
 
 
@@ -15,7 +14,7 @@ async def serverinfo(interaction: discord.Interaction):
         await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
         return
 
-    settings = cast(Settings, getattr(interaction.client, "settings", None) or Settings())
+    settings = await resolve_guild_settings(interaction.client, interaction)
 
     # Safely get dates and counts
     created_at = discord.utils.format_dt(guild.created_at, style="R")
@@ -56,9 +55,37 @@ async def serverinfo(interaction: discord.Interaction):
 
 @ic.command(name="botinfo", description="Display bot capabilities and information.")
 async def botinfo(interaction: discord.Interaction):
-    settings = cast(Settings, getattr(interaction.client, "settings", None) or Settings())
+    settings = await resolve_guild_settings(interaction.client, interaction)
 
-    llm_model = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite-preview")
+    llm_model = (
+        str(getattr(settings, "gemini_model", "gemini-2.5-flash") or "gemini-2.5-flash").strip()
+        or "gemini-2.5-flash"
+    )
+
+    caps = settings.capabilities()
+    cap_labels = (
+        ("llm_assistant", "LLM Assistant"),
+        ("resume_review", "Resume Review"),
+        ("odds_api", "Sports Odds"),
+        ("ttc_alerts", "TTC Alerts"),
+        ("go_alerts", "GO Transit Alerts"),
+        ("job_alerts", "Job Alerts"),
+        ("market_watch", "Market Watch"),
+        ("market_daily_report", "Daily Market Report"),
+        ("btc_watch", "BTC Watch"),
+    )
+    cap_lines: list[str] = []
+    for key, label in cap_labels:
+        st = caps.get(key)
+        if st is None:
+            continue
+        if st.available:
+            badge = "✅ Ready"
+        elif st.configured:
+            badge = f"⚠️ Misconfigured ({st.reason})" if st.reason else "⚠️ Misconfigured"
+        else:
+            badge = "⚪ Disabled"
+        cap_lines.append(f"• **{label}:** {badge}")
 
     summary = (
         "**Instigate Cafe Bot** is a multi-purpose utility, game, and infrastructure engine custom-built for the Instigate Cafe server.\n\n"
@@ -75,6 +102,7 @@ async def botinfo(interaction: discord.Interaction):
 
     fields = [
         ("LLM Engine", f"Powered by **{llm_model}**", False),
+        ("Integration Readiness", "\n".join(cap_lines) or "Standard offline features active", False),
         ("Source", "Internal Instigate Cafe Repository", False),
     ]
 
@@ -84,7 +112,13 @@ async def botinfo(interaction: discord.Interaction):
 
     # Try attaching local logo if possible (using standard static URL fallback for simplicity if host differs)
     # The prompt noted "the logo from assets/logo.png".
-    logo_file = discord.File("assets/ic_logo.png", filename="logo.png")
+    try:
+        logo_file = discord.File("assets/ic_logo.png", filename="logo.png")
+    except FileNotFoundError:
+        embed.set_thumbnail(url=None)
+        await interaction.response.send_message(embed=embed)
+        return
+
     embed.set_thumbnail(url="attachment://logo.png")
 
     try:

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import aiosqlite
 
 from icbot.db import Database
+from icbot.errors import BotError
+from icbot.errors import InsufficientBalanceError as BaseInsufficientBalanceError
 
 
 @dataclass
@@ -19,11 +22,11 @@ class UserProfile:
     daily_claim_ts: int
 
 
-class InsufficientBalanceError(RuntimeError):
+class InsufficientBalanceError(BaseInsufficientBalanceError):
     pass
 
 
-class DailyAlreadyClaimedError(RuntimeError):
+class DailyAlreadyClaimedError(BotError, RuntimeError):
     """Raised when the user has already claimed their daily reward within the cooldown."""
 
     def __init__(self, next_claim_ts: int):
@@ -41,10 +44,21 @@ class UserStore:
     (blackjack, investing, daily claims, future games) shares the same pool.
     """
 
-    def __init__(self, db: Database, *, starting_balance: int = 1000, daily_claim_amount: int = 100):
+    def __init__(
+        self,
+        db: Database,
+        *,
+        starting_balance: int = 1000,
+        daily_claim_amount: int = 100,
+        clock: Callable[[], float] | None = None,
+    ):
         self.db = db
         self.starting_balance = int(starting_balance or 1000)
         self.daily_claim_amount = int(daily_claim_amount or 100)
+        self._clock = clock
+
+    def _now(self) -> int:
+        return int(self._clock() if self._clock is not None else time.time())
 
     # ------------------------------------------------------------------
     # Core helpers
@@ -62,7 +76,7 @@ class UserStore:
         uid = int(user_id)
         dname = str(display_name)
         aurl = str(avatar_url)
-        now = int(time.time())
+        now = self._now()
 
         async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
             await conn.execute(
@@ -134,7 +148,7 @@ class UserStore:
         if amount <= 0:
             raise ValueError("Amount must be >= 1.")
         uid = int(user_id)
-        now = int(time.time())
+        now = self._now()
 
         async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
             await conn.execute(
@@ -157,7 +171,7 @@ class UserStore:
         if amount <= 0:
             raise ValueError("Amount must be >= 1.")
         uid = int(user_id)
-        now = int(time.time())
+        now = self._now()
 
         async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
             await conn.execute(
@@ -183,7 +197,7 @@ class UserStore:
         """Set balance to an exact value (admin reset)."""
         amount = int(amount)
         uid = int(user_id)
-        now = int(time.time())
+        now = self._now()
 
         async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
             await conn.execute(
@@ -206,7 +220,7 @@ class UserStore:
 
         Raises DailyAlreadyClaimedError if cooldown has not elapsed.
         """
-        now = int(time.time())
+        now = self._now()
         uid = int(user_id)
 
         async with self.db._lock, aiosqlite.connect(self.db.path) as conn:

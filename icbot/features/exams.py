@@ -11,6 +11,7 @@ from discord import app_commands
 
 from icbot.app import exam
 from icbot.config import Settings
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system
 from icbot.permissions import is_admin_or_allowed
 
@@ -26,10 +27,13 @@ class ExamItem:
     notes: str
 
 
-def _get_settings_and_db(interaction: discord.Interaction) -> tuple[Settings | None, Any | None]:
+async def _get_settings_and_db(interaction: discord.Interaction) -> tuple[Settings | None, Any | None]:
     bot = interaction.client
-    settings = getattr(bot, "settings", None)
+    base_settings = getattr(bot, "settings", None)
     db = getattr(bot, "db", None)
+    if base_settings is None or db is None:
+        return None, None
+    settings = await resolve_guild_settings(bot, interaction)
     return settings, db
 
 
@@ -128,7 +132,7 @@ def _exam_field(exam: ExamItem, tz_name: str) -> tuple[str, str, bool]:
 async def exams_cmd(interaction: discord.Interaction) -> None:
     await interaction.response.defer(thinking=True)
 
-    settings, db = _get_settings_and_db(interaction)
+    settings, db = await _get_settings_and_db(interaction)
     if settings is None or db is None:
         await interaction.followup.send("Error: bot not initialized (missing settings/db).", ephemeral=True)
         return
@@ -190,7 +194,7 @@ async def exams_add_cmd(
 ) -> None:
     await interaction.response.defer(thinking=True, ephemeral=True)
 
-    settings, db = _get_settings_and_db(interaction)
+    settings, db = await _get_settings_and_db(interaction)
     if settings is None or db is None:
         await interaction.followup.send("Error: bot not initialized (missing settings/db).", ephemeral=True)
         return
@@ -215,7 +219,7 @@ async def exams_add_cmd(
         )
         return
 
-    now_ts = int(datetime.now(UTC).timestamp())
+    now_ts = int(get_container(interaction.client).clock())
     exam_id = await db.execute_insert(
         """
         INSERT INTO exams (course_code, course_name, start_ts, end_ts, location, notes, created_by, created_at)
@@ -248,7 +252,7 @@ async def exams_add_cmd(
 async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> None:
     await interaction.response.defer(thinking=True, ephemeral=True)
 
-    settings, db = _get_settings_and_db(interaction)
+    settings, db = await _get_settings_and_db(interaction)
     if settings is None or db is None:
         await interaction.followup.send("Error: bot not initialized (missing settings/db).", ephemeral=True)
         return
@@ -270,7 +274,7 @@ async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> No
 async def exams_clear_cmd(interaction: discord.Interaction) -> None:
     await interaction.response.defer(thinking=True, ephemeral=True)
 
-    settings, db = _get_settings_and_db(interaction)
+    settings, db = await _get_settings_and_db(interaction)
     if settings is None or db is None:
         await interaction.followup.send("Error: bot not initialized (missing settings/db).", ephemeral=True)
         return

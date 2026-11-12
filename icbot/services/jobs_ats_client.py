@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
+
+from icbot.errors import ProviderError, redact_secrets
 
 log = logging.getLogger(__name__)
 
@@ -25,13 +29,13 @@ class JobPosting:
     text_blob: str  # title + team/dept + location (for filtering)
 
 
-def _now_unix() -> int:
-    return int(datetime.now(tz=UTC).timestamp())
+def _now_unix(clock: Callable[[], float] | None = None) -> int:
+    return int(clock() if clock is not None else time.time())
 
 
-def _parse_iso8601_to_unix(value: Any) -> int:
+def _parse_iso8601_to_unix(value: Any, *, clock: Callable[[], float] | None = None) -> int:
     if not value:
-        return _now_unix()
+        return _now_unix(clock)
     if isinstance(value, (int, float)):
         # Some providers use ms epoch; assume anything too big is ms
         if value > 10_000_000_000:
@@ -40,7 +44,7 @@ def _parse_iso8601_to_unix(value: Any) -> int:
 
     s = str(value).strip()
     if not s:
-        return _now_unix()
+        return _now_unix(clock)
 
     try:
         if s.endswith("Z"):
@@ -50,7 +54,7 @@ def _parse_iso8601_to_unix(value: Any) -> int:
             dt = dt.replace(tzinfo=UTC)
         return int(dt.timestamp())
     except (ValueError, TypeError):
-        return _now_unix()
+        return _now_unix(clock)
 
 
 async def fetch_greenhouse_jobs(
@@ -59,6 +63,7 @@ async def fetch_greenhouse_jobs(
     *,
     timeout_seconds: int = 12,
     limit: int = 100,
+    clock: Callable[[], float] | None = None,
 ) -> list[JobPosting]:
     """Fetch Greenhouse Job Board postings for a board token."""
     board_token = (board_token or "").strip()
@@ -71,10 +76,12 @@ async def fetch_greenhouse_jobs(
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout_seconds)) as r:
             if r.status != 200:
                 text = await r.text()
-                raise RuntimeError(f"Greenhouse HTTP {r.status}: {text[:200]}")
+                raise ProviderError(f"Greenhouse HTTP {r.status}: {redact_secrets(text[:200])}")
             data = await r.json()
+    except ProviderError:
+        raise
     except (aiohttp.ClientError, TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
-        raise RuntimeError(f"Greenhouse fetch failed ({board_token}): {e!r}") from e
+        raise ProviderError(f"Greenhouse fetch failed ({board_token}): {redact_secrets(repr(e))}") from e
 
     jobs = data.get("jobs", []) if isinstance(data, dict) else []
     out: list[JobPosting] = []
@@ -95,7 +102,7 @@ async def fetch_greenhouse_jobs(
                     depts.append(str(d["name"]).strip())
             dept_s = ", ".join([d for d in depts if d])
 
-            posted_unix = _parse_iso8601_to_unix(j.get("updated_at") or j.get("created_at"))
+            posted_unix = _parse_iso8601_to_unix(j.get("updated_at") or j.get("created_at"), clock=clock)
             blob = " ".join([title, dept_s, loc]).strip()
 
             if not job_id or not url_job:
@@ -128,6 +135,7 @@ async def fetch_lever_jobs(
     timeout_seconds: int = 12,
     limit: int = 100,
     eu_instance: bool = False,
+    clock: Callable[[], float] | None = None,
 ) -> list[JobPosting]:
     """Fetch Lever public postings for a company site."""
     site = (site or "").strip()
@@ -141,10 +149,12 @@ async def fetch_lever_jobs(
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout_seconds)) as r:
             if r.status != 200:
                 text = await r.text()
-                raise RuntimeError(f"Lever HTTP {r.status}: {text[:200]}")
+                raise ProviderError(f"Lever HTTP {r.status}: {redact_secrets(text[:200])}")
             data = await r.json()
+    except ProviderError:
+        raise
     except (aiohttp.ClientError, TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
-        raise RuntimeError(f"Lever fetch failed ({site}): {e!r}") from e
+        raise ProviderError(f"Lever fetch failed ({site}): {redact_secrets(repr(e))}") from e
 
     jobs = data if isinstance(data, list) else []
     out: list[JobPosting] = []
@@ -165,7 +175,7 @@ async def fetch_lever_jobs(
             else:
                 team = dept = commitment = ""
 
-            posted_unix = _parse_iso8601_to_unix(j.get("createdAt"))
+            posted_unix = _parse_iso8601_to_unix(j.get("createdAt"), clock=clock)
             blob = " ".join([title, team, dept, commitment, loc]).strip()
 
             if not job_id or not url_job:

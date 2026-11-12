@@ -7,16 +7,22 @@ import discord
 from discord import app_commands
 
 from icbot.app import admin, icse
+from icbot.config import Settings
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import stock as stock_embed
 from icbot.embeds import system as system_embed
+from icbot.errors import safe_error_summary
 from icbot.permissions import is_admin_or_allowed
 from icbot.services.fun_market import FunMarketError, FunMarketStore, format_signed_money
 from icbot.utils import parse_signed_int
 
 
-async def _post_optional_announcement(interaction: discord.Interaction, embed: discord.Embed) -> None:
+async def _post_optional_announcement(
+    interaction: discord.Interaction,
+    settings: Settings,
+    embed: discord.Embed,
+) -> None:
     """Post an embed to the stock channel when an admin moves/sets a stock."""
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     if settings.stock_channel_id and interaction.guild:
         ch = interaction.guild.get_channel(settings.stock_channel_id)
         if isinstance(ch, discord.TextChannel):
@@ -24,14 +30,8 @@ async def _post_optional_announcement(interaction: discord.Interaction, embed: d
                 await ch.send(embed=embed)
 
 
-def _store(interaction: discord.Interaction) -> FunMarketStore:
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    db = interaction.client.db  # type: ignore[attr-defined]
-    return FunMarketStore(
-        db,
-        starting_bankroll=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
-        tz_name=str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"),
-    )
+def _store(interaction: discord.Interaction, settings: Settings) -> FunMarketStore:
+    return get_container(interaction.client).fun_market_store(settings)
 
 
 def _fmt_pct(p: float) -> str:
@@ -60,7 +60,8 @@ def _chunk_lines(lines: Iterable[str], n: int) -> list[str]:
 
 @icse.command(name="market", description="Show the current Instigate Cafe Stock Exchange.")
 async def market(interaction: discord.Interaction):
-    st = _store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    st = _store(interaction, settings)
     rows = await st.list_stocks(active_only=True)
     if not rows:
         await interaction.response.send_message(
@@ -79,7 +80,6 @@ async def market(interaction: discord.Interaction):
             suffix = f" ({idx})" if len(lines) > 8 else ""
             fields.append((f"{cat.title()}{suffix}", chunk, False))
 
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     wk = rows[0].week_key if rows else "current week"
     embed = system_embed(
         settings,
@@ -94,14 +94,16 @@ async def market(interaction: discord.Interaction):
 @icse.command(name="quote", description="Show a single stock quote.")
 @app_commands.describe(symbol="Example: IC, DISD, AGIS")
 async def quote(interaction: discord.Interaction, symbol: str):
-    st = _store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    st = _store(interaction, settings)
     try:
         s = await st.get_stock(symbol)
     except FunMarketError as e:
-        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        await interaction.response.send_message(
+            f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
+        )
         return
 
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     headline = (
         f"**${s.price}**\n"
         f"{s.name}\n"
@@ -115,7 +117,8 @@ async def quote(interaction: discord.Interaction, symbol: str):
 @app_commands.describe(user="Optional: view another user's portfolio")
 async def portfolio(interaction: discord.Interaction, user: discord.User | None = None):
     target = user or interaction.user
-    st = _store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    st = _store(interaction, settings)
     snap = await st.portfolio(user_id=target.id)
 
     pos_lines: list[str] = []
@@ -143,7 +146,6 @@ async def portfolio(interaction: discord.Interaction, user: discord.User | None 
     else:
         fields.append(("Positions", "No open positions.", False))
 
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     embed = system_embed(
         settings,
         title="📂 Portfolio",
@@ -157,14 +159,16 @@ async def portfolio(interaction: discord.Interaction, user: discord.User | None 
 @icse.command(name="buy", description="Buy a stock (long).")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def buy(interaction: discord.Interaction, symbol: str, qty: int):
-    st = _store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    st = _store(interaction, settings)
     try:
         s, pos, bankroll = await st.buy_long(user_id=interaction.user.id, symbol=symbol, qty=qty)
     except FunMarketError as e:
-        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        await interaction.response.send_message(
+            f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
+        )
         return
 
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     embed = stock_embed(
         settings,
         title=f"🟢 Bought ${s.symbol}",
@@ -178,15 +182,17 @@ async def buy(interaction: discord.Interaction, symbol: str, qty: int):
 @icse.command(name="sell", description="Sell a long position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def sell(interaction: discord.Interaction, symbol: str, qty: int):
-    st = _store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    st = _store(interaction, settings)
     try:
         s, pos, bankroll, realized = await st.sell_long(user_id=interaction.user.id, symbol=symbol, qty=qty)
     except FunMarketError as e:
-        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        await interaction.response.send_message(
+            f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
+        )
         return
 
     pos_line = "Position closed." if pos is None else f"Remaining LONG x{pos.qty} @ ${pos.avg_price:.2f}"
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     embed = stock_embed(
         settings,
         title=f"🔵 Sold ${s.symbol}",
@@ -200,16 +206,18 @@ async def sell(interaction: discord.Interaction, symbol: str, qty: int):
 @icse.command(name="short", description="Open/increase a short position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def short(interaction: discord.Interaction, symbol: str, qty: int):
-    st = _store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    st = _store(interaction, settings)
     try:
         s, pos, bankroll, collateral = await st.open_short(
             user_id=interaction.user.id, symbol=symbol, qty=qty
         )
     except FunMarketError as e:
-        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        await interaction.response.send_message(
+            f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
+        )
         return
 
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     embed = stock_embed(
         settings,
         title=f"🟥 Shorted ${s.symbol}",
@@ -227,17 +235,19 @@ async def short(interaction: discord.Interaction, symbol: str, qty: int):
 @icse.command(name="cover", description="Cover (close) a short position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def cover(interaction: discord.Interaction, symbol: str, qty: int):
-    st = _store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    st = _store(interaction, settings)
     try:
         s, pos, bankroll, realized, release = await st.cover_short(
             user_id=interaction.user.id, symbol=symbol, qty=qty
         )
     except FunMarketError as e:
-        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        await interaction.response.send_message(
+            f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
+        )
         return
 
     pos_line = "Position closed." if pos is None else f"Remaining SHORT x{pos.qty} @ ${pos.avg_price:.2f}"
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     embed = stock_embed(
         settings,
         title=f"🟨 Covered ${s.symbol}",
@@ -257,7 +267,8 @@ async def cover(interaction: discord.Interaction, symbol: str, qty: int):
 @app_commands.describe(limit="Max 25", user="Optional: show another user's trades")
 async def trades(interaction: discord.Interaction, limit: int = 10, user: discord.User | None = None):
     target = user or interaction.user
-    st = _store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    st = _store(interaction, settings)
     rows = await st.recent_trades(user_id=target.id, limit=limit)
     if not rows:
         await interaction.response.send_message("No market trades yet.", ephemeral=True)
@@ -271,7 +282,6 @@ async def trades(interaction: discord.Interaction, limit: int = 10, user: discor
             f"cash {format_signed_money(int(cash_delta))} • rpnl {format_signed_money(int(rpnl))}{note_s}"
         )
 
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     embed = system_embed(
         settings,
         title="🧾 ICSE Market Trades",
@@ -285,11 +295,14 @@ async def trades(interaction: discord.Interaction, limit: int = 10, user: discor
 @icse.command(name="history", description="Show recent admin price updates for ICSE stocks.")
 @app_commands.describe(limit="Max 25", symbol="Optional symbol filter")
 async def history(interaction: discord.Interaction, limit: int = 10, symbol: str | None = None):
-    st = _store(interaction)
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    st = _store(interaction, settings)
     try:
         rows = await st.history(symbol=symbol, limit=limit)
     except FunMarketError as e:
-        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        await interaction.response.send_message(
+            f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
+        )
         return
 
     if not rows:
@@ -304,7 +317,6 @@ async def history(interaction: discord.Interaction, limit: int = 10, symbol: str
             f"<t:{int(ts)}:R> • **${sym}** • <@{int(uid)}> • **{sign}{int(delta)}** → **${int(new_value)}**{reason_s}"
         )
 
-    settings = interaction.client.settings  # type: ignore[attr-defined]
     embed = system_embed(
         settings,
         title="🕰️ Stock Price History",
@@ -323,7 +335,7 @@ async def history(interaction: discord.Interaction, limit: int = 10, symbol: str
 @admin.command(name="move", description="Admin: move a stock by +/- delta.")
 @app_commands.describe(symbol="Example: IC", change="Examples: +10, -5", reason="Optional reason")
 async def admin_move(interaction: discord.Interaction, symbol: str, change: str, reason: str | None = None):
-    settings = interaction.client.settings  # type: ignore[attr-defined]
+    settings = await resolve_guild_settings(interaction.client, interaction)
     if not is_admin_or_allowed(interaction, settings):
         await interaction.response.send_message("❌ You don’t have permission.", ephemeral=True)
         return
@@ -335,11 +347,13 @@ async def admin_move(interaction: discord.Interaction, symbol: str, change: str,
         )
         return
 
-    st = _store(interaction)
+    st = _store(interaction, settings)
     try:
         s = await st.admin_move(symbol=symbol, delta=delta, user_id=interaction.user.id, reason=reason)
     except FunMarketError as e:
-        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        await interaction.response.send_message(
+            f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
+        )
         return
 
     sign = "+" if int(delta) >= 0 else ""
@@ -355,22 +369,24 @@ async def admin_move(interaction: discord.Interaction, symbol: str, change: str,
         footer_hint=f"Moved by {interaction.user.name}",
     )
     await interaction.response.send_message(embed=embed)
-    await _post_optional_announcement(interaction, embed)
+    await _post_optional_announcement(interaction, settings, embed)
 
 
 @admin.command(name="set", description="Admin: set a stock to an exact price.")
 @app_commands.describe(symbol="Example: IC", value="New price (>=1)", reason="Optional reason")
 async def admin_set(interaction: discord.Interaction, symbol: str, value: int, reason: str | None = None):
-    settings = interaction.client.settings  # type: ignore[attr-defined]
+    settings = await resolve_guild_settings(interaction.client, interaction)
     if not is_admin_or_allowed(interaction, settings):
         await interaction.response.send_message("❌ You don’t have permission.", ephemeral=True)
         return
 
-    st = _store(interaction)
+    st = _store(interaction, settings)
     try:
         s = await st.admin_set(symbol=symbol, new_value=value, user_id=interaction.user.id, reason=reason)
     except FunMarketError as e:
-        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        await interaction.response.send_message(
+            f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
+        )
         return
 
     embed = stock_embed(
@@ -384,17 +400,17 @@ async def admin_set(interaction: discord.Interaction, symbol: str, value: int, r
         footer_hint=f"Set by {interaction.user.name}",
     )
     await interaction.response.send_message(embed=embed)
-    await _post_optional_announcement(interaction, embed)
+    await _post_optional_announcement(interaction, settings, embed)
 
 
 @admin.command(name="sync_catalog", description="Admin: sync the code-defined stock catalog into the DB.")
 async def sync_catalog_cmd(interaction: discord.Interaction):
-    settings = interaction.client.settings  # type: ignore[attr-defined]
+    settings = await resolve_guild_settings(interaction.client, interaction)
     if not is_admin_or_allowed(interaction, settings):
         await interaction.response.send_message("❌ You don’t have permission.", ephemeral=True)
         return
 
-    st = _store(interaction)
+    st = _store(interaction, settings)
     await st.sync_catalog()
     rows = await st.list_stocks(active_only=False, include_inactive=True)
     active = [r for r in rows if r.is_active]
@@ -408,12 +424,12 @@ async def sync_catalog_cmd(interaction: discord.Interaction):
 @admin.command(name="weekroll", description="Admin: reset weekly change baseline to current prices.")
 @app_commands.describe(note="Optional note")
 async def weekroll_cmd(interaction: discord.Interaction, note: str | None = None):
-    settings = interaction.client.settings  # type: ignore[attr-defined]
+    settings = await resolve_guild_settings(interaction.client, interaction)
     if not is_admin_or_allowed(interaction, settings):
         await interaction.response.send_message("❌ You don’t have permission.", ephemeral=True)
         return
 
-    st = _store(interaction)
+    st = _store(interaction, settings)
     wk = await st.week_rollover(user_id=interaction.user.id, note=note)
     await interaction.response.send_message(
         f"✅ Weekly baseline reset for all active stocks. New week key: **{wk}**."
@@ -422,13 +438,15 @@ async def weekroll_cmd(interaction: discord.Interaction, note: str | None = None
 
 @icse.command(name="stock", description="Show the current Instigate Cafe ($IC) stock price and history.")
 async def stock(interaction: discord.Interaction):
-    st = _store(interaction)
-    settings = interaction.client.settings  # type: ignore[attr-defined]
+    settings = await resolve_guild_settings(interaction.client, interaction)
+    st = _store(interaction, settings)
 
     try:
         s = await st.get_stock("IC")
     except FunMarketError as e:
-        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        await interaction.response.send_message(
+            f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
+        )
         return
 
     headline = (

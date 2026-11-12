@@ -4,14 +4,18 @@ import json
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
+from contextlib import asynccontextmanager
 from typing import Any, cast
 
 import aiohttp
 import aiosqlite
 import discord
 
+from icbot.container import get_container
 from icbot.db import Database
 from icbot.embeds import job_alert as job_alert_embed
+from icbot.errors import format_exception_safe
 from icbot.services.jobs_workday_client import WorkdaySite, fetch_workday_jobs, parse_workday_sites
 from icbot.tasks.job_alerts import (
     _classify,
@@ -44,7 +48,12 @@ def _jobs_channel_id(settings) -> int:
 _CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
-async def _get_cached_api_url(db: Database, careers_url: str) -> str | None:
+async def _get_cached_api_url(
+    db: Database,
+    careers_url: str,
+    *,
+    clock: Callable[[], float] | None = None,
+) -> str | None:
     row = await db.fetchone(
         "SELECT api_url, last_updated_unix FROM workday_cxs_cache WHERE careers_url=?",
         (careers_url,),
@@ -53,8 +62,9 @@ async def _get_cached_api_url(db: Database, careers_url: str) -> str | None:
         return None
 
     api_url, last_updated = row
+    now = int(clock()) if clock is not None else int(time.time())
     try:
-        if int(last_updated) and (int(time.time()) - int(last_updated) < _CACHE_TTL_SECONDS):
+        if int(last_updated) and (now - int(last_updated) < _CACHE_TTL_SECONDS):
             return str(api_url)
     except (TypeError, ValueError):
         return None
@@ -67,14 +77,33 @@ async def _set_cached_api_url(
     api_url: str,
     tenant: str | None,
     site: str | None,
+    *,
+    clock: Callable[[], float] | None = None,
 ) -> None:
+    now = int(clock()) if clock is not None else int(time.time())
     await db.execute(
         """
         INSERT OR REPLACE INTO workday_cxs_cache (careers_url, api_url, tenant, site, last_updated_unix)
         VALUES (?, ?, ?, ?, ?)
         """,
-        (careers_url, api_url, tenant, site, int(time.time())),
+        (careers_url, api_url, tenant, site, now),
     )
+
+
+@asynccontextmanager
+async def _scoped_workday_session(
+    shared_session: aiohttp.ClientSession | None,
+    *,
+    timeout_seconds: int,
+):
+    if shared_session is not None and not shared_session.closed:
+        yield shared_session
+        return
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+        headers={"User-Agent": "InstigateCafeBot/1.0"},
+    ) as created:
+        yield created
 
 
 async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
@@ -88,6 +117,8 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
     db: Database = getattr(bot, "db", None)  # type: ignore[assignment]
     if settings is None or db is None:
         return
+    container = get_container(bot)
+    secrets = settings.secret_values() if hasattr(settings, "secret_values") else ()
 
     channel_id = _jobs_channel_id(settings)
     if not channel_id:
@@ -116,19 +147,25 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
     timeout_seconds = int(getattr(settings, "workday_timeout_seconds", 12) or 12)
 
     posted = 0
-    bad_sources: set[str] = getattr(bot, "_workday_bad_sources", set())
+    bad_sources = container.workday_bad_sources
+    existing_bad = getattr(bot, "_workday_bad_sources", None)
+    if isinstance(existing_bad, set) and existing_bad is not bad_sources:
+        bad_sources.update(existing_bad)
     cast(Any, bot)._workday_bad_sources = bad_sources
 
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-        headers={"User-Agent": "InstigateCafeBot/1.0"},
-    ) as session:
+    open_session = (
+        container.http_session
+        if container.http_session is not None and not container.http_session.closed
+        else None
+    )
+
+    async with _scoped_workday_session(open_session, timeout_seconds=timeout_seconds) as session:
         for site in workday_sites:
             src = f"workday:{site.label}"
             if src in bad_sources:
                 continue
 
-            cached_api_url = await _get_cached_api_url(db, site.careers_url)
+            cached_api_url = await _get_cached_api_url(db, site.careers_url, clock=container.clock)
             try:
                 jobs, cxs_used = await fetch_workday_jobs(
                     session,
@@ -146,7 +183,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                 TypeError,
             ) as e:
                 bad_sources.add(src)
-                print(f"[JOBS] workday fetch failed ({site.label}): {e!r}")
+                print(f"[JOBS] workday fetch failed ({site.label}): {format_exception_safe(e, secrets)}")
                 continue
 
             # Refresh cache if the discovered/used URL works
@@ -158,6 +195,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                         str(cxs_used.api_url),
                         getattr(cxs_used, "tenant", None),
                         getattr(cxs_used, "site", None),
+                        clock=container.clock,
                     )
             except (aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as exc:
                 log.debug("Workday CXS cache refresh skipped for %s: %s", site.label, exc)
@@ -165,7 +203,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
             # Baseline behavior: avoid spamming old jobs on first-ever run per source
             if not await _source_has_any(db, src):
                 if not bootstrap_post:
-                    await _mark_seen(db, jobs)
+                    await _mark_seen(db, jobs, clock=container.clock)
                     print(f"[JOBS] baseline checkpointed {len(jobs)} jobs for {src} (no bootstrap post).")
                     continue
 
@@ -192,7 +230,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                     await channel.send(embed=emb)
                     posted += 1
 
-                await _mark_seen(db, jobs)
+                await _mark_seen(db, jobs, clock=container.clock)
 
                 if sample:
                     print(
@@ -224,7 +262,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                     kw_deny=kw_deny,
                     require_early_career=require_early_career,
                 ):
-                    await _mark_seen(db, [j])
+                    await _mark_seen(db, [j], clock=container.clock)
                     continue
 
                 cats = _classify(j.text_blob) or ["General"]
@@ -241,7 +279,7 @@ async def poll_and_post_workday_jobs(bot: discord.Client) -> None:
                 await channel.send(embed=emb)
                 posted += 1
                 posts_left -= 1
-                await _mark_seen(db, [j])
+                await _mark_seen(db, [j], clock=container.clock)
 
     if posted:
         print(f"[JOBS] workday cycle complete: posted={posted}")

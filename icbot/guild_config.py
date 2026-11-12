@@ -1,0 +1,388 @@
+"""Per-guild configuration separation, storage, and effective-settings resolution.
+
+Process secrets, DB/lore paths, TLS settings, and gateway safeguards belong strictly to
+process ``Settings``. Guild overrides cover only safe per-guild channels, roles, branding,
+timezones, prompts, and non-secret feature flags/thresholds stored in ``guild_settings``.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
+
+from icbot.config import MAX_SNOWFLAKE, Settings, _is_valid_snowflake, _to_color, _to_str_list
+from icbot.db import Database
+from icbot.errors import ConfigValidationError
+
+SECRET_SETTING_KEYS: frozenset[str] = frozenset(
+    {
+        "token",
+        "gemini_api_key",
+        "go_api_key",
+        "odds_api_key",
+    }
+)
+
+PROCESS_ONLY_KEYS: frozenset[str] = frozenset(
+    {
+        "allow_gateway",
+        "force_guild_resync",
+        "guild_id",
+        "guild_id_raw",
+        "guild_id_invalid",
+        "db_path",
+        "grades_db_path",
+        "lore_path",
+        "ttc_mastodon_base",
+        "ttc_mastodon_acct",
+        "ttc_poll_seconds",
+        "go_api_base",
+        "go_poll_seconds",
+        "go_ssl_verify",
+        "go_ca_bundle_path",
+        "jobs_poll_seconds",
+        "workday_poll_seconds",
+        "workday_timeout_seconds",
+        "market_watch_poll_seconds",
+        "btc_watch_poll_seconds",
+        "btc_esplora_base_url",
+    }
+)
+
+GUILD_OVERRIDABLE_KEYS: frozenset[str] = frozenset(
+    {
+        # Channels & roles
+        "stock_channel_id",
+        "user_command_channel_id",
+        "ttc_alerts_channel_id",
+        "job_alerts_channel_id",
+        "go_alerts_channel_id",
+        "market_watch_channel_id",
+        "market_daily_report_channel_id",
+        "btc_watch_channel_id",
+        "allowed_role_ids",
+        # Embed branding
+        "embed_logo_url",
+        "embed_accent_color",
+        "embed_footer_text",
+        # Academics
+        "exams_tz",
+        "notes_sites",
+        "rmp_university",
+        # Sports feeds (non-secret RSS overrides only)
+        "sports_rss_nba",
+        "sports_rss_nfl",
+        "sports_rss_mma",
+        "sports_rss_ufc",
+        "sports_rss_boxing",
+        # LLM behavior (uses process GEMINI_API_KEY)
+        "llm_enabled",
+        "llm_cooldown_seconds",
+        "llm_max_messages",
+        "llm_max_chars",
+        "llm_max_image_bytes",
+        "llm_max_output_tokens",
+        "gemini_model",
+        "gemini_resume_model",
+        "gemini_resume_prompt",
+        "gemini_resume_prompt_hw",
+        "gemini_resume_prompt_ele",
+        # Economy & Casino rules
+        "daily_claim_amount",
+        "bj_starting_bankroll",
+        "bj_dealer_hits_soft_17",
+        "bj_max_splits",
+        "bj_session_ttl_minutes",
+        # Careers filters
+        "jobs_location_allowlist",
+        "jobs_keywords_allowlist",
+        "jobs_keywords_denylist",
+        "jobs_require_early_career",
+        # Transit/Market/BTC thresholds & labels
+        "ttc_alert_level",
+        "go_alert_level",
+        "go_lines_allowlist",
+        "market_watch_vix_level",
+        "market_watch_index_move_pct",
+        "market_watch_stock_move_pct",
+        "market_watch_tickers",
+        "market_watch_cooldown_minutes",
+        "market_daily_report_time",
+        "market_daily_report_tz",
+        "market_daily_report_top_n",
+        "market_daily_report_tickers",
+        "btc_watch_label",
+        "btc_watch_cooldown_minutes",
+    }
+)
+
+_INT_KEYS = frozenset(
+    {
+        "stock_channel_id",
+        "user_command_channel_id",
+        "ttc_alerts_channel_id",
+        "job_alerts_channel_id",
+        "go_alerts_channel_id",
+        "market_watch_channel_id",
+        "market_daily_report_channel_id",
+        "btc_watch_channel_id",
+        "llm_cooldown_seconds",
+        "llm_max_messages",
+        "llm_max_chars",
+        "llm_max_image_bytes",
+        "llm_max_output_tokens",
+        "daily_claim_amount",
+        "bj_starting_bankroll",
+        "bj_max_splits",
+        "bj_session_ttl_minutes",
+        "market_watch_cooldown_minutes",
+        "market_daily_report_top_n",
+        "btc_watch_cooldown_minutes",
+    }
+)
+
+_BOOL_KEYS = frozenset(
+    {
+        "llm_enabled",
+        "bj_dealer_hits_soft_17",
+        "jobs_require_early_career",
+    }
+)
+
+_FLOAT_KEYS = frozenset(
+    {
+        "market_watch_vix_level",
+        "market_watch_index_move_pct",
+        "market_watch_stock_move_pct",
+    }
+)
+
+_STR_KEYS = frozenset(
+    {
+        "embed_logo_url",
+        "embed_footer_text",
+        "exams_tz",
+        "rmp_university",
+        "sports_rss_nba",
+        "sports_rss_nfl",
+        "sports_rss_mma",
+        "sports_rss_ufc",
+        "sports_rss_boxing",
+        "gemini_model",
+        "gemini_resume_model",
+        "gemini_resume_prompt",
+        "gemini_resume_prompt_hw",
+        "gemini_resume_prompt_ele",
+        "ttc_alert_level",
+        "go_alert_level",
+        "market_daily_report_time",
+        "market_daily_report_tz",
+        "btc_watch_label",
+    }
+)
+
+_STR_LIST_KEYS = frozenset(
+    {
+        "notes_sites",
+        "jobs_location_allowlist",
+        "jobs_keywords_allowlist",
+        "jobs_keywords_denylist",
+        "go_lines_allowlist",
+        "market_watch_tickers",
+        "market_daily_report_tickers",
+    }
+)
+
+
+def _coerce_guild_value(key: str, value: Any) -> Any:
+    if key == "allowed_role_ids":
+        if not isinstance(value, (list, tuple)):
+            raise ConfigValidationError("allowed_role_ids must be a list of integer role IDs.")
+        roles: list[int] = []
+        for item in value:
+            if isinstance(item, bool) or not isinstance(item, int):
+                raise ConfigValidationError("allowed_role_ids must contain integer role IDs.")
+            if not _is_valid_snowflake(item, allow_zero=False):
+                raise ConfigValidationError(f"allowed_role_ids contains out-of-range ID: {item}")
+            roles.append(int(item))
+        return roles
+
+    if key == "embed_accent_color":
+        if isinstance(value, bool):
+            raise ConfigValidationError("embed_accent_color must be a color integer or '#RRGGBB' string.")
+        parsed = _to_color(value, -1)
+        if parsed < 0 or parsed > 0xFFFFFF:
+            raise ConfigValidationError("embed_accent_color must be in 0x000000..0xFFFFFF.")
+        return parsed
+
+    if key in _BOOL_KEYS:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            low = value.strip().lower()
+            if low in ("true", "1", "yes", "on"):
+                return True
+            if low in ("false", "0", "no", "off"):
+                return False
+        raise ConfigValidationError(f"{key} must be a boolean.")
+
+    if key in _INT_KEYS:
+        if isinstance(value, bool):
+            raise ConfigValidationError(f"{key} must be an integer.")
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ConfigValidationError(f"{key} must be an integer.") from exc
+
+    if key in _FLOAT_KEYS:
+        if isinstance(value, bool):
+            raise ConfigValidationError(f"{key} must be a float.")
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ConfigValidationError(f"{key} must be a float.") from exc
+
+    if key in _STR_LIST_KEYS:
+        if isinstance(value, (list, tuple, str)):
+            return _to_str_list(value)
+        raise ConfigValidationError(f"{key} must be a list of strings.")
+
+    if key in _STR_KEYS:
+        if value is None:
+            raise ConfigValidationError(f"{key} must be a string.")
+        return str(value).strip()
+
+    raise ConfigValidationError(f"Unsupported guild override key: {key!r}")
+
+
+def validate_guild_overrides(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and normalize per-guild configuration overrides, rejecting secrets/process keys."""
+    if not isinstance(raw, Mapping):
+        raise ConfigValidationError("Guild overrides must be a mapping.")
+
+    cleaned: dict[str, Any] = {}
+    for k, v in raw.items():
+        key = str(k).strip()
+        if key in SECRET_SETTING_KEYS:
+            raise ConfigValidationError(
+                f"Secret key {key!r} belongs in process configuration and cannot be set per guild."
+            )
+        if key in PROCESS_ONLY_KEYS:
+            raise ConfigValidationError(f"Process-level key {key!r} cannot be overridden per guild.")
+        if key not in GUILD_OVERRIDABLE_KEYS:
+            raise ConfigValidationError(f"Unknown or non-overridable guild setting key: {key!r}")
+        cleaned[key] = _coerce_guild_value(key, v)
+
+    # Validate merged values against Settings schema/range rules
+    if cleaned:
+        dataclasses.replace(Settings(), **cleaned).validate(strict=True)
+    return cleaned
+
+
+@dataclass(frozen=True)
+class GuildSettings:
+    """Validated per-guild configuration overrides persisted in SQLite."""
+
+    guild_id: int
+    overrides: Mapping[str, Any] = dataclasses.field(default_factory=lambda: MappingProxyType({}))
+    updated_at: int = 0
+
+    def __post_init__(self) -> None:
+        if not _is_valid_snowflake(self.guild_id, allow_zero=False):
+            raise ConfigValidationError(
+                f"guild_id must be a valid Discord snowflake (1..{MAX_SNOWFLAKE}), got {self.guild_id!r}."
+            )
+        validated = validate_guild_overrides(self.overrides)
+        object.__setattr__(self, "overrides", MappingProxyType(validated))
+        object.__setattr__(self, "updated_at", int(self.updated_at or 0))
+
+    @classmethod
+    def from_overrides(
+        cls,
+        guild_id: int,
+        overrides: Mapping[str, Any],
+        *,
+        updated_at: int = 0,
+    ) -> GuildSettings:
+        return cls(guild_id=guild_id, overrides=overrides, updated_at=updated_at)
+
+
+def resolve_effective_settings(base: Settings, guild_cfg: GuildSettings | None) -> Settings:
+    """Merge non-secret ``GuildSettings`` overrides onto process ``base`` settings."""
+    if guild_cfg is None or not guild_cfg.overrides:
+        return base
+    validated = validate_guild_overrides(guild_cfg.overrides)
+    if not validated:
+        return base
+    return dataclasses.replace(base, **validated)
+
+
+class GuildSettingsStore:
+    """SQLite-backed CRUD store for non-secret per-guild configuration overrides."""
+
+    def __init__(self, db: Database, *, clock: Callable[[], float] | None = None) -> None:
+        self.db = db
+        self._clock = clock
+
+    def _now(self) -> int:
+        return int(self._clock() if self._clock is not None else time.time())
+
+    async def get(self, guild_id: int) -> GuildSettings | None:
+        gid = int(guild_id)
+        if not _is_valid_snowflake(gid, allow_zero=False):
+            return None
+        row = await self.db.fetchone(
+            "SELECT settings_json, updated_at FROM guild_settings WHERE guild_id=?",
+            (gid,),
+        )
+        if row is None:
+            return None
+        raw_json, updated_at = row
+        try:
+            parsed = json.loads(str(raw_json))
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ConfigValidationError(f"Corrupt guild_settings JSON stored for guild {gid}") from exc
+        if not isinstance(parsed, Mapping):
+            raise ConfigValidationError(f"guild_settings payload for guild {gid} must be a JSON object")
+        return GuildSettings(guild_id=gid, overrides=parsed, updated_at=int(updated_at or 0))
+
+    async def set_overrides(self, guild_id: int, overrides: Mapping[str, Any]) -> GuildSettings:
+        gid = int(guild_id)
+        now = self._now()
+        gs = GuildSettings(guild_id=gid, overrides=overrides, updated_at=now)
+        payload = json.dumps(dict(gs.overrides), sort_keys=True)
+        await self.db.execute(
+            """
+            INSERT OR REPLACE INTO guild_settings (guild_id, settings_json, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (gid, payload, now),
+        )
+        return gs
+
+    async def update_overrides(self, guild_id: int, updates: Mapping[str, Any]) -> GuildSettings:
+        gid = int(guild_id)
+        existing = await self.get(gid)
+        merged: dict[str, Any] = dict(existing.overrides) if existing is not None else {}
+        for k, v in updates.items():
+            key = str(k).strip()
+            if v is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = v
+        return await self.set_overrides(gid, merged)
+
+    async def clear(self, guild_id: int) -> None:
+        gid = int(guild_id)
+        await self.db.execute("DELETE FROM guild_settings WHERE guild_id=?", (gid,))
+
+    async def resolve_for_guild(self, base: Settings, guild_id: int | None) -> Settings:
+        if not guild_id or not _is_valid_snowflake(int(guild_id), allow_zero=False):
+            return base
+        guild_cfg = await self.get(int(guild_id))
+        return resolve_effective_settings(base, guild_cfg)

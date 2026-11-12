@@ -11,10 +11,9 @@ import asyncio
 import logging
 import math
 import sqlite3
-import time
-from collections.abc import Coroutine, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiohttp
@@ -24,7 +23,10 @@ from discord import app_commands
 from discord.ext import commands
 
 from icbot.config import MAX_SNOWFLAKE, Settings
+from icbot.container import ServiceContainer, resolve_guild_settings
 from icbot.db import Database
+from icbot.errors import BotError, format_exception_safe, safe_error_summary
+from icbot.guild_config import GuildSettingsStore
 from icbot.permissions import is_admin_or_allowed
 from icbot.registry import register_ic_commands
 from icbot.services import btc_esplora, crypto_fng, yahoo_quotes
@@ -124,9 +126,7 @@ async def ic_channel_gate(
     if not qname.startswith("ic"):
         return True
 
-    eff_settings = settings or cast(Settings | None, getattr(interaction.client, "settings", None))
-    if eff_settings is None:
-        return True
+    eff_settings = settings or await resolve_guild_settings(interaction.client, interaction)
 
     if is_admin_or_allowed(interaction, eff_settings):
         return True
@@ -147,7 +147,7 @@ async def on_app_command_error(
     interaction: discord.Interaction[Any],
     error: app_commands.AppCommandError,
 ) -> None:
-    """Handle application command cooldowns, check failures, and unexpected errors."""
+    """Handle application command cooldowns, check failures, domain errors, and unexpected errors."""
     if isinstance(error, app_commands.CommandOnCooldown):
         mins, secs = divmod(error.retry_after, 60)
         msg = (
@@ -162,19 +162,30 @@ async def on_app_command_error(
     if isinstance(error, app_commands.CheckFailure):
         return
 
-    log.error("App command error: %r", error)
+    client_settings = getattr(getattr(interaction, "client", None), "settings", None)
+    secrets = client_settings.secret_values() if isinstance(client_settings, Settings) else ()
+    inner = getattr(error, "original", error)
+
+    if isinstance(inner, BotError):
+        log.warning("App command domain/provider error: %s", format_exception_safe(inner, secrets))
+        user_msg = f"❌ {safe_error_summary(inner, secrets)}"
+    else:
+        log.error("App command error: %s", format_exception_safe(error, secrets))
+        user_msg = "❌ An unexpected error occurred."
+
     try:
         if not interaction.response.is_done():
-            await interaction.response.send_message("❌ An unexpected error occurred.", ephemeral=True)
+            await interaction.response.send_message(user_msg, ephemeral=True)
         else:
-            await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
+            await interaction.followup.send(user_msg, ephemeral=True)
     except (discord.DiscordException, aiohttp.ClientError, RuntimeError) as exc:
-        log.debug("Failed sending app command error response: %s", exc)
+        log.debug("Failed sending app command error response: %s", format_exception_safe(exc, secrets))
 
 
 class _CafeCommandTree(app_commands.CommandTree["CampusBot"]):
     async def interaction_check(self, interaction: discord.Interaction[CampusBot], /) -> bool:
-        return await ic_channel_gate(interaction, self.client.settings)
+        eff_settings = await resolve_guild_settings(self.client, interaction)
+        return await ic_channel_gate(interaction, eff_settings)
 
     async def on_error(
         self,
@@ -186,13 +197,16 @@ class _CafeCommandTree(app_commands.CommandTree["CampusBot"]):
 
 
 class CampusBot(commands.Bot):
-    """Stateful Discord bot with explicit lifecycle, sync, and shutdown ownership."""
+    """Stateful Discord bot with explicit lifecycle, DI ownership, sync, and shutdown."""
 
     def __init__(
         self,
         *,
-        settings: Settings,
+        settings: Settings | None = None,
         db: Database | None = None,
+        services: ServiceContainer | None = None,
+        clock: Callable[[], float] | None = None,
+        http_session: aiohttp.ClientSession | None = None,
         register_commands: bool = True,
         sync_commands: bool = True,
         feature_modules: Sequence[str] | None = None,
@@ -208,9 +222,32 @@ class CampusBot(commands.Bot):
             tree_cls=_CafeCommandTree,
             **options,
         )
-        self.settings: Settings = settings
-        self.db: Database = db if db is not None else Database(settings.db_path)
-        self.http_session: aiohttp.ClientSession | None = None
+        if services is not None:
+            self.services: ServiceContainer = services
+            eff_settings = settings if settings is not None else services.settings
+            eff_db = (
+                db
+                if db is not None
+                else (services.db if services.db is not None else Database(eff_settings.db_path))
+            )
+            self.services.settings = eff_settings
+            if self.services.db is None:
+                self.services.db = eff_db
+            if self.services.guild_settings is None and self.services.db is not None:
+                self.services.guild_settings = GuildSettingsStore(self.services.db, clock=self.services.clock)
+        else:
+            eff_settings = settings if settings is not None else Settings()
+            eff_db = db if db is not None else Database(eff_settings.db_path)
+            self.services = ServiceContainer.from_settings(
+                eff_settings,
+                db=eff_db,
+                clock=clock,
+                http_session=http_session,
+            )
+
+        self.settings: Settings = eff_settings
+        self.db: Database = eff_db
+        self.http_session: aiohttp.ClientSession | None = self.services.http_session
 
         self._register_commands_enabled = register_commands
         self._sync_commands_enabled = sync_commands
@@ -221,8 +258,15 @@ class CampusBot(commands.Bot):
         self.setup_complete: bool = False
         self.commands_synced: bool = False
         self.last_sync_error: Exception | None = None
-        self._llm_killed: bool = False
+        self._llm_killed: bool = self.services.llm_killed
+        self._lore_cache: dict[str, dict[str, Any]] = self.services.lore_cache
+        self._llm_last_reply: dict[int, float] = self.services.llm_last_reply
+        self._jobs_bad_sources: set[str] = self.services.jobs_bad_sources
+        self._workday_bad_sources: set[str] = self.services.workday_bad_sources
         self._background_tasks: dict[str, asyncio.Task[None]] = {}
+
+    def _secrets(self) -> tuple[str, ...]:
+        return self.settings.secret_values()
 
     @property
     def background_tasks(self) -> dict[str, asyncio.Task[None]]:
@@ -239,31 +283,33 @@ class CampusBot(commands.Bot):
     async def _load_persisted_state(self) -> None:
         try:
             row = await self.db.fetchone("SELECT value FROM meta WHERE key=?", ("llm_killed",))
-            if row and str(row[0]) == "1":
-                self._llm_killed = True
+            killed = bool(row and str(row[0]) == "1")
+            self._llm_killed = killed
+            self.services.llm_killed = killed
+            if killed:
                 log.info("[BOOT] Loaded persisted llm_killed=True state from DB.")
-            else:
-                self._llm_killed = False
         except (aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as exc:
-            log.warning("[BOOT] Error loading LLM killswitch state: %r", exc)
+            log.warning(
+                "[BOOT] Error loading LLM killswitch state: %s",
+                format_exception_safe(exc, self._secrets()),
+            )
 
     async def _init_http_sessions(self) -> None:
         if self.http_session is None or self.http_session.closed:
-            timeout = aiohttp.ClientTimeout(total=15)
-            self.http_session = aiohttp.ClientSession(timeout=timeout)
+            self.http_session = await self.services.ensure_http_session()
         await yahoo_quotes.init_session()
         await btc_esplora.init_session()
         await crypto_fng.init_session()
 
     async def _close_http_sessions(self) -> None:
-        if self.http_session is not None:
-            session = self.http_session
-            self.http_session = None
-            if not session.closed:
-                try:
-                    await session.close()
-                except (aiohttp.ClientError, OSError, RuntimeError) as exc:
-                    log.warning("[SHUTDOWN] Error closing bot http_session: %r", exc)
+        self.http_session = None
+        try:
+            await self.services.close()
+        except (aiohttp.ClientError, OSError, RuntimeError) as exc:
+            log.warning(
+                "[SHUTDOWN] Error closing bot http_session: %s",
+                format_exception_safe(exc, self._secrets()),
+            )
 
         for name, closer in (
             ("yahoo_quotes", yahoo_quotes.close_session),
@@ -273,10 +319,24 @@ class CampusBot(commands.Bot):
             try:
                 await closer()
             except (aiohttp.ClientError, OSError, RuntimeError) as exc:
-                log.warning("[SHUTDOWN] Error closing %s session: %r", name, exc)
+                log.warning(
+                    "[SHUTDOWN] Error closing %s session: %s",
+                    name,
+                    format_exception_safe(exc, self._secrets()),
+                )
 
     def _log_startup_config(self) -> None:
         settings = self.settings
+        try:
+            caps = settings.capabilities()
+            cap_summary = ", ".join(
+                f"{name}={'ready' if c.available else ('misconfigured' if c.configured else 'off')}"
+                for name, c in sorted(caps.items())
+            )
+            log.info("[CAPABILITIES] %s", cap_summary)
+        except (AttributeError, TypeError, ValueError) as exc:
+            log.warning("[CAPABILITIES] summary error: %s", format_exception_safe(exc, self._secrets()))
+
         try:
             mw_enabled = bool(getattr(settings, "market_watch_enabled", False))
             mw_poll = int(getattr(settings, "market_watch_poll_seconds", 0) or 0)
@@ -306,33 +366,41 @@ class CampusBot(commands.Bot):
                     "[MARKET] enabled without channel id (MARKET_WATCH_CHANNEL_ID or STOCK_CHANNEL_ID)."
                 )
         except (AttributeError, KeyError, LookupError, TypeError, ValueError) as exc:
-            log.warning("[MARKET] config log error: %r", exc)
+            log.warning("[MARKET] config log error: %s", format_exception_safe(exc, self._secrets()))
 
         try:
             j_poll = int(getattr(settings, "jobs_poll_seconds", 0) or 0)
-            gh = list(
-                getattr(settings, "greenhouse_boards", None)
-                or getattr(settings, "greenhouse_board_tokens", None)
-                or []
-            )
-            lv = list(
-                getattr(settings, "lever_sites", None) or getattr(settings, "lever_site_tokens", None) or []
-            )
-            wd = list(getattr(settings, "workday_sites", None) or [])
-            log.info(
-                "[JOBS] config: channel_id=%s poll=%ss greenhouse=%s lever=%s workday=%s",
-                int(
+            if isinstance(settings, Settings):
+                gh = list(settings.greenhouse_boards or [])
+                lv = list(settings.lever_sites or [])
+                jobs_ch = int(settings.job_alerts_channel_id or 0)
+            else:
+                gh = list(
+                    getattr(settings, "greenhouse_boards", None)
+                    or getattr(settings, "greenhouse_board_tokens", None)
+                    or []
+                )
+                lv = list(
+                    getattr(settings, "lever_sites", None)
+                    or getattr(settings, "lever_site_tokens", None)
+                    or []
+                )
+                jobs_ch = int(
                     getattr(settings, "job_alerts_channel_id", 0)
                     or getattr(settings, "jobs_channel_id", 0)
                     or 0
-                ),
+                )
+            wd = list(getattr(settings, "workday_sites", None) or [])
+            log.info(
+                "[JOBS] config: channel_id=%s poll=%ss greenhouse=%s lever=%s workday=%s",
+                jobs_ch,
                 j_poll,
                 _fmt_csv(gh),
                 _fmt_csv(lv),
                 _fmt_csv(wd),
             )
         except (AttributeError, KeyError, LookupError, TypeError, ValueError) as exc:
-            log.warning("[JOBS] config log error: %r", exc)
+            log.warning("[JOBS] config log error: %s", format_exception_safe(exc, self._secrets()))
 
         try:
             ttc_channel = int(getattr(settings, "ttc_alerts_channel_id", 0) or 0)
@@ -355,12 +423,12 @@ class CampusBot(commands.Bot):
             if not ttc_base or not ttc_acct:
                 log.warning("[TTC] missing TTC_MASTODON_BASE or TTC_MASTODON_ACCT.")
         except (AttributeError, KeyError, LookupError, TypeError, ValueError) as exc:
-            log.warning("[TTC] config log error: %r", exc)
+            log.warning("[TTC] config log error: %s", format_exception_safe(exc, self._secrets()))
 
         try:
             llm_enabled = bool(getattr(settings, "llm_enabled", False))
             llm_model = str(
-                getattr(settings, "gemini_model", "gemini-2.0-flash") or "gemini-2.0-flash"
+                getattr(settings, "gemini_model", "gemini-2.5-flash") or "gemini-2.5-flash"
             ).strip()
             llm_msgs = int(getattr(settings, "llm_max_messages", 25) or 25)
             llm_chars = int(getattr(settings, "llm_max_chars", 12000) or 12000)
@@ -377,7 +445,7 @@ class CampusBot(commands.Bot):
             if llm_enabled and not has_key:
                 log.warning("[LLM] enabled without GEMINI_API_KEY set.")
         except (AttributeError, KeyError, LookupError, TypeError, ValueError) as exc:
-            log.warning("[LLM] config log error: %r", exc)
+            log.warning("[LLM] config log error: %s", format_exception_safe(exc, self._secrets()))
 
     def _register_commands(self) -> None:
         if getattr(self.settings, "guild_id_invalid", False):
@@ -425,7 +493,10 @@ class CampusBot(commands.Bot):
             self.commands_synced = False
             if self._raise_on_sync_error:
                 raise
-            log.warning("Initial command sync failed (%r); retaining in-memory /ic command tree.", exc)
+            log.warning(
+                "Initial command sync failed (%s); retaining in-memory /ic command tree.",
+                format_exception_safe(exc, self._secrets()),
+            )
             return []
 
         self.last_sync_error = None
@@ -448,7 +519,11 @@ class CampusBot(commands.Bot):
                 return
             exc = finished.exception()
             if exc is not None:
-                log.error("Background task %s terminated with exception", name, exc_info=exc)
+                log.error(
+                    "Background task %s terminated with exception: %s",
+                    name,
+                    format_exception_safe(exc, self._secrets()),
+                )
 
         task.add_done_callback(_on_done)
         return task
@@ -468,9 +543,12 @@ class CampusBot(commands.Bot):
         elif go_channel and not go_key:
             log.info("[GO] enabled via channel without GO_API_KEY; skipping GO poller.")
 
-        jobs_channel_id = int(
-            getattr(settings, "job_alerts_channel_id", 0) or getattr(settings, "jobs_channel_id", 0) or 0
-        )
+        if isinstance(settings, Settings):
+            jobs_channel_id = int(settings.job_alerts_channel_id or 0)
+        else:
+            jobs_channel_id = int(
+                getattr(settings, "job_alerts_channel_id", 0) or getattr(settings, "jobs_channel_id", 0) or 0
+            )
         if jobs_channel_id:
             self._spawn_task("jobs", self._jobs_loop())
         else:
@@ -514,7 +592,10 @@ class CampusBot(commands.Bot):
         try:
             await self.db.close()
         except (aiosqlite.Error, sqlite3.Error, RuntimeError, OSError) as exc:
-            log.warning("[SHUTDOWN] Error closing database: %r", exc)
+            log.warning(
+                "[SHUTDOWN] Error closing database: %s",
+                format_exception_safe(exc, self._secrets()),
+            )
 
     async def setup_hook(self) -> None:
         """Perform idempotent one-time startup before gateway readiness."""
@@ -581,7 +662,10 @@ class CampusBot(commands.Bot):
             LookupError,
         ) as exc:
             if bool(getattr(self.settings, "llm_debug", False)):
-                log.debug("[LLM] on_message handler error: %r", exc)
+                log.debug(
+                    "[LLM] on_message handler error: %s",
+                    format_exception_safe(exc, self._secrets()),
+                )
 
         if self.commands:
             await self.process_commands(message)
@@ -614,7 +698,7 @@ class CampusBot(commands.Bot):
                 TypeError,
                 LookupError,
             ) as exc:
-                log.warning("[TTC] loop error: %r", exc)
+                log.warning("[TTC] loop error: %s", format_exception_safe(exc, self._secrets()))
             await asyncio.sleep(max(30, int(getattr(self.settings, "ttc_poll_seconds", 120) or 120)))
 
     async def _go_loop(self) -> None:
@@ -638,21 +722,21 @@ class CampusBot(commands.Bot):
                 TypeError,
                 LookupError,
             ) as exc:
-                log.warning("[GO] loop error: %r", exc)
+                log.warning("[GO] loop error: %s", format_exception_safe(exc, self._secrets()))
             await asyncio.sleep(max(60, int(getattr(self.settings, "go_poll_seconds", 180) or 180)))
 
     async def _jobs_loop(self) -> None:
         """Background poller that posts job alerts into the configured jobs channel."""
         await self.wait_until_ready()
-        poll_s_init = int(getattr(self.settings, "jobs_poll_seconds", 600) or 600)
+        poll_s_init = int(getattr(settings := self.settings, "jobs_poll_seconds", 600) or 600)
         log.info("[JOBS] loop started (poll=%ss)", poll_s_init)
 
         while not self.is_closed():
-            cycle_start = time.time()
+            cycle_start = self.services.clock()
             try:
                 log.debug("[JOBS] cycle begin")
                 await poll_and_post_jobs(self)
-                log.debug("[JOBS] cycle end (elapsed=%.1fs)", time.time() - cycle_start)
+                log.debug("[JOBS] cycle end (elapsed=%.1fs)", self.services.clock() - cycle_start)
             except asyncio.CancelledError:
                 log.debug("[JOBS] loop cancelled")
                 raise
@@ -668,9 +752,9 @@ class CampusBot(commands.Bot):
                 TypeError,
                 LookupError,
             ) as exc:
-                log.warning("[JOBS] loop error: %s: %r", type(exc).__name__, exc)
+                log.warning("[JOBS] loop error: %s", format_exception_safe(exc, self._secrets()))
 
-            poll_s = max(60, int(getattr(self.settings, "jobs_poll_seconds", 600) or 600))
+            poll_s = max(60, int(getattr(settings, "jobs_poll_seconds", 600) or 600))
             await asyncio.sleep(poll_s)
 
     async def _workday_loop(self) -> None:
@@ -684,11 +768,11 @@ class CampusBot(commands.Bot):
         log.info("[WORKDAY] loop started (poll=%ss)", poll_s0)
 
         while not self.is_closed():
-            cycle_start = time.time()
+            cycle_start = self.services.clock()
             try:
                 log.debug("[WORKDAY] cycle begin")
                 await poll_and_post_workday_jobs(self)
-                log.debug("[WORKDAY] cycle end (elapsed=%.1fs)", time.time() - cycle_start)
+                log.debug("[WORKDAY] cycle end (elapsed=%.1fs)", self.services.clock() - cycle_start)
             except asyncio.CancelledError:
                 log.debug("[WORKDAY] loop cancelled")
                 raise
@@ -704,7 +788,7 @@ class CampusBot(commands.Bot):
                 TypeError,
                 LookupError,
             ) as exc:
-                log.warning("[WORKDAY] loop error: %s: %r", type(exc).__name__, exc)
+                log.warning("[WORKDAY] loop error: %s", format_exception_safe(exc, self._secrets()))
 
             poll_s = max(
                 60,
@@ -736,7 +820,7 @@ class CampusBot(commands.Bot):
                 TypeError,
                 LookupError,
             ) as exc:
-                log.warning("[MARKET] loop error: %r", exc)
+                log.warning("[MARKET] loop error: %s", format_exception_safe(exc, self._secrets()))
             await asyncio.sleep(max(10, int(getattr(self.settings, "market_watch_poll_seconds", 300) or 300)))
 
     async def _daily_market_report_loop(self) -> None:
@@ -772,7 +856,7 @@ class CampusBot(commands.Bot):
                 TypeError,
                 LookupError,
             ) as exc:
-                log.warning("[DAILY] loop error: %r", exc)
+                log.warning("[DAILY] loop error: %s", format_exception_safe(exc, self._secrets()))
                 await asyncio.sleep(120)
 
     async def _btc_watch_loop(self) -> None:
@@ -795,7 +879,7 @@ class CampusBot(commands.Bot):
                 TypeError,
                 LookupError,
             ) as exc:
-                log.warning("[BTC] loop error: %r", exc)
+                log.warning("[BTC] loop error: %s", format_exception_safe(exc, self._secrets()))
             await asyncio.sleep(max(30, int(getattr(self.settings, "btc_watch_poll_seconds", 300) or 300)))
 
 
@@ -803,17 +887,26 @@ def create_bot(
     settings: Settings | None = None,
     *,
     db: Database | None = None,
+    services: ServiceContainer | None = None,
+    clock: Callable[[], float] | None = None,
+    http_session: aiohttp.ClientSession | None = None,
     register_commands: bool = True,
     sync_commands: bool = True,
     feature_modules: Sequence[str] | None = None,
     raise_on_sync_error: bool = False,
     intents: discord.Intents | None = None,
 ) -> CampusBot:
-    """Construct a ``CampusBot`` instance with explicit settings, storage, and lifecycle ownership."""
-    eff_settings = settings if settings is not None else Settings.from_env()
+    """Construct a ``CampusBot`` instance with explicit settings, DI container, and lifecycle ownership."""
+    if services is not None:
+        eff_settings = settings if settings is not None else services.settings
+    else:
+        eff_settings = settings if settings is not None else Settings.from_env()
     return CampusBot(
         settings=eff_settings,
         db=db,
+        services=services,
+        clock=clock,
+        http_session=http_session,
         register_commands=register_commands,
         sync_commands=sync_commands,
         feature_modules=feature_modules,

@@ -8,9 +8,11 @@ from typing import Any
 
 import aiohttp
 
+from icbot.errors import ProviderError, redact_secrets
+
 
 @dataclass(frozen=True)
-class GeminiError(RuntimeError):
+class GeminiError(ProviderError):
     """Raised when Gemini returns a non-2xx response or an unusable payload."""
 
     message: str
@@ -49,6 +51,7 @@ async def gemini_generate_text(
     temperature: float | None = None,
     max_output_tokens: int | None = None,
     timeout_seconds: int = 25,
+    session: aiohttp.ClientSession | None = None,
 ) -> str:
     """Call the Gemini Developer API (REST) and return the model's text output."""
 
@@ -94,22 +97,39 @@ async def gemini_generate_text(
         body["generationConfig"] = gen_cfg
 
     timeout = aiohttp.ClientTimeout(total=max(5, int(timeout_seconds)))
+    secrets = (api_key,)
 
     status: int = 0
-    async with (
-        aiohttp.ClientSession(timeout=timeout) as session,
-        session.post(url, json=body, headers={"Content-Type": "application/json"}) as resp,
-    ):
-        status = int(resp.status)
-        text = await resp.text()
-        if status < 200 or status >= 300:
-            raise GeminiError("non-2xx response", status=status, details=text[:2000])
-
+    owns_session = session is None or session.closed
+    active_session = session if not owns_session else aiohttp.ClientSession(timeout=timeout)
+    assert active_session is not None
+    try:
         try:
-            payload = await resp.json()
-        except (aiohttp.ContentTypeError, json.JSONDecodeError, ValueError) as err:
-            # Some proxies or errors still yield text.
-            raise GeminiError("invalid json response", status=status, details=text[:2000]) from err
+            async with active_session.post(
+                url,
+                json=body,
+                headers={"Content-Type": "application/json"},
+                timeout=timeout,
+            ) as resp:
+                status = int(resp.status)
+                text = await resp.text()
+                if status < 200 or status >= 300:
+                    safe_details = redact_secrets(text[:2000], secrets)
+                    raise GeminiError("non-2xx response", status=status, details=safe_details)
+
+                try:
+                    payload = await resp.json()
+                except (aiohttp.ContentTypeError, json.JSONDecodeError, ValueError) as err:
+                    safe_details = redact_secrets(text[:2000], secrets)
+                    raise GeminiError("invalid json response", status=status, details=safe_details) from err
+        except GeminiError:
+            raise
+        except aiohttp.ClientError as err:
+            safe_err = redact_secrets(str(err), secrets)
+            raise GeminiError(f"network error: {safe_err}", status=0) from err
+    finally:
+        if owns_session:
+            await active_session.close()
 
     out = _extract_text(payload)
     if out:
@@ -123,6 +143,6 @@ async def gemini_generate_text(
     except (AttributeError, IndexError, TypeError):
         finish_reason = ""
 
-    details = str(payload)[:2000] if payload else ""
+    details = redact_secrets(str(payload)[:2000], secrets) if payload else ""
     msg = "empty response" + (f" (finishReason={finish_reason})" if finish_reason else "")
     raise GeminiError(msg, status=status, details=details)

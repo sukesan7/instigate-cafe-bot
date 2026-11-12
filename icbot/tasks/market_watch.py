@@ -5,7 +5,9 @@ from typing import Any
 import aiohttp
 import discord
 
+from icbot.container import get_container
 from icbot.embeds import system as system_embed
+from icbot.errors import format_exception_safe
 from icbot.services.yahoo_quotes import Quote, fetch_quotes
 
 
@@ -111,6 +113,8 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
     db = getattr(bot, "db", None)
     if settings is None or db is None:
         return
+    container = get_container(bot)
+    secrets = settings.secret_values() if hasattr(settings, "secret_values") else ()
 
     enabled = bool(getattr(settings, "market_watch_enabled", False))
     if not enabled:
@@ -145,11 +149,26 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
     core = ["SPY", "QQQ", "^VIX"]
     symbols = list(dict.fromkeys(core + tickers))
 
+    open_session = (
+        container.http_session
+        if container.http_session is not None and not container.http_session.closed
+        else None
+    )
+
     try:
-        quotes = await fetch_quotes(symbols, debug=debug)
+        if container.fetch_quotes_fn is not None:
+            quotes = await container.fetch_quotes_fn(symbols, debug=debug)
+        else:
+            quotes = await fetch_quotes(
+                symbols,
+                debug=debug,
+                session=open_session,
+                crumb_cache=container.yahoo_crumb,
+                clock=container.clock,
+            )
     except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
         if debug:
-            print(f"[MARKET] fetch error: {e!r}")
+            print(f"[MARKET] fetch error: {format_exception_safe(e, secrets)}")
         return
 
     q_spy = quotes.get("SPY")
@@ -187,7 +206,7 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
 
         prev_state = _to_bool(await _get_meta(db, state_key))
         last_alert = _to_int(await _get_meta(db, last_key), 0)
-        now = int(discord.utils.utcnow().timestamp())
+        now = int(container.clock())
 
         if not triggered:
             if prev_state:
@@ -321,9 +340,11 @@ async def poll_and_post_market_watch(bot: discord.Client) -> None:
                 print(f"[MARKET] posted plain-text ok: message_id={getattr(msg, 'id', 'n/a')}")
         except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
             if debug:
-                print(f"[MARKET] ERROR: forbidden + plain-text send failed: {e!r}")
+                print(
+                    f"[MARKET] ERROR: forbidden + plain-text send failed: {format_exception_safe(e, secrets)}"
+                )
         return
     except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
         if debug:
-            print(f"[MARKET] ERROR: send failed: {e!r}")
+            print(f"[MARKET] ERROR: send failed: {format_exception_safe(e, secrets)}")
         return

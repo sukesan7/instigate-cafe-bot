@@ -7,7 +7,9 @@ import aiohttp
 import aiosqlite
 import discord
 
+from icbot.container import get_container
 from icbot.embeds import system as system_embed
+from icbot.errors import format_exception_safe
 from icbot.services.btc_esplora import DEFAULT_BASE_URL, fetch_address_txs
 
 
@@ -75,6 +77,8 @@ async def poll_and_post_btc_watch(bot: discord.Client) -> None:
     db = getattr(bot, "db", None)
     if settings is None or db is None:
         return
+    container = get_container(bot)
+    secrets = settings.secret_values() if hasattr(settings, "secret_values") else ()
 
     enabled = bool(getattr(settings, "btc_watch_enabled", False))
     if not enabled:
@@ -110,16 +114,25 @@ async def poll_and_post_btc_watch(bot: discord.Client) -> None:
     cooldown_min = int(getattr(settings, "btc_watch_cooldown_minutes", 30) or 30)
     cooldown_s = max(60, cooldown_min * 60)
     last_any = _to_int(await _get_meta(db, "btc_last_alert_any"), 0)
-    now = int(discord.utils.utcnow().timestamp())
+    now = int(container.clock())
     if now - last_any < cooldown_s:
         return
 
+    open_session = (
+        container.http_session
+        if container.http_session is not None and not container.http_session.closed
+        else None
+    )
+
     for addr in addresses[:50]:  # hard cap for safety
         try:
-            txs = await fetch_address_txs(addr, base_url=base_url, limit=5)
+            if container.fetch_address_txs_fn is not None:
+                txs = await container.fetch_address_txs_fn(addr, base_url=base_url, limit=5)
+            else:
+                txs = await fetch_address_txs(addr, base_url=base_url, limit=5, session=open_session)
         except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError, KeyError) as e:
             if debug:
-                print(f"[BTC] fetch failed addr={_short_addr(addr)} err={e!r}")
+                print(f"[BTC] fetch failed addr={_short_addr(addr)} err={format_exception_safe(e, secrets)}")
             continue
 
         if not txs:
@@ -173,7 +186,7 @@ async def poll_and_post_btc_watch(bot: discord.Client) -> None:
                     ValueError,
                 ) as e:
                     if debug:
-                        print(f"[BTC] send failed (forbidden fallback): {e!r}")
+                        print(f"[BTC] send failed (forbidden fallback): {format_exception_safe(e, secrets)}")
                     return
             except (
                 discord.DiscordException,
@@ -184,5 +197,5 @@ async def poll_and_post_btc_watch(bot: discord.Client) -> None:
                 ValueError,
             ) as e:
                 if debug:
-                    print(f"[BTC] send failed: {e!r}")
+                    print(f"[BTC] send failed: {format_exception_safe(e, secrets)}")
                 return

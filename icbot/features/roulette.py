@@ -4,6 +4,7 @@ import discord
 from discord import app_commands
 
 from icbot.app import casino
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import game as game_embed
 from icbot.games.roulette_engine import (
     color_emoji,
@@ -11,18 +12,7 @@ from icbot.games.roulette_engine import (
     evaluate,
     spin,
 )
-from icbot.services.user_service import InsufficientBalanceError, UserStore
-
-
-def _make_user_store(interaction: discord.Interaction) -> UserStore:
-    settings = interaction.client.settings  # type: ignore[attr-defined]
-    db = interaction.client.db  # type: ignore[attr-defined]
-    return UserStore(
-        db,
-        starting_balance=int(getattr(settings, "bj_starting_bankroll", 1000) or 1000),
-        daily_claim_amount=int(getattr(settings, "daily_claim_amount", 100) or 100),
-    )
-
+from icbot.services.user_service import InsufficientBalanceError
 
 VALID_BET_TYPES = {
     "red",
@@ -85,7 +75,7 @@ async def roulette_cmd(
     bet_type: str,
     number: str | None = None,
 ):
-    settings = interaction.client.settings  # type: ignore[attr-defined]
+    settings = await resolve_guild_settings(interaction.client, interaction)
 
     # Validate bet amount
     if bet <= 0:
@@ -128,7 +118,7 @@ async def roulette_cmd(
                 return
 
     # Deduct balance
-    store = _make_user_store(interaction)
+    store = get_container(interaction.client).user_store(settings)
     await store.ensure_user(
         interaction.user.id,
         display_name=interaction.user.display_name,

@@ -6,6 +6,8 @@ from typing import Any
 
 import aiohttp
 
+from icbot.errors import ProviderError, redact_secrets
+
 """Lightweight Bitcoin address watcher using an Esplora-compatible API.
 
 We default to Blockstream's public Esplora instance:
@@ -103,18 +105,20 @@ async def fetch_address_txs(
     *,
     base_url: str = DEFAULT_BASE_URL,
     limit: int = 10,
+    session: aiohttp.ClientSession | None = None,
 ) -> list[AddressTx]:
     """Return newest txs for an address."""
     address = str(address).strip()
     if not address:
         return []
 
-    session = await _get_session()
+    active_session = session if session is not None and not session.closed else await _get_session()
     url = f"{base_url.rstrip('/')}/address/{address}/txs"
-    async with session.get(url) as r:
+    async with active_session.get(url, headers=_headers()) as r:
         if r.status != 200:
             txt = await r.text(errors="ignore")
-            raise RuntimeError(f"esplora address txs failed: status={r.status} body={txt[:200]!r}")
+            safe_txt = redact_secrets(txt[:200])
+            raise ProviderError(f"esplora address txs failed: status={r.status} body={safe_txt!r}")
         data = await r.json()
 
     out: list[AddressTx] = []

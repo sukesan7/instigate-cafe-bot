@@ -1,6 +1,7 @@
 import discord
 
 from icbot.app import ic
+from icbot.container import resolve_guild_settings
 from icbot.embeds import system as system_embed
 
 # --- Help Content Data ---
@@ -115,7 +116,7 @@ def build_help_embed(page: int, total_pages: int, settings) -> discord.Embed:
 
 @ic.command(name="help", description="Show the paginated help menu for all IC bot commands.")
 async def ic_help(interaction: discord.Interaction):
-    settings = getattr(interaction.client, "settings", None)
+    settings = await resolve_guild_settings(interaction.client, interaction)
 
     total_pages = len(HELP_CATEGORIES)
     current_page = 0

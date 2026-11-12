@@ -1,12 +1,28 @@
+"""Typed, validated configuration and capability readiness for Instigate Cafe Bot."""
+
 from __future__ import annotations
 
+import dataclasses
+import math
 import os
 import re
+import warnings
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from icbot.errors import ConfigValidationError, redact_secrets
 
 # Discord "snowflake" IDs fit in signed int64 for most libs
 MAX_SNOWFLAKE = 9223372036854775807
+
+_HEX_COLOR_RE = re.compile(r"^(?:#|0x)?([0-9a-fA-F]{6})$")
+_HHMM_RE = re.compile(r"^(\d{2}):(\d{2})$")
+_TRUE_VALUES = ("1", "true", "yes", "y", "on")
+_FALSE_VALUES = ("0", "false", "no", "n", "off")
+_VALID_ALERT_LEVELS = frozenset({"major", "all"})
 
 
 def _to_int(value: Any, default: int = 0, *, clamp_snowflake: bool = False) -> int:
@@ -18,7 +34,7 @@ def _to_int(value: Any, default: int = 0, *, clamp_snowflake: bool = False) -> i
         if not s:
             return default
         n = int(s)
-        if clamp_snowflake and n > MAX_SNOWFLAKE:
+        if clamp_snowflake and (n < 0 or n > MAX_SNOWFLAKE):
             return default
         return n
     except (TypeError, ValueError):
@@ -42,22 +58,21 @@ def _to_bool(value: Any, default: bool = False) -> bool:
         if value is None:
             return default
         s = str(value).strip().lower()
-        if s in ("1", "true", "yes", "y", "on"):
+        if s in _TRUE_VALUES:
             return True
-        if s in ("0", "false", "no", "n", "off"):
+        if s in _FALSE_VALUES:
             return False
         return default
     except (TypeError, ValueError):
         return default
 
 
-_HEX_COLOR_RE = re.compile(r"^(?:#|0x)?([0-9a-fA-F]{6})$")
-
-
 def _to_color(value: Any, default: int = 0xA64DFF) -> int:
     """Parse embed color from '#RRGGBB', '0xRRGGBB', 'RRGGBB', or int."""
     try:
         if value is None:
+            return default
+        if isinstance(value, bool):
             return default
         if isinstance(value, int):
             return int(value)
@@ -82,17 +97,17 @@ def _to_str_list(raw: Any) -> list[str]:
     """Parse comma-separated env lists, stripping junk tokens (e.g., '\\')."""
     if raw is None:
         return []
-    s = str(raw).strip()
-    if not s:
-        return []
+    if isinstance(raw, (list, tuple)):
+        tokens = [str(x).strip() for x in raw]
+    else:
+        s = str(raw).strip()
+        if not s:
+            return []
+        tokens = [tok.strip() for tok in s.split(",")]
 
     out: list[str] = []
-    for tok in s.split(","):
-        t = tok.strip()
-        if not t:
-            continue
-        # Common accidental token from line continuation or copy/paste
-        if t in ("\\", "\\\\"):
+    for t in tokens:
+        if not t or t in ("\\", "\\\\"):
             continue
         out.append(t)
 
@@ -106,6 +121,232 @@ def _to_str_list(raw: Any) -> list[str]:
         seen.add(k)
         uniq.append(t)
     return uniq
+
+
+def _is_valid_http_url(raw: str) -> bool:
+    s = (raw or "").strip()
+    if not s or any(ch.isspace() for ch in s):
+        return False
+    parsed = urlparse(s)
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
+
+def _is_valid_hhmm(raw: str) -> bool:
+    m = _HHMM_RE.fullmatch((raw or "").strip())
+    if not m:
+        return False
+    hh, mm = int(m.group(1)), int(m.group(2))
+    return 0 <= hh <= 23 and 0 <= mm <= 59
+
+
+def _is_valid_tz(tz_name: str) -> bool:
+    name = (tz_name or "").strip()
+    if not name:
+        return False
+    try:
+        ZoneInfo(name)
+        return True
+    except (ZoneInfoNotFoundError, KeyError, ValueError):
+        return False
+
+
+def _is_valid_snowflake(val: int, *, allow_zero: bool = True) -> bool:
+    if isinstance(val, bool) or not isinstance(val, int):
+        return False
+    lower = 0 if allow_zero else 1
+    return lower <= val <= MAX_SNOWFLAKE
+
+
+# ---------------------------------------------------------------------------
+# Sub-configuration dataclasses (immutable domain groups)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DiscordConfig:
+    token: str = ""
+    guild_id: int = 0
+    guild_id_raw: str = ""
+    guild_id_invalid: bool = False
+    stock_channel_id: int = 0
+    user_command_channel_id: int = 0
+    allowed_role_ids: tuple[int, ...] = ()
+    embed_logo_url: str = ""
+    embed_accent_color: int = 0xA64DFF
+    embed_footer_text: str = "Instigate Cafe"
+    force_guild_resync: bool = False
+    allow_gateway: bool = False
+
+
+@dataclass(frozen=True)
+class StorageConfig:
+    db_path: str = "ic_stock.db"
+    grades_db_path: str = "tmu_grades.db"
+    lore_path: str = ""
+
+
+@dataclass(frozen=True)
+class AcademicsConfig:
+    exams_tz: str = "America/Toronto"
+    notes_sites: tuple[str, ...] = ()
+    rmp_university: str = "Toronto Metropolitan University"
+
+
+@dataclass(frozen=True)
+class CareersConfig:
+    job_alerts_channel_id: int = 0
+    jobs_poll_seconds: int = 600
+    greenhouse_boards: tuple[str, ...] = ()
+    lever_sites: tuple[str, ...] = ()
+    jobs_location_allowlist: tuple[str, ...] = ()
+    jobs_keywords_allowlist: tuple[str, ...] = ()
+    jobs_keywords_denylist: tuple[str, ...] = ()
+    jobs_bootstrap_post: bool = False
+    jobs_require_early_career: bool = False
+    workday_sites: tuple[str, ...] = ()
+    workday_poll_seconds: int = 0
+    workday_timeout_seconds: int = 12
+
+
+@dataclass(frozen=True)
+class GeminiConfig:
+    llm_enabled: bool = False
+    llm_cooldown_seconds: int = 3
+    llm_max_messages: int = 25
+    llm_max_chars: int = 12000
+    llm_max_image_bytes: int = 2_000_000
+    llm_max_output_tokens: int = 1536
+    llm_debug: bool = False
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_resume_model: str = "gemini-2.5-pro"
+    gemini_resume_prompt: str = ""
+    gemini_resume_prompt_hw: str = ""
+    gemini_resume_prompt_ele: str = ""
+
+
+@dataclass(frozen=True)
+class EconomyConfig:
+    daily_claim_amount: int = 100
+    bj_starting_bankroll: int = 1000
+    bj_dealer_hits_soft_17: bool = True
+    bj_max_splits: int = 1
+    bj_session_ttl_minutes: int = 20
+
+
+@dataclass(frozen=True)
+class TransitConfig:
+    ttc_alerts_channel_id: int = 0
+    ttc_mastodon_base: str = ""
+    ttc_mastodon_acct: str = ""
+    ttc_poll_seconds: int = 120
+    ttc_alert_level: str = "major"
+    ttc_bootstrap_post_latest: bool = False
+    ttc_include_replies: bool = True
+    ttc_include_reblogs: bool = False
+    ttc_debug: bool = False
+    go_api_base: str = "https://api.openmetrolinx.com/OpenDataAPI/api/V1"
+    go_api_key: str = ""
+    go_alerts_channel_id: int = 0
+    go_poll_seconds: int = 180
+    go_alert_level: str = "major"
+    go_bootstrap_post_latest: bool = True
+    go_include_buses: bool = False
+    go_lines_allowlist: tuple[str, ...] = ()
+    go_ssl_verify: bool = True
+    go_ca_bundle_path: str = ""
+    go_debug: bool = False
+
+
+@dataclass(frozen=True)
+class FinancialAlertsConfig:
+    market_watch_enabled: bool = False
+    market_watch_poll_seconds: int = 60
+    market_watch_channel_id: int = 0
+    market_watch_vix_level: float = 20.0
+    market_watch_index_move_pct: float = 2.5
+    market_watch_stock_move_pct: float = 10.0
+    market_watch_tickers: tuple[str, ...] = ()
+    market_watch_cooldown_minutes: int = 30
+    market_watch_debug: bool = False
+    market_daily_report_enabled: bool = False
+    market_daily_report_channel_id: int = 0
+    market_daily_report_time: str = "16:30"
+    market_daily_report_tz: str = "America/Toronto"
+    market_daily_report_top_n: int = 8
+    market_daily_report_tickers: tuple[str, ...] = ()
+    market_daily_report_debug: bool = False
+    btc_watch_enabled: bool = False
+    btc_watch_poll_seconds: int = 300
+    btc_watch_channel_id: int = 0
+    btc_watch_label: str = "BTC Watch"
+    btc_watch_addresses: tuple[str, ...] = ()
+    btc_esplora_base_url: str = ""
+    btc_watch_cooldown_minutes: int = 30
+    btc_watch_debug: bool = False
+
+
+@dataclass(frozen=True)
+class SportsConfig:
+    odds_api_key: str = ""
+    sports_rss_nba: str = ""
+    sports_rss_nfl: str = ""
+    sports_rss_mma: str = ""
+    sports_rss_ufc: str = ""
+    sports_rss_boxing: str = ""
+
+    def rss_urls_for(self, sport: str) -> list[str]:
+        attr = {
+            "nba": self.sports_rss_nba,
+            "nfl": self.sports_rss_nfl,
+            "mma": self.sports_rss_mma,
+            "ufc": self.sports_rss_ufc,
+            "boxing": self.sports_rss_boxing,
+        }.get((sport or "").strip().lower(), "")
+        return _to_str_list(attr)
+
+
+# ---------------------------------------------------------------------------
+# Validation & Capability reporting
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ValidationIssue:
+    field: str
+    message: str
+    severity: Literal["error", "warning"] = "error"
+
+
+@dataclass(frozen=True)
+class CapabilityStatus:
+    name: str
+    configured: bool
+    available: bool
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class ConfigValidationReport:
+    issues: tuple[ValidationIssue, ...]
+    capabilities: dict[str, CapabilityStatus]
+
+    @property
+    def errors(self) -> tuple[ValidationIssue, ...]:
+        return tuple(i for i in self.issues if i.severity == "error")
+
+    @property
+    def warnings(self) -> tuple[ValidationIssue, ...]:
+        return tuple(i for i in self.issues if i.severity == "warning")
+
+    @property
+    def is_valid(self) -> bool:
+        return len(self.errors) == 0
+
+
+# ---------------------------------------------------------------------------
+# Composite Settings (flat API preserved + typed component properties)
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -130,8 +371,13 @@ class Settings:
     embed_accent_color: int = 0xA64DFF
     embed_footer_text: str = "Instigate Cafe"
 
-    # Odds API
+    # Sports / Odds API
     odds_api_key: str = ""
+    sports_rss_nba: str = ""
+    sports_rss_nfl: str = ""
+    sports_rss_mma: str = ""
+    sports_rss_ufc: str = ""
+    sports_rss_boxing: str = ""
 
     # TTC alerts
     ttc_mastodon_base: str = ""
@@ -151,12 +397,8 @@ class Settings:
     go_alert_level: str = "major"
     go_bootstrap_post_latest: bool = True
     go_include_buses: bool = False
-    # If set, only alerts mentioning these line codes/names will post.
-    # Example: ["LW", "LE", "ST"] or ["lakeshore west", "stouffville"]
     go_lines_allowlist: list[str] | None = None
-    # TLS options (Windows sometimes lacks a usable CA store for Python/aiohttp)
     go_ssl_verify: bool = True
-    # Optional path to a CA bundle (PEM). If empty, uses certifi if available.
     go_ca_bundle_path: str = ""
     go_debug: bool = False
 
@@ -168,6 +410,8 @@ class Settings:
     llm_cooldown_seconds: int = 3
     llm_max_messages: int = 25
     llm_max_chars: int = 12000
+    llm_max_image_bytes: int = 2_000_000
+    llm_max_output_tokens: int = 1536
     llm_debug: bool = False
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
@@ -186,9 +430,9 @@ class Settings:
     jobs_bootstrap_post: bool = False
     jobs_require_early_career: bool = False
 
-    # Workday jobs (new)
-    workday_sites: list[str] | None = None  # e.g. "RBC|https://rbc.wd3.myworkdayjobs.com/en-US/RBC"
-    workday_poll_seconds: int = 0  # if 0, defaults to jobs_poll_seconds
+    # Workday jobs
+    workday_sites: list[str] | None = None
+    workday_poll_seconds: int = 0
     workday_timeout_seconds: int = 12
 
     # Dev & Runtime Safeguard
@@ -213,26 +457,30 @@ class Settings:
     market_watch_stock_move_pct: float = 10.0
     market_watch_tickers: list[str] | None = None
     market_watch_cooldown_minutes: int = 30
+    market_watch_debug: bool = False
 
-    # Daily market summary (posts at a scheduled local time)
+    # Daily market summary
     market_daily_report_enabled: bool = False
     market_daily_report_channel_id: int = 0
-    market_daily_report_time: str = "16:30"  # HH:MM in market_daily_report_tz
+    market_daily_report_time: str = "16:30"
     market_daily_report_tz: str = "America/Toronto"
     market_daily_report_top_n: int = 8
     market_daily_report_tickers: list[str] | None = None
+    market_daily_report_debug: bool = False
 
-    # Bitcoin address watch (e.g., "Satoshi-era" / known whale addresses)
+    # Bitcoin address watch
     btc_watch_enabled: bool = False
     btc_watch_poll_seconds: int = 300
     btc_watch_channel_id: int = 0
     btc_watch_label: str = "BTC Watch"
     btc_watch_addresses: list[str] | None = None
-    btc_esplora_base_url: str = ""  # defaults to blockstream.info/api
+    btc_esplora_base_url: str = ""
     btc_watch_cooldown_minutes: int = 30
+    btc_watch_debug: bool = False
 
-    # DB
+    # DB / Storage
     db_path: str = "ic_stock.db"
+    grades_db_path: str = "tmu_grades.db"
 
     # Course Notes
     notes_sites: list[str] | None = None
@@ -243,146 +491,928 @@ class Settings:
     # RateMyProfessors
     rmp_university: str = "Toronto Metropolitan University"
 
-    # ---- Compatibility aliases (older callers) ----
+    # ---- Typed component views ----
+
+    @property
+    def discord(self) -> DiscordConfig:
+        return DiscordConfig(
+            token=self.token,
+            guild_id=self.guild_id,
+            guild_id_raw=self.guild_id_raw,
+            guild_id_invalid=self.guild_id_invalid,
+            stock_channel_id=self.stock_channel_id,
+            user_command_channel_id=self.user_command_channel_id,
+            allowed_role_ids=tuple(self.allowed_role_ids or ()),
+            embed_logo_url=self.embed_logo_url,
+            embed_accent_color=self.embed_accent_color,
+            embed_footer_text=self.embed_footer_text,
+            force_guild_resync=self.force_guild_resync,
+            allow_gateway=self.allow_gateway,
+        )
+
+    @property
+    def storage(self) -> StorageConfig:
+        return StorageConfig(
+            db_path=self.db_path,
+            grades_db_path=self.grades_db_path,
+            lore_path=self.lore_path,
+        )
+
+    @property
+    def academics(self) -> AcademicsConfig:
+        return AcademicsConfig(
+            exams_tz=self.exams_tz,
+            notes_sites=tuple(self.notes_sites or ()),
+            rmp_university=self.rmp_university,
+        )
+
+    @property
+    def careers(self) -> CareersConfig:
+        return CareersConfig(
+            job_alerts_channel_id=self.job_alerts_channel_id,
+            jobs_poll_seconds=self.jobs_poll_seconds,
+            greenhouse_boards=tuple(self.greenhouse_boards or ()),
+            lever_sites=tuple(self.lever_sites or ()),
+            jobs_location_allowlist=tuple(self.jobs_location_allowlist or ()),
+            jobs_keywords_allowlist=tuple(self.jobs_keywords_allowlist or ()),
+            jobs_keywords_denylist=tuple(self.jobs_keywords_denylist or ()),
+            jobs_bootstrap_post=self.jobs_bootstrap_post,
+            jobs_require_early_career=self.jobs_require_early_career,
+            workday_sites=tuple(self.workday_sites or ()),
+            workday_poll_seconds=self.workday_poll_seconds,
+            workday_timeout_seconds=self.workday_timeout_seconds,
+        )
+
+    @property
+    def gemini(self) -> GeminiConfig:
+        return GeminiConfig(
+            llm_enabled=self.llm_enabled,
+            llm_cooldown_seconds=self.llm_cooldown_seconds,
+            llm_max_messages=self.llm_max_messages,
+            llm_max_chars=self.llm_max_chars,
+            llm_max_image_bytes=self.llm_max_image_bytes,
+            llm_max_output_tokens=self.llm_max_output_tokens,
+            llm_debug=self.llm_debug,
+            gemini_api_key=self.gemini_api_key,
+            gemini_model=self.gemini_model,
+            gemini_resume_model=self.gemini_resume_model,
+            gemini_resume_prompt=self.gemini_resume_prompt,
+            gemini_resume_prompt_hw=self.gemini_resume_prompt_hw,
+            gemini_resume_prompt_ele=self.gemini_resume_prompt_ele,
+        )
+
+    @property
+    def economy(self) -> EconomyConfig:
+        return EconomyConfig(
+            daily_claim_amount=self.daily_claim_amount,
+            bj_starting_bankroll=self.bj_starting_bankroll,
+            bj_dealer_hits_soft_17=self.bj_dealer_hits_soft_17,
+            bj_max_splits=self.bj_max_splits,
+            bj_session_ttl_minutes=self.bj_session_ttl_minutes,
+        )
+
+    @property
+    def transit(self) -> TransitConfig:
+        return TransitConfig(
+            ttc_alerts_channel_id=self.ttc_alerts_channel_id,
+            ttc_mastodon_base=self.ttc_mastodon_base,
+            ttc_mastodon_acct=self.ttc_mastodon_acct,
+            ttc_poll_seconds=self.ttc_poll_seconds,
+            ttc_alert_level=self.ttc_alert_level,
+            ttc_bootstrap_post_latest=self.ttc_bootstrap_post_latest,
+            ttc_include_replies=self.ttc_include_replies,
+            ttc_include_reblogs=self.ttc_include_reblogs,
+            ttc_debug=self.ttc_debug,
+            go_api_base=self.go_api_base,
+            go_api_key=self.go_api_key,
+            go_alerts_channel_id=self.go_alerts_channel_id,
+            go_poll_seconds=self.go_poll_seconds,
+            go_alert_level=self.go_alert_level,
+            go_bootstrap_post_latest=self.go_bootstrap_post_latest,
+            go_include_buses=self.go_include_buses,
+            go_lines_allowlist=tuple(self.go_lines_allowlist or ()),
+            go_ssl_verify=self.go_ssl_verify,
+            go_ca_bundle_path=self.go_ca_bundle_path,
+            go_debug=self.go_debug,
+        )
+
+    @property
+    def financial(self) -> FinancialAlertsConfig:
+        return FinancialAlertsConfig(
+            market_watch_enabled=self.market_watch_enabled,
+            market_watch_poll_seconds=self.market_watch_poll_seconds,
+            market_watch_channel_id=self.market_watch_channel_id,
+            market_watch_vix_level=self.market_watch_vix_level,
+            market_watch_index_move_pct=self.market_watch_index_move_pct,
+            market_watch_stock_move_pct=self.market_watch_stock_move_pct,
+            market_watch_tickers=tuple(self.market_watch_tickers or ()),
+            market_watch_cooldown_minutes=self.market_watch_cooldown_minutes,
+            market_watch_debug=self.market_watch_debug,
+            market_daily_report_enabled=self.market_daily_report_enabled,
+            market_daily_report_channel_id=self.market_daily_report_channel_id,
+            market_daily_report_time=self.market_daily_report_time,
+            market_daily_report_tz=self.market_daily_report_tz,
+            market_daily_report_top_n=self.market_daily_report_top_n,
+            market_daily_report_tickers=tuple(self.market_daily_report_tickers or ()),
+            market_daily_report_debug=self.market_daily_report_debug,
+            btc_watch_enabled=self.btc_watch_enabled,
+            btc_watch_poll_seconds=self.btc_watch_poll_seconds,
+            btc_watch_channel_id=self.btc_watch_channel_id,
+            btc_watch_label=self.btc_watch_label,
+            btc_watch_addresses=tuple(self.btc_watch_addresses or ()),
+            btc_esplora_base_url=self.btc_esplora_base_url,
+            btc_watch_cooldown_minutes=self.btc_watch_cooldown_minutes,
+            btc_watch_debug=self.btc_watch_debug,
+        )
+
+    @property
+    def sports(self) -> SportsConfig:
+        return SportsConfig(
+            odds_api_key=self.odds_api_key,
+            sports_rss_nba=self.sports_rss_nba,
+            sports_rss_nfl=self.sports_rss_nfl,
+            sports_rss_mma=self.sports_rss_mma,
+            sports_rss_ufc=self.sports_rss_ufc,
+            sports_rss_boxing=self.sports_rss_boxing,
+        )
+
+    @classmethod
+    def from_components(
+        cls,
+        *,
+        discord: DiscordConfig | None = None,
+        storage: StorageConfig | None = None,
+        academics: AcademicsConfig | None = None,
+        careers: CareersConfig | None = None,
+        gemini: GeminiConfig | None = None,
+        economy: EconomyConfig | None = None,
+        transit: TransitConfig | None = None,
+        financial: FinancialAlertsConfig | None = None,
+        sports: SportsConfig | None = None,
+    ) -> Settings:
+        """Assemble a composite ``Settings`` instance from typed sub-configs."""
+        d = discord or DiscordConfig()
+        s = storage or StorageConfig()
+        a = academics or AcademicsConfig()
+        c = careers or CareersConfig()
+        g = gemini or GeminiConfig()
+        e = economy or EconomyConfig()
+        t = transit or TransitConfig()
+        f = financial or FinancialAlertsConfig()
+        sp = sports or SportsConfig()
+        return cls(
+            token=d.token,
+            guild_id=d.guild_id,
+            guild_id_raw=d.guild_id_raw,
+            guild_id_invalid=d.guild_id_invalid,
+            stock_channel_id=d.stock_channel_id,
+            user_command_channel_id=d.user_command_channel_id,
+            allowed_role_ids=list(d.allowed_role_ids),
+            embed_logo_url=d.embed_logo_url,
+            embed_accent_color=d.embed_accent_color,
+            embed_footer_text=d.embed_footer_text,
+            force_guild_resync=d.force_guild_resync,
+            allow_gateway=d.allow_gateway,
+            odds_api_key=sp.odds_api_key,
+            sports_rss_nba=sp.sports_rss_nba,
+            sports_rss_nfl=sp.sports_rss_nfl,
+            sports_rss_mma=sp.sports_rss_mma,
+            sports_rss_ufc=sp.sports_rss_ufc,
+            sports_rss_boxing=sp.sports_rss_boxing,
+            ttc_alerts_channel_id=t.ttc_alerts_channel_id,
+            ttc_mastodon_base=t.ttc_mastodon_base,
+            ttc_mastodon_acct=t.ttc_mastodon_acct,
+            ttc_poll_seconds=t.ttc_poll_seconds,
+            ttc_alert_level=t.ttc_alert_level,
+            ttc_bootstrap_post_latest=t.ttc_bootstrap_post_latest,
+            ttc_include_replies=t.ttc_include_replies,
+            ttc_include_reblogs=t.ttc_include_reblogs,
+            ttc_debug=t.ttc_debug,
+            go_api_base=t.go_api_base,
+            go_api_key=t.go_api_key,
+            go_alerts_channel_id=t.go_alerts_channel_id,
+            go_poll_seconds=t.go_poll_seconds,
+            go_alert_level=t.go_alert_level,
+            go_bootstrap_post_latest=t.go_bootstrap_post_latest,
+            go_include_buses=t.go_include_buses,
+            go_lines_allowlist=list(t.go_lines_allowlist),
+            go_ssl_verify=t.go_ssl_verify,
+            go_ca_bundle_path=t.go_ca_bundle_path,
+            go_debug=t.go_debug,
+            exams_tz=a.exams_tz,
+            notes_sites=list(a.notes_sites),
+            rmp_university=a.rmp_university,
+            llm_enabled=g.llm_enabled,
+            llm_cooldown_seconds=g.llm_cooldown_seconds,
+            llm_max_messages=g.llm_max_messages,
+            llm_max_chars=g.llm_max_chars,
+            llm_max_image_bytes=g.llm_max_image_bytes,
+            llm_max_output_tokens=g.llm_max_output_tokens,
+            llm_debug=g.llm_debug,
+            gemini_api_key=g.gemini_api_key,
+            gemini_model=g.gemini_model,
+            gemini_resume_model=g.gemini_resume_model,
+            gemini_resume_prompt=g.gemini_resume_prompt,
+            gemini_resume_prompt_hw=g.gemini_resume_prompt_hw,
+            gemini_resume_prompt_ele=g.gemini_resume_prompt_ele,
+            job_alerts_channel_id=c.job_alerts_channel_id,
+            jobs_poll_seconds=c.jobs_poll_seconds,
+            greenhouse_boards=list(c.greenhouse_boards),
+            lever_sites=list(c.lever_sites),
+            jobs_location_allowlist=list(c.jobs_location_allowlist),
+            jobs_keywords_allowlist=list(c.jobs_keywords_allowlist),
+            jobs_keywords_denylist=list(c.jobs_keywords_denylist),
+            jobs_bootstrap_post=c.jobs_bootstrap_post,
+            jobs_require_early_career=c.jobs_require_early_career,
+            workday_sites=list(c.workday_sites),
+            workday_poll_seconds=c.workday_poll_seconds,
+            workday_timeout_seconds=c.workday_timeout_seconds,
+            daily_claim_amount=e.daily_claim_amount,
+            bj_starting_bankroll=e.bj_starting_bankroll,
+            bj_dealer_hits_soft_17=e.bj_dealer_hits_soft_17,
+            bj_max_splits=e.bj_max_splits,
+            bj_session_ttl_minutes=e.bj_session_ttl_minutes,
+            market_watch_enabled=f.market_watch_enabled,
+            market_watch_poll_seconds=f.market_watch_poll_seconds,
+            market_watch_channel_id=f.market_watch_channel_id,
+            market_watch_vix_level=f.market_watch_vix_level,
+            market_watch_index_move_pct=f.market_watch_index_move_pct,
+            market_watch_stock_move_pct=f.market_watch_stock_move_pct,
+            market_watch_tickers=list(f.market_watch_tickers),
+            market_watch_cooldown_minutes=f.market_watch_cooldown_minutes,
+            market_watch_debug=f.market_watch_debug,
+            market_daily_report_enabled=f.market_daily_report_enabled,
+            market_daily_report_channel_id=f.market_daily_report_channel_id,
+            market_daily_report_time=f.market_daily_report_time,
+            market_daily_report_tz=f.market_daily_report_tz,
+            market_daily_report_top_n=f.market_daily_report_top_n,
+            market_daily_report_tickers=list(f.market_daily_report_tickers),
+            market_daily_report_debug=f.market_daily_report_debug,
+            btc_watch_enabled=f.btc_watch_enabled,
+            btc_watch_poll_seconds=f.btc_watch_poll_seconds,
+            btc_watch_channel_id=f.btc_watch_channel_id,
+            btc_watch_label=f.btc_watch_label,
+            btc_watch_addresses=list(f.btc_watch_addresses),
+            btc_esplora_base_url=f.btc_esplora_base_url,
+            btc_watch_cooldown_minutes=f.btc_watch_cooldown_minutes,
+            btc_watch_debug=f.btc_watch_debug,
+            db_path=s.db_path,
+            grades_db_path=s.grades_db_path,
+            lore_path=s.lore_path,
+        )
+
+    @property
+    def effective_workday_poll_seconds(self) -> int:
+        return self.workday_poll_seconds if self.workday_poll_seconds > 0 else self.jobs_poll_seconds
+
+    def secret_values(self) -> tuple[str, ...]:
+        """Return configured secret strings for centralized log/error redaction."""
+        vals = (self.token, self.gemini_api_key, self.go_api_key, self.odds_api_key)
+        return tuple(v.strip() for v in vals if isinstance(v, str) and v.strip())
+
+    def sports_rss_urls(self, sport: str) -> list[str]:
+        """Return configured RSS feed URLs for ``sport`` (or empty list to use built-in defaults)."""
+        return self.sports.rss_urls_for(sport)
+
+    # ---- Compatibility aliases (deprecated callers) ----
+
     @property
     def greenhouse_board_tokens(self) -> list[str]:
+        warnings.warn(
+            "Settings.greenhouse_board_tokens is deprecated; use Settings.greenhouse_boards.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return list(self.greenhouse_boards or [])
 
     @property
     def lever_site_tokens(self) -> list[str]:
+        warnings.warn(
+            "Settings.lever_site_tokens is deprecated; use Settings.lever_sites.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return list(self.lever_sites or [])
 
+    @property
+    def jobs_channel_id(self) -> int:
+        warnings.warn(
+            "Settings.jobs_channel_id is deprecated; use Settings.job_alerts_channel_id.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.job_alerts_channel_id
+
+    def capabilities(self) -> dict[str, CapabilityStatus]:
+        """Return per-feature readiness without exposing secret values."""
+        has_token = bool((self.token or "").strip())
+        has_gemini = bool((self.gemini_api_key or "").strip())
+        has_go_key = bool((self.go_api_key or "").strip())
+        has_odds = bool((self.odds_api_key or "").strip())
+
+        go_chan = int(self.go_alerts_channel_id or 0) or int(self.ttc_alerts_channel_id or 0)
+        mw_chan = int(self.market_watch_channel_id or 0) or int(self.stock_channel_id or 0)
+        dr_chan = int(self.market_daily_report_channel_id or 0) or int(self.stock_channel_id or 0)
+        btc_chan = (
+            int(self.btc_watch_channel_id or 0)
+            or int(self.market_watch_channel_id or 0)
+            or int(self.stock_channel_id or 0)
+        )
+        job_sources = bool(self.greenhouse_boards or self.lever_sites or self.workday_sites)
+
+        return {
+            "discord_gateway": CapabilityStatus(
+                name="discord_gateway",
+                configured=has_token,
+                available=bool(has_token and self.allow_gateway),
+                reason=(
+                    ""
+                    if (has_token and self.allow_gateway)
+                    else ("gateway opt-in disabled" if has_token else "DISCORD_TOKEN not configured")
+                ),
+            ),
+            "llm_assistant": CapabilityStatus(
+                name="llm_assistant",
+                configured=self.llm_enabled,
+                available=bool(self.llm_enabled and has_gemini),
+                reason=(
+                    ""
+                    if (not self.llm_enabled or has_gemini)
+                    else "LLM_ENABLED is true without GEMINI_API_KEY"
+                ),
+            ),
+            "resume_review": CapabilityStatus(
+                name="resume_review",
+                configured=has_gemini,
+                available=has_gemini,
+                reason="" if has_gemini else "GEMINI_API_KEY not configured",
+            ),
+            "odds_api": CapabilityStatus(
+                name="odds_api",
+                configured=has_odds,
+                available=has_odds,
+                reason="" if has_odds else "ODDS_API_KEY not configured (RSS headlines remain active)",
+            ),
+            "ttc_alerts": CapabilityStatus(
+                name="ttc_alerts",
+                configured=bool(self.ttc_alerts_channel_id),
+                available=bool(
+                    self.ttc_alerts_channel_id and self.ttc_mastodon_base and self.ttc_mastodon_acct
+                ),
+                reason=(
+                    ""
+                    if not self.ttc_alerts_channel_id or (self.ttc_mastodon_base and self.ttc_mastodon_acct)
+                    else "Missing TTC_MASTODON_BASE or TTC_MASTODON_ACCT"
+                ),
+            ),
+            "go_alerts": CapabilityStatus(
+                name="go_alerts",
+                configured=bool(go_chan),
+                available=bool(go_chan and has_go_key),
+                reason="" if not go_chan or has_go_key else "GO_API_KEY not configured",
+            ),
+            "job_alerts": CapabilityStatus(
+                name="job_alerts",
+                configured=bool(self.job_alerts_channel_id),
+                available=bool(self.job_alerts_channel_id and job_sources),
+                reason="" if not self.job_alerts_channel_id or job_sources else "No job boards configured",
+            ),
+            "market_watch": CapabilityStatus(
+                name="market_watch",
+                configured=self.market_watch_enabled,
+                available=bool(self.market_watch_enabled and mw_chan),
+                reason="" if not self.market_watch_enabled or mw_chan else "Missing alert channel ID",
+            ),
+            "market_daily_report": CapabilityStatus(
+                name="market_daily_report",
+                configured=self.market_daily_report_enabled,
+                available=bool(self.market_daily_report_enabled and dr_chan),
+                reason="" if not self.market_daily_report_enabled or dr_chan else "Missing report channel ID",
+            ),
+            "btc_watch": CapabilityStatus(
+                name="btc_watch",
+                configured=self.btc_watch_enabled,
+                available=bool(self.btc_watch_enabled and btc_chan and self.btc_watch_addresses),
+                reason=(
+                    ""
+                    if not self.btc_watch_enabled or (btc_chan and self.btc_watch_addresses)
+                    else "Missing BTC watch channel ID or addresses"
+                ),
+            ),
+        }
+
+    def validate(
+        self,
+        *,
+        strict: bool = False,
+        extra_issues: Sequence[ValidationIssue] = (),
+    ) -> ConfigValidationReport:
+        """Validate schema, ranges, formats, URLs, and integration readiness."""
+        issues: list[ValidationIssue] = list(extra_issues)
+
+        def _err(field: str, msg: str) -> None:
+            issues.append(ValidationIssue(field=field, message=msg, severity="error"))
+
+        def _warn(field: str, msg: str) -> None:
+            issues.append(ValidationIssue(field=field, message=msg, severity="warning"))
+
+        # Snowflakes
+        if self.guild_id_invalid:
+            _err("guild_id", f"GUILD_ID exceeds MAX_SNOWFLAKE ({MAX_SNOWFLAKE}).")
+
+        snowflake_fields = (
+            ("guild_id", self.guild_id),
+            ("stock_channel_id", self.stock_channel_id),
+            ("user_command_channel_id", self.user_command_channel_id),
+            ("ttc_alerts_channel_id", self.ttc_alerts_channel_id),
+            ("job_alerts_channel_id", self.job_alerts_channel_id),
+            ("go_alerts_channel_id", self.go_alerts_channel_id),
+            ("market_watch_channel_id", self.market_watch_channel_id),
+            ("market_daily_report_channel_id", self.market_daily_report_channel_id),
+            ("btc_watch_channel_id", self.btc_watch_channel_id),
+        )
+        for fname, val in snowflake_fields:
+            if not _is_valid_snowflake(val, allow_zero=True):
+                _err(fname, f"{fname} must be an integer between 0 and {MAX_SNOWFLAKE}.")
+
+        for rid in self.allowed_role_ids or ():
+            if not _is_valid_snowflake(rid, allow_zero=False):
+                _err("allowed_role_ids", f"Role ID must be in range 1..{MAX_SNOWFLAKE}.")
+
+        # Color
+        if (
+            isinstance(self.embed_accent_color, bool)
+            or not isinstance(self.embed_accent_color, int)
+            or not (0 <= self.embed_accent_color <= 0xFFFFFF)
+        ):
+            _err(
+                "embed_accent_color", "embed_accent_color must be a 24-bit RGB integer (0x000000..0xFFFFFF)."
+            )
+
+        # URLs
+        if self.embed_logo_url and not _is_valid_http_url(self.embed_logo_url):
+            _err("embed_logo_url", "embed_logo_url must be a valid http:// or https:// URL.")
+        if self.ttc_mastodon_base and not _is_valid_http_url(self.ttc_mastodon_base):
+            _err("ttc_mastodon_base", "ttc_mastodon_base must be a valid http:// or https:// URL.")
+        if self.go_api_base and not _is_valid_http_url(self.go_api_base):
+            _err("go_api_base", "go_api_base must be a valid http:// or https:// URL.")
+        if not self.go_api_base and self.go_alerts_channel_id and self.go_api_key:
+            _err("go_api_base", "go_api_base cannot be empty when GO alerts are enabled.")
+        if self.btc_esplora_base_url and not _is_valid_http_url(self.btc_esplora_base_url):
+            _err("btc_esplora_base_url", "btc_esplora_base_url must be a valid http:// or https:// URL.")
+
+        for sport_field in (
+            "sports_rss_nba",
+            "sports_rss_nfl",
+            "sports_rss_mma",
+            "sports_rss_ufc",
+            "sports_rss_boxing",
+        ):
+            raw_urls = _to_str_list(getattr(self, sport_field, ""))
+            for u in raw_urls:
+                if not _is_valid_http_url(u):
+                    _err(sport_field, f"{sport_field} contains invalid URL: {u!r}")
+
+        for site in self.notes_sites or ():
+            parts = str(site).split("|", 1)
+            if len(parts) != 2 or not parts[0].strip():
+                _err("notes_sites", "notes_sites entries must use 'Title|https://...' format.")
+            else:
+                site_url = parts[1].strip().strip('"').strip("'")
+                if not _is_valid_http_url(site_url):
+                    _err("notes_sites", f"notes_sites entry for {parts[0].strip()!r} has invalid URL.")
+
+        for wd in self.workday_sites or ():
+            parts = [p.strip() for p in str(wd).split("|")]
+            if len(parts) < 2 or not parts[0] or not parts[1]:
+                _err("workday_sites", "workday_sites entries must use 'Label|URL' format.")
+            else:
+                cand = parts[1]
+                if "://" in cand and not _is_valid_http_url(cand):
+                    _err("workday_sites", f"workday_sites entry {parts[0]!r} has invalid careers URL.")
+                if len(parts) >= 3 and parts[2] and "://" in parts[2] and not _is_valid_http_url(parts[2]):
+                    _err("workday_sites", f"workday_sites entry {parts[0]!r} has invalid API override URL.")
+
+        # Enums
+        if (self.ttc_alert_level or "").strip().lower() not in _VALID_ALERT_LEVELS:
+            _err("ttc_alert_level", "ttc_alert_level must be 'major' or 'all'.")
+        if (self.go_alert_level or "").strip().lower() not in _VALID_ALERT_LEVELS:
+            _err("go_alert_level", "go_alert_level must be 'major' or 'all'.")
+
+        # Timezones & HH:MM
+        if not _is_valid_tz(self.exams_tz):
+            _err("exams_tz", f"Unknown IANA timezone for exams_tz: {self.exams_tz!r}")
+        if not _is_valid_tz(self.market_daily_report_tz):
+            _err(
+                "market_daily_report_tz",
+                f"Unknown IANA timezone for market_daily_report_tz: {self.market_daily_report_tz!r}",
+            )
+        if not _is_valid_hhmm(self.market_daily_report_time):
+            _err(
+                "market_daily_report_time",
+                f"market_daily_report_time must use 24-hour HH:MM format, got {self.market_daily_report_time!r}",
+            )
+
+        # Storage paths
+        if not (self.db_path or "").strip():
+            _err("db_path", "db_path must not be empty.")
+        if not (self.grades_db_path or "").strip():
+            _err("grades_db_path", "grades_db_path must not be empty.")
+
+        # Bounds
+        poll_fields = (
+            ("ttc_poll_seconds", self.ttc_poll_seconds),
+            ("go_poll_seconds", self.go_poll_seconds),
+            ("jobs_poll_seconds", self.jobs_poll_seconds),
+            ("workday_poll_seconds", self.workday_poll_seconds),
+            ("market_watch_poll_seconds", self.market_watch_poll_seconds),
+            ("btc_watch_poll_seconds", self.btc_watch_poll_seconds),
+        )
+        for fname, val in poll_fields:
+            if val < 0:
+                _err(fname, f"{fname} must be >= 0 (got {val}).")
+
+        if self.workday_timeout_seconds < 1:
+            _err("workday_timeout_seconds", "workday_timeout_seconds must be >= 1.")
+        if self.llm_cooldown_seconds < 0:
+            _err("llm_cooldown_seconds", "llm_cooldown_seconds must be >= 0.")
+        if self.llm_max_messages < 1:
+            _err("llm_max_messages", "llm_max_messages must be >= 1.")
+        if self.llm_max_chars < 100:
+            _err("llm_max_chars", "llm_max_chars must be >= 100.")
+        if self.llm_max_image_bytes < 0:
+            _err("llm_max_image_bytes", "llm_max_image_bytes must be >= 0.")
+        if self.llm_max_output_tokens < 1:
+            _err("llm_max_output_tokens", "llm_max_output_tokens must be >= 1.")
+        if self.daily_claim_amount < 0:
+            _err("daily_claim_amount", "daily_claim_amount must be >= 0.")
+        if self.bj_starting_bankroll < 1:
+            _err("bj_starting_bankroll", "bj_starting_bankroll must be >= 1.")
+        if self.bj_max_splits < 0:
+            _err("bj_max_splits", "bj_max_splits must be >= 0.")
+        if self.bj_session_ttl_minutes < 1:
+            _err("bj_session_ttl_minutes", "bj_session_ttl_minutes must be >= 1.")
+        if not math.isfinite(self.market_watch_vix_level) or self.market_watch_vix_level <= 0:
+            _err("market_watch_vix_level", "market_watch_vix_level must be > 0.")
+        if not math.isfinite(self.market_watch_index_move_pct) or self.market_watch_index_move_pct <= 0:
+            _err("market_watch_index_move_pct", "market_watch_index_move_pct must be > 0.")
+        if not math.isfinite(self.market_watch_stock_move_pct) or self.market_watch_stock_move_pct <= 0:
+            _err("market_watch_stock_move_pct", "market_watch_stock_move_pct must be > 0.")
+        if self.market_watch_cooldown_minutes < 0:
+            _err("market_watch_cooldown_minutes", "market_watch_cooldown_minutes must be >= 0.")
+        if self.market_daily_report_top_n < 1:
+            _err("market_daily_report_top_n", "market_daily_report_top_n must be >= 1.")
+        if self.btc_watch_cooldown_minutes < 0:
+            _err("btc_watch_cooldown_minutes", "btc_watch_cooldown_minutes must be >= 0.")
+
+        # Enabled integration prerequisite warnings (non-fatal degradation)
+        caps = self.capabilities()
+        for cap_name in (
+            "llm_assistant",
+            "ttc_alerts",
+            "go_alerts",
+            "market_watch",
+            "market_daily_report",
+            "btc_watch",
+        ):
+            cap = caps[cap_name]
+            if cap.configured and not cap.available and cap.reason:
+                _warn(cap_name, cap.reason)
+
+        report = ConfigValidationReport(issues=tuple(issues), capabilities=caps)
+        if strict and not report.is_valid:
+            secrets = self.secret_values()
+            details = "; ".join(f"{e.field}: {redact_secrets(e.message, secrets)}" for e in report.errors)
+            raise ConfigValidationError(f"Invalid configuration ({details})")
+        return report
+
     @classmethod
-    def from_env(cls) -> Settings:
-        token = os.getenv("DISCORD_TOKEN", "").strip()
+    def from_env(
+        cls,
+        *,
+        strict: bool = False,
+        environ: Mapping[str, str] | None = None,
+    ) -> Settings:
+        """Load settings from environment variables.
 
-        guild_raw = os.getenv("GUILD_ID", "").strip()
-        guild_id = _to_int(guild_raw, 0, clamp_snowflake=True)
-        guild_id_invalid = bool(guild_raw) and (guild_id == 0) and (_to_int(guild_raw, 0) > MAX_SNOWFLAKE)
+        When ``strict=False`` (default), preserves legacy tolerant parsing/clamping
+        so existing dev setups and unit tests degrade safely. When ``strict=True``,
+        raises ``ConfigValidationError`` on malformed env values or constraint failures.
+        """
+        env = os.environ if environ is None else environ
+        raw_issues: list[ValidationIssue] = []
 
-        stock_channel_id = _to_int(os.getenv("STOCK_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
-        user_command_channel_id = _to_int(os.getenv("USER_COMMAND_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
-        ttc_alerts_channel_id = _to_int(os.getenv("TTC_ALERTS_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
-        job_alerts_channel_id = _to_int(os.getenv("JOB_ALERTS_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
+        def _env(key: str, default: str = "") -> str:
+            v = env.get(key)
+            return default if v is None else str(v)
 
-        allowed_roles = _to_str_list(os.getenv("ALLOWED_ROLE_IDS", ""))
+        def _parse_int_field(env_key: str, field: str, default: int, *, snowflake: bool = False) -> int:
+            raw = _env(env_key, "").strip()
+            if not raw:
+                return default
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                raw_issues.append(ValidationIssue(field, f"{env_key} must be an integer.", "error"))
+                return default
+            if snowflake and (n < 0 or n > MAX_SNOWFLAKE):
+                raw_issues.append(
+                    ValidationIssue(field, f"{env_key} must be between 0 and {MAX_SNOWFLAKE}.", "error")
+                )
+                return 0
+            return n
+
+        def _parse_float_field(env_key: str, field: str, default: float) -> float:
+            raw = _env(env_key, "").strip()
+            if not raw:
+                return default
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                raw_issues.append(ValidationIssue(field, f"{env_key} must be numeric.", "error"))
+                return default
+
+        def _parse_bool_field(env_key: str, field: str, default: bool) -> bool:
+            raw = _env(env_key, "").strip().lower()
+            if not raw:
+                return default
+            if raw in _TRUE_VALUES:
+                return True
+            if raw in _FALSE_VALUES:
+                return False
+            raw_issues.append(ValidationIssue(field, f"{env_key} must be a boolean.", "error"))
+            return default
+
+        # Legacy environment variable warnings (never expose values!)
+        if _env("ALPHAVANTAGE_API_KEY", "").strip():
+            warnings.warn(
+                "ALPHAVANTAGE_API_KEY is deprecated and unused; market quotes use Yahoo Finance.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        token = _env("DISCORD_TOKEN", "").strip()
+
+        guild_raw = _env("GUILD_ID", "").strip()
+        guild_id = 0
+        guild_id_invalid = False
+        if guild_raw:
+            try:
+                parsed_gid = int(guild_raw)
+            except (TypeError, ValueError):
+                raw_issues.append(ValidationIssue("guild_id", "GUILD_ID must be an integer.", "error"))
+            else:
+                if parsed_gid < 0:
+                    raw_issues.append(
+                        ValidationIssue(
+                            "guild_id", f"GUILD_ID must be between 0 and {MAX_SNOWFLAKE}.", "error"
+                        )
+                    )
+                elif parsed_gid > MAX_SNOWFLAKE:
+                    guild_id_invalid = True
+                    raw_issues.append(
+                        ValidationIssue(
+                            "guild_id", f"GUILD_ID must be between 0 and {MAX_SNOWFLAKE}.", "error"
+                        )
+                    )
+                else:
+                    guild_id = parsed_gid
+
+        stock_channel_id = _parse_int_field("STOCK_CHANNEL_ID", "stock_channel_id", 0, snowflake=True)
+        user_command_channel_id = _parse_int_field(
+            "USER_COMMAND_CHANNEL_ID", "user_command_channel_id", 0, snowflake=True
+        )
+
+        ttc_env_raw = _env("TTC_ALERTS_CHANNEL_ID", "").strip()
+        legacy_ttc_raw = _env("TTC_CHANNEL_ID", "").strip()
+        if ttc_env_raw:
+            ttc_alerts_channel_id = _parse_int_field(
+                "TTC_ALERTS_CHANNEL_ID", "ttc_alerts_channel_id", 0, snowflake=True
+            )
+        elif legacy_ttc_raw:
+            warnings.warn(
+                "TTC_CHANNEL_ID is deprecated; use TTC_ALERTS_CHANNEL_ID.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            ttc_alerts_channel_id = _parse_int_field(
+                "TTC_CHANNEL_ID", "ttc_alerts_channel_id", 0, snowflake=True
+            )
+        else:
+            ttc_alerts_channel_id = 0
+
+        job_env_raw = _env("JOB_ALERTS_CHANNEL_ID", "").strip()
+        legacy_jobs_raw = _env("JOBS_CHANNEL_ID", "").strip()
+        if job_env_raw:
+            job_alerts_channel_id = _parse_int_field(
+                "JOB_ALERTS_CHANNEL_ID", "job_alerts_channel_id", 0, snowflake=True
+            )
+        elif legacy_jobs_raw:
+            warnings.warn(
+                "JOBS_CHANNEL_ID is deprecated; use JOB_ALERTS_CHANNEL_ID.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            job_alerts_channel_id = _parse_int_field(
+                "JOBS_CHANNEL_ID", "job_alerts_channel_id", 0, snowflake=True
+            )
+        else:
+            job_alerts_channel_id = 0
+
+        allowed_roles = _to_str_list(_env("ALLOWED_ROLE_IDS", ""))
         allowed_role_ids: list[int] = []
         for r in allowed_roles:
-            n = _to_int(r, 0, clamp_snowflake=True)
-            if n:
-                allowed_role_ids.append(n)
+            try:
+                n = int(r)
+            except ValueError:
+                raw_issues.append(
+                    ValidationIssue("allowed_role_ids", "ALLOWED_ROLE_IDS must contain integer IDs.", "error")
+                )
+                continue
+            if n <= 0 or n > MAX_SNOWFLAKE:
+                raw_issues.append(
+                    ValidationIssue(
+                        "allowed_role_ids",
+                        f"ALLOWED_ROLE_IDS contains out-of-range snowflake (1..{MAX_SNOWFLAKE}).",
+                        "error",
+                    )
+                )
+                continue
+            allowed_role_ids.append(n)
 
-        embed_logo_url = os.getenv("EMBED_LOGO_URL", "").strip()
-        embed_accent_color = _to_color(os.getenv("EMBED_ACCENT_COLOR", ""), 0xA64DFF)
-        embed_footer_text = os.getenv("EMBED_FOOTER_TEXT", "Instigate Cafe").strip() or "Instigate Cafe"
+        embed_logo_url = _env("EMBED_LOGO_URL", "").strip()
+        raw_color = _env("EMBED_ACCENT_COLOR", "").strip()
+        if raw_color and _to_color(raw_color, -1) == -1:
+            raw_issues.append(
+                ValidationIssue(
+                    "embed_accent_color",
+                    "EMBED_ACCENT_COLOR must be '#RRGGBB', '0xRRGGBB', 'RRGGBB', or decimal int.",
+                    "error",
+                )
+            )
+        embed_accent_color = _to_color(raw_color, 0xA64DFF)
+        embed_footer_text = _env("EMBED_FOOTER_TEXT", "Instigate Cafe").strip() or "Instigate Cafe"
 
-        odds_api_key = os.getenv("ODDS_API_KEY", "").strip()
+        odds_api_key = _env("ODDS_API_KEY", "").strip()
+        sports_rss_nba = _env("SPORTS_RSS_NBA", "").strip()
+        sports_rss_nfl = _env("SPORTS_RSS_NFL", "").strip()
+        sports_rss_mma = _env("SPORTS_RSS_MMA", "").strip()
+        sports_rss_ufc = _env("SPORTS_RSS_UFC", "").strip()
+        sports_rss_boxing = _env("SPORTS_RSS_BOXING", "").strip()
 
-        ttc_mastodon_base = os.getenv("TTC_MASTODON_BASE", "").strip()
-        ttc_mastodon_acct = os.getenv("TTC_MASTODON_ACCT", "").strip()
-        ttc_poll_seconds = _to_int(os.getenv("TTC_POLL_SECONDS", "120"), 120)
-        ttc_alert_level = os.getenv("TTC_ALERT_LEVEL", "major").strip().lower() or "major"
-        ttc_bootstrap_post_latest = _to_bool(os.getenv("TTC_BOOTSTRAP_POST_LATEST", "false"), False)
-        ttc_include_replies = _to_bool(os.getenv("TTC_INCLUDE_REPLIES", "true"), True)
-        ttc_include_reblogs = _to_bool(os.getenv("TTC_INCLUDE_REBLOGS", "false"), False)
-        ttc_debug = _to_bool(os.getenv("TTC_DEBUG", "false"), False)
+        ttc_mastodon_base = _env("TTC_MASTODON_BASE", "").strip()
+        ttc_mastodon_acct = _env("TTC_MASTODON_ACCT", "").strip()
+        ttc_poll_seconds = _parse_int_field("TTC_POLL_SECONDS", "ttc_poll_seconds", 120)
+        ttc_alert_level = _env("TTC_ALERT_LEVEL", "major").strip().lower() or "major"
+        ttc_bootstrap_post_latest = _parse_bool_field(
+            "TTC_BOOTSTRAP_POST_LATEST", "ttc_bootstrap_post_latest", False
+        )
+        ttc_include_replies = _parse_bool_field("TTC_INCLUDE_REPLIES", "ttc_include_replies", True)
+        ttc_include_reblogs = _parse_bool_field("TTC_INCLUDE_REBLOGS", "ttc_include_reblogs", False)
+        ttc_debug = _parse_bool_field("TTC_DEBUG", "ttc_debug", False)
 
         go_api_base = (
-            os.getenv("GO_API_BASE", "https://api.openmetrolinx.com/OpenDataAPI/api/V1").strip()
+            _env("GO_API_BASE", "https://api.openmetrolinx.com/OpenDataAPI/api/V1").strip()
             or "https://api.openmetrolinx.com/OpenDataAPI/api/V1"
         )
-        go_api_key = os.getenv("GO_API_KEY", "").strip()
-        go_alerts_channel_id = _to_int(os.getenv("GO_ALERTS_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
-        go_poll_seconds = _to_int(os.getenv("GO_POLL_SECONDS", "180"), 180)
-        go_alert_level = os.getenv("GO_ALERT_LEVEL", "major").strip().lower() or "major"
-        go_bootstrap_post_latest = _to_bool(os.getenv("GO_BOOTSTRAP_POST_LATEST", "true"), True)
-        go_include_buses = _to_bool(os.getenv("GO_INCLUDE_BUSES", "false"), False)
-        go_lines_allowlist = _to_str_list(os.getenv("GO_LINES_ALLOWLIST", ""))
-        go_ssl_verify = _to_bool(os.getenv("GO_SSL_VERIFY", "true"), True)
-        go_ca_bundle_path = os.getenv("GO_CA_BUNDLE_PATH", "").strip()
-        go_debug = _to_bool(os.getenv("GO_DEBUG", "false"), False)
+        go_api_key = _env("GO_API_KEY", "").strip()
+        go_alerts_channel_id = _parse_int_field(
+            "GO_ALERTS_CHANNEL_ID", "go_alerts_channel_id", 0, snowflake=True
+        )
+        go_poll_seconds = _parse_int_field("GO_POLL_SECONDS", "go_poll_seconds", 180)
+        go_alert_level = _env("GO_ALERT_LEVEL", "major").strip().lower() or "major"
+        go_bootstrap_post_latest = _parse_bool_field(
+            "GO_BOOTSTRAP_POST_LATEST", "go_bootstrap_post_latest", True
+        )
+        go_include_buses = _parse_bool_field("GO_INCLUDE_BUSES", "go_include_buses", False)
+        go_lines_allowlist = _to_str_list(_env("GO_LINES_ALLOWLIST", ""))
+        go_ssl_verify = _parse_bool_field("GO_SSL_VERIFY", "go_ssl_verify", True)
+        go_ca_bundle_path = _env("GO_CA_BUNDLE_PATH", "").strip()
+        go_debug = _parse_bool_field("GO_DEBUG", "go_debug", False)
 
         # LLM mention assistant (Gemini)
-        llm_enabled = _to_bool(os.getenv("LLM_ENABLED", "false"), False)
-        llm_cooldown_seconds = _to_int(os.getenv("LLM_COOLDOWN_SECONDS", "3"), 3)
-        llm_max_messages = _to_int(os.getenv("LLM_MAX_MESSAGES", "25"), 25)
-        llm_max_chars = _to_int(os.getenv("LLM_MAX_CHARS", "12000"), 12000)
-        llm_debug = _to_bool(os.getenv("LLM_DEBUG", "false"), False)
-        gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
-        gemini_resume_model = os.getenv("GEMINI_RESUME_MODEL", "gemini-2.5-pro").strip() or "gemini-2.5-pro"
-        gemini_resume_prompt = os.getenv("GEMINI_RESUME_PROMPT", "").strip()
-        gemini_resume_prompt_hw = os.getenv("GEMINI_RESUME_PROMPT_HW", "").strip()
-        gemini_resume_prompt_ele = os.getenv("GEMINI_RESUME_PROMPT_ELE", "").strip()
+        llm_enabled = _parse_bool_field("LLM_ENABLED", "llm_enabled", False)
+        llm_cooldown_seconds = _parse_int_field("LLM_COOLDOWN_SECONDS", "llm_cooldown_seconds", 3)
+        llm_max_messages = _parse_int_field("LLM_MAX_MESSAGES", "llm_max_messages", 25)
+        llm_max_chars = _parse_int_field("LLM_MAX_CHARS", "llm_max_chars", 12000)
+        llm_max_image_bytes = _parse_int_field("LLM_MAX_IMAGE_BYTES", "llm_max_image_bytes", 2_000_000)
+        llm_max_output_tokens = _parse_int_field("LLM_MAX_OUTPUT_TOKENS", "llm_max_output_tokens", 1536)
+        llm_debug = _parse_bool_field("LLM_DEBUG", "llm_debug", False)
+        gemini_api_key = _env("GEMINI_API_KEY", "").strip()
 
-        jobs_poll_seconds = _to_int(os.getenv("JOBS_POLL_SECONDS", "600"), 600)
-        greenhouse_boards = _to_str_list(os.getenv("GREENHOUSE_BOARDS", ""))
-        lever_sites = _to_str_list(os.getenv("LEVER_SITES", ""))
-        jobs_location_allowlist = _to_str_list(os.getenv("JOBS_LOCATION_ALLOWLIST", ""))
-        jobs_keywords_allowlist = _to_str_list(os.getenv("JOBS_KEYWORDS_ALLOWLIST", ""))
-        jobs_keywords_denylist = _to_str_list(os.getenv("JOBS_KEYWORDS_DENYLIST", ""))
-        jobs_bootstrap_post = _to_bool(os.getenv("JOBS_BOOTSTRAP_POST", "false"), False)
-        jobs_require_early_career = _to_bool(os.getenv("JOBS_REQUIRE_EARLY_CAREER", "false"), False)
+        gemini_model_env = _env("GEMINI_MODEL", "").strip()
+        legacy_llm_model = _env("LLM_MODEL", "").strip()
+        if gemini_model_env:
+            gemini_model = gemini_model_env
+        elif legacy_llm_model:
+            warnings.warn(
+                "LLM_MODEL is deprecated; use GEMINI_MODEL.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            gemini_model = legacy_llm_model
+        else:
+            gemini_model = "gemini-2.5-flash"
 
-        # Workday (new)
-        workday_sites = _to_str_list(os.getenv("WORKDAY_SITES", ""))
-        workday_poll_seconds = _to_int(os.getenv("WORKDAY_POLL_SECONDS", "0"), 0)
-        workday_timeout_seconds = _to_int(os.getenv("WORKDAY_TIMEOUT_SECONDS", "12"), 12)
+        gemini_resume_model = _env("GEMINI_RESUME_MODEL", "gemini-2.5-pro").strip() or "gemini-2.5-pro"
+        gemini_resume_prompt = _env("GEMINI_RESUME_PROMPT", "").strip()
+        gemini_resume_prompt_hw = _env("GEMINI_RESUME_PROMPT_HW", "").strip()
+        gemini_resume_prompt_ele = _env("GEMINI_RESUME_PROMPT_ELE", "").strip()
 
-        force_guild_resync = _to_bool(os.getenv("FORCE_GUILD_RESYNC", "false"), False)
-        allow_gateway = _to_bool(os.getenv("ICBOT_ALLOW_GATEWAY", "false"), False)
+        jobs_poll_seconds = _parse_int_field("JOBS_POLL_SECONDS", "jobs_poll_seconds", 600)
+        greenhouse_boards = _to_str_list(_env("GREENHOUSE_BOARDS", ""))
+        lever_sites = _to_str_list(_env("LEVER_SITES", ""))
+        jobs_location_allowlist = _to_str_list(_env("JOBS_LOCATION_ALLOWLIST", ""))
+        jobs_keywords_allowlist = _to_str_list(_env("JOBS_KEYWORDS_ALLOWLIST", ""))
+        jobs_keywords_denylist = _to_str_list(_env("JOBS_KEYWORDS_DENYLIST", ""))
+        jobs_bootstrap_post = _parse_bool_field("JOBS_BOOTSTRAP_POST", "jobs_bootstrap_post", False)
+        jobs_require_early_career = _parse_bool_field(
+            "JOBS_REQUIRE_EARLY_CAREER", "jobs_require_early_career", False
+        )
 
-        daily_claim_amount = _to_int(os.getenv("DAILY_CLAIM_AMOUNT", "100"), 100)
+        # Workday
+        workday_sites = _to_str_list(_env("WORKDAY_SITES", ""))
+        workday_poll_seconds = _parse_int_field("WORKDAY_POLL_SECONDS", "workday_poll_seconds", 0)
+        workday_timeout_seconds = _parse_int_field("WORKDAY_TIMEOUT_SECONDS", "workday_timeout_seconds", 12)
 
-        bj_starting_bankroll = _to_int(os.getenv("BJ_STARTING_BANKROLL", "1000"), 1000)
-        bj_dealer_hits_soft_17 = _to_bool(os.getenv("BJ_DEALER_HITS_SOFT_17", "true"), True)
-        bj_max_splits = _to_int(os.getenv("BJ_MAX_SPLITS", "1"), 1)
-        bj_session_ttl_minutes = _to_int(os.getenv("BJ_SESSION_TTL_MINUTES", "20"), 20)
+        force_guild_resync = _parse_bool_field("FORCE_GUILD_RESYNC", "force_guild_resync", False)
+        allow_gateway = _parse_bool_field("ICBOT_ALLOW_GATEWAY", "allow_gateway", False)
 
-        market_watch_enabled = _to_bool(os.getenv("MARKET_WATCH_ENABLED", "false"), False)
-        market_watch_poll_seconds = _to_int(os.getenv("MARKET_WATCH_POLL_SECONDS", "60"), 60)
-        market_watch_channel_id = _to_int(os.getenv("MARKET_WATCH_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
-        market_watch_vix_level = _to_float(os.getenv("MARKET_WATCH_VIX_LEVEL", "20"), 20.0)
-        market_watch_index_move_pct = _to_float(os.getenv("MARKET_WATCH_INDEX_MOVE_PCT", "2.5"), 2.5)
-        market_watch_stock_move_pct = _to_float(os.getenv("MARKET_WATCH_STOCK_MOVE_PCT", "10"), 10.0)
-        market_watch_tickers = _to_str_list(os.getenv("MARKET_WATCH_TICKERS", ""))
-        market_watch_cooldown_minutes = _to_int(os.getenv("MARKET_WATCH_COOLDOWN_MINUTES", "30"), 30)
+        daily_claim_amount = _parse_int_field("DAILY_CLAIM_AMOUNT", "daily_claim_amount", 100)
+
+        bj_starting_bankroll = _parse_int_field("BJ_STARTING_BANKROLL", "bj_starting_bankroll", 1000)
+        bj_dealer_hits_soft_17 = _parse_bool_field("BJ_DEALER_HITS_SOFT_17", "bj_dealer_hits_soft_17", True)
+        bj_max_splits = _parse_int_field("BJ_MAX_SPLITS", "bj_max_splits", 1)
+        bj_session_ttl_minutes = _parse_int_field("BJ_SESSION_TTL_MINUTES", "bj_session_ttl_minutes", 20)
+
+        market_watch_enabled = _parse_bool_field("MARKET_WATCH_ENABLED", "market_watch_enabled", False)
+        market_watch_poll_seconds = _parse_int_field(
+            "MARKET_WATCH_POLL_SECONDS", "market_watch_poll_seconds", 60
+        )
+        market_watch_channel_id = _parse_int_field(
+            "MARKET_WATCH_CHANNEL_ID", "market_watch_channel_id", 0, snowflake=True
+        )
+        market_watch_vix_level = _parse_float_field("MARKET_WATCH_VIX_LEVEL", "market_watch_vix_level", 20.0)
+        market_watch_index_move_pct = _parse_float_field(
+            "MARKET_WATCH_INDEX_MOVE_PCT", "market_watch_index_move_pct", 2.5
+        )
+        market_watch_stock_move_pct = _parse_float_field(
+            "MARKET_WATCH_STOCK_MOVE_PCT", "market_watch_stock_move_pct", 10.0
+        )
+        market_watch_tickers = _to_str_list(_env("MARKET_WATCH_TICKERS", ""))
+        market_watch_cooldown_minutes = _parse_int_field(
+            "MARKET_WATCH_COOLDOWN_MINUTES", "market_watch_cooldown_minutes", 30
+        )
+        market_watch_debug = _parse_bool_field("MARKET_WATCH_DEBUG", "market_watch_debug", False)
 
         # Daily market summary
-        market_daily_report_enabled = _to_bool(os.getenv("MARKET_DAILY_REPORT_ENABLED", "false"), False)
-        market_daily_report_channel_id = _to_int(
-            os.getenv("MARKET_DAILY_REPORT_CHANNEL_ID", "0"), 0, clamp_snowflake=True
+        market_daily_report_enabled = _parse_bool_field(
+            "MARKET_DAILY_REPORT_ENABLED", "market_daily_report_enabled", False
         )
-        market_daily_report_time = os.getenv("MARKET_DAILY_REPORT_TIME", "16:30").strip() or "16:30"
+        market_daily_report_channel_id = _parse_int_field(
+            "MARKET_DAILY_REPORT_CHANNEL_ID", "market_daily_report_channel_id", 0, snowflake=True
+        )
+        market_daily_report_time = _env("MARKET_DAILY_REPORT_TIME", "16:30").strip() or "16:30"
         market_daily_report_tz = (
-            os.getenv("MARKET_DAILY_REPORT_TZ", "America/Toronto").strip() or "America/Toronto"
+            _env("MARKET_DAILY_REPORT_TZ", "America/Toronto").strip() or "America/Toronto"
         )
-        market_daily_report_top_n = _to_int(os.getenv("MARKET_DAILY_REPORT_TOP_N", "8"), 8)
-        market_daily_report_tickers = _to_str_list(os.getenv("MARKET_DAILY_REPORT_TICKERS", ""))
+        market_daily_report_top_n = _parse_int_field(
+            "MARKET_DAILY_REPORT_TOP_N", "market_daily_report_top_n", 8
+        )
+        market_daily_report_tickers = _to_str_list(_env("MARKET_DAILY_REPORT_TICKERS", ""))
+        market_daily_report_debug = _parse_bool_field(
+            "MARKET_DAILY_REPORT_DEBUG", "market_daily_report_debug", False
+        )
 
         # Bitcoin address watch
-        btc_watch_enabled = _to_bool(os.getenv("BTC_WATCH_ENABLED", "false"), False)
-        btc_watch_poll_seconds = _to_int(os.getenv("BTC_WATCH_POLL_SECONDS", "300"), 300)
-        btc_watch_channel_id = _to_int(os.getenv("BTC_WATCH_CHANNEL_ID", "0"), 0, clamp_snowflake=True)
-        btc_watch_label = os.getenv("BTC_WATCH_LABEL", "BTC Watch").strip() or "BTC Watch"
-        btc_watch_addresses = _to_str_list(os.getenv("BTC_WATCH_ADDRESSES", ""))
-        btc_esplora_base_url = os.getenv("BTC_ESPLORA_BASE_URL", "").strip()
-        btc_watch_cooldown_minutes = _to_int(os.getenv("BTC_WATCH_COOLDOWN_MINUTES", "30"), 30)
+        btc_watch_enabled = _parse_bool_field("BTC_WATCH_ENABLED", "btc_watch_enabled", False)
+        btc_watch_poll_seconds = _parse_int_field("BTC_WATCH_POLL_SECONDS", "btc_watch_poll_seconds", 300)
+        btc_watch_channel_id = _parse_int_field(
+            "BTC_WATCH_CHANNEL_ID", "btc_watch_channel_id", 0, snowflake=True
+        )
+        btc_watch_label = _env("BTC_WATCH_LABEL", "BTC Watch").strip() or "BTC Watch"
+        btc_watch_addresses = _to_str_list(_env("BTC_WATCH_ADDRESSES", ""))
+        btc_esplora_base_url = _env("BTC_ESPLORA_BASE_URL", "").strip()
+        btc_watch_cooldown_minutes = _parse_int_field(
+            "BTC_WATCH_COOLDOWN_MINUTES", "btc_watch_cooldown_minutes", 30
+        )
+        btc_watch_debug = _parse_bool_field("BTC_WATCH_DEBUG", "btc_watch_debug", False)
 
-        db_path = os.getenv("DB_PATH", "ic_stock.db").strip() or "ic_stock.db"
-        exams_tz = os.getenv("EXAMS_TZ", "America/Toronto").strip() or "America/Toronto"
-        notes_sites = _to_str_list(os.getenv("NOTES_SITES", ""))
-        lore_path = os.getenv("LORE_PATH", "").strip()
+        db_path = _env("DB_PATH", "ic_stock.db").strip() or "ic_stock.db"
+        grades_db_path = _env("GRADES_DB_PATH", "tmu_grades.db").strip() or "tmu_grades.db"
+        exams_tz = _env("EXAMS_TZ", "America/Toronto").strip() or "America/Toronto"
+        notes_sites = _to_str_list(_env("NOTES_SITES", ""))
+        lore_path = _env("LORE_PATH", "").strip()
         rmp_university = (
-            os.getenv("RMP_UNIVERSITY", "Toronto Metropolitan University").strip()
+            _env("RMP_UNIVERSITY", "Toronto Metropolitan University").strip()
             or "Toronto Metropolitan University"
         )
 
-        # Default workday poll seconds to jobs poll seconds if unset
-        if workday_poll_seconds <= 0:
-            workday_poll_seconds = jobs_poll_seconds
+        # Preserve fallback rule only when workday_poll_seconds was non-negative unset/zero
+        if workday_poll_seconds == 0:
+            workday_poll_seconds = max(0, jobs_poll_seconds)
 
-        return cls(
+        settings = cls(
             token=token,
             guild_id=guild_id,
             guild_id_raw=guild_raw,
@@ -396,6 +1426,11 @@ class Settings:
             embed_accent_color=embed_accent_color,
             embed_footer_text=embed_footer_text,
             odds_api_key=odds_api_key,
+            sports_rss_nba=sports_rss_nba,
+            sports_rss_nfl=sports_rss_nfl,
+            sports_rss_mma=sports_rss_mma,
+            sports_rss_ufc=sports_rss_ufc,
+            sports_rss_boxing=sports_rss_boxing,
             ttc_mastodon_base=ttc_mastodon_base,
             ttc_mastodon_acct=ttc_mastodon_acct,
             ttc_poll_seconds=ttc_poll_seconds,
@@ -415,10 +1450,13 @@ class Settings:
             go_ssl_verify=go_ssl_verify,
             go_ca_bundle_path=go_ca_bundle_path,
             go_debug=go_debug,
+            exams_tz=exams_tz,
             llm_enabled=llm_enabled,
             llm_cooldown_seconds=llm_cooldown_seconds,
             llm_max_messages=llm_max_messages,
             llm_max_chars=llm_max_chars,
+            llm_max_image_bytes=llm_max_image_bytes,
+            llm_max_output_tokens=llm_max_output_tokens,
             llm_debug=llm_debug,
             gemini_api_key=gemini_api_key,
             gemini_model=gemini_model,
@@ -452,12 +1490,14 @@ class Settings:
             market_watch_stock_move_pct=market_watch_stock_move_pct,
             market_watch_tickers=market_watch_tickers,
             market_watch_cooldown_minutes=market_watch_cooldown_minutes,
+            market_watch_debug=market_watch_debug,
             market_daily_report_enabled=market_daily_report_enabled,
             market_daily_report_channel_id=market_daily_report_channel_id,
             market_daily_report_time=market_daily_report_time,
             market_daily_report_tz=market_daily_report_tz,
             market_daily_report_top_n=market_daily_report_top_n,
             market_daily_report_tickers=market_daily_report_tickers,
+            market_daily_report_debug=market_daily_report_debug,
             btc_watch_enabled=btc_watch_enabled,
             btc_watch_poll_seconds=btc_watch_poll_seconds,
             btc_watch_channel_id=btc_watch_channel_id,
@@ -465,9 +1505,27 @@ class Settings:
             btc_watch_addresses=btc_watch_addresses,
             btc_esplora_base_url=btc_esplora_base_url,
             btc_watch_cooldown_minutes=btc_watch_cooldown_minutes,
+            btc_watch_debug=btc_watch_debug,
             db_path=db_path,
-            exams_tz=exams_tz,
+            grades_db_path=grades_db_path,
             notes_sites=notes_sites,
             lore_path=lore_path,
             rmp_university=rmp_university,
         )
+        if strict:
+            settings.validate(strict=True, extra_issues=raw_issues)
+        return settings
+
+    @classmethod
+    def load_validated(cls, *, environ: Mapping[str, str] | None = None) -> Settings:
+        """Load and strictly validate environment settings, raising ``ConfigValidationError`` on errors."""
+        return cls.from_env(strict=True, environ=environ)
+
+    def replace(self, **changes: Any) -> Settings:
+        """Return a new ``Settings`` instance with specified fields updated."""
+        return dataclasses.replace(self, **changes)
+
+
+def load_settings(*, strict: bool = True, environ: Mapping[str, str] | None = None) -> Settings:
+    """Load process configuration from ``environ`` (or ``os.environ``), defaulting to strict validation."""
+    return Settings.from_env(strict=strict, environ=environ)

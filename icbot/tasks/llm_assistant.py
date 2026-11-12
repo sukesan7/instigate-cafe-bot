@@ -3,18 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import pathlib
 import re
-import time
 from collections.abc import Iterable, Sequence
-from typing import Any, cast
 
 import aiohttp
 import discord
 
 from icbot.config import Settings
-from icbot.services.gemini_client import GeminiError, gemini_generate_text
+from icbot.container import get_container, resolve_guild_settings
+from icbot.errors import format_exception_safe
+from icbot.services.gemini_client import GeminiError
 
 log = logging.getLogger(__name__)
 
@@ -34,14 +33,11 @@ _DEFAULT_LORE_PATHS = (
 
 
 def _find_lore_path(settings: Settings) -> str | None:
-    # Prefer explicit settings/env, then common defaults.
+    # Prefer explicit configured path, then common defaults.
     candidates: list[str] = []
     sp = str(getattr(settings, "lore_path", "") or "").strip()
     if sp:
         candidates.append(sp)
-    ep = (os.getenv("LORE_PATH") or "").strip()
-    if ep:
-        candidates.append(ep)
     candidates.extend(list(_DEFAULT_LORE_PATHS))
 
     for p in candidates:
@@ -64,15 +60,12 @@ def _find_lore_path(settings: Settings) -> str | None:
 
 
 def _load_lore_entries(bot: discord.Client, settings: Settings) -> list[dict]:
-    """Load lore entries from disk with a simple mtime cache."""
+    """Load lore entries from disk with a container-scoped mtime cache."""
     lore_path = _find_lore_path(settings)
     if not lore_path:
         return []
 
-    cache = getattr(bot, "_lore_cache", None)
-    if not isinstance(cache, dict):
-        cache = {}
-        cast(Any, bot)._lore_cache = cache
+    cache = get_container(bot).lore_cache
 
     try:
         p = pathlib.Path(lore_path)
@@ -83,7 +76,7 @@ def _load_lore_entries(bot: discord.Client, settings: Settings) -> list[dict]:
             and cached.get("mtime") == mtime
             and isinstance(cached.get("entries"), list)
         ):
-            return cast(list[dict[Any, Any]], cached["entries"])
+            return list(cached["entries"])
 
         raw = p.read_text(encoding="utf-8", errors="ignore")
         # Only JSON is supported in-code to avoid extra deps.
@@ -413,19 +406,21 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
     if message.author.bot:
         return False
 
-    settings: Settings | None = getattr(bot, "settings", None)
-    if settings is None:
+    if getattr(bot, "settings", None) is None:
         return False
+
+    settings: Settings = await resolve_guild_settings(bot, message)
+    container = get_container(bot)
 
     llm_enabled = bool(getattr(settings, "llm_enabled", False))
     api_key = str(getattr(settings, "gemini_api_key", "") or "").strip()
-    # Default to a capable low-latency model. Can be overridden via GEMINI_MODEL in .env.
+    # Default to a capable low-latency model. Can be overridden via GEMINI_MODEL in .env or guild override.
     model = str(getattr(settings, "gemini_model", "") or "").strip() or "gemini-2.5-flash"
     if not llm_enabled or not api_key:
         return False
 
     # Check runtime killswitch
-    if getattr(bot, "_llm_killed", False):
+    if container.llm_killed or getattr(bot, "_llm_killed", False):
         return False
 
     # Only trigger when THIS bot is mentioned
@@ -439,11 +434,8 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
 
     # Per-user cooldown
     cooldown_s = float(getattr(settings, "llm_cooldown_seconds", 3) or 3)
-    now = time.monotonic()
-    last_map = getattr(bot, "_llm_last_reply", None)
-    if last_map is None:
-        last_map = {}
-        cast(Any, bot)._llm_last_reply = last_map
+    now = container.monotonic_clock()
+    last_map = container.llm_last_reply
     last = float(last_map.get(message.author.id, 0.0) or 0.0)
     if (now - last) < cooldown_s:
         return False
@@ -524,7 +516,7 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
             if char_limit is not None:
                 max_out = min(max_out, 512)
 
-            reply = await gemini_generate_text(
+            reply = await container.gemini_generate(
                 api_key=api_key,
                 model=model,
                 prompt=prompt,
@@ -543,7 +535,7 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
                     f"User question: {question.strip()}\n"
                 )
                 try:
-                    reply2 = await gemini_generate_text(
+                    reply2 = await container.gemini_generate(
                         api_key=api_key,
                         model=model,
                         prompt=repair_prompt,
@@ -555,7 +547,10 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
                     if reply2.strip():
                         reply = reply2
                 except (GeminiError, aiohttp.ClientError, TimeoutError, ValueError) as exc:
-                    log.debug("LLM truncated-reply retry failed: %s", exc)
+                    log.debug(
+                        "LLM truncated-reply retry failed: %s",
+                        format_exception_safe(exc, settings.secret_values()),
+                    )
 
             # Final hard clamp if user asked for under N chars
             if char_limit is not None and len(reply) > char_limit:
@@ -587,7 +582,7 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
     except GeminiError as e:
         # Keep failure quiet; don't spam the channel.
         if bool(getattr(settings, "llm_debug", False)):
-            print(f"[LLM] gemini error: {e!r}")
+            print(f"[LLM] gemini error: {format_exception_safe(e, settings.secret_values())}")
         return False
     except asyncio.CancelledError:
         raise
@@ -603,5 +598,5 @@ async def maybe_handle_llm_mention(bot: discord.Client, message: discord.Message
         LookupError,
     ) as e:
         if bool(getattr(settings, "llm_debug", False)):
-            print(f"[LLM] unexpected error: {e!r}")
+            print(f"[LLM] unexpected error: {format_exception_safe(e, settings.secret_values())}")
         return False

@@ -10,6 +10,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import aiohttp
 from yarl import URL
 
+from icbot.errors import ProviderError, redact_secrets
+
 log = logging.getLogger(__name__)
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
@@ -163,8 +165,8 @@ def _heuristic_cxs_from_careers_url(careers_url: str, locale: str) -> WorkdayCxs
         site = path_parts[-1]
 
     if not tenant or not site:
-        raise RuntimeError(
-            f"Workday heuristic failed (tenant={tenant!r}, site={site!r}) from {careers_url!r}"
+        raise ProviderError(
+            f"Workday heuristic failed (tenant={tenant!r}, site={site!r}) from {redact_secrets(careers_url)!r}"
         )
 
     api = f"{base}/wday/cxs/{tenant}/{site}/jobs"
@@ -351,9 +353,12 @@ async def fetch_workday_jobs(
                 timeout_seconds=timeout_seconds,
             )
             if st_get != 200:
-                raise RuntimeError(
-                    f"Workday HTTP {st_get} via GET {get_url} :: "
-                    f"POST_JSON:{st_post}:{_snippet(payload_post)} | GET:{st_get}:{_snippet(payload_get)}"
+                safe_url = redact_secrets(get_url)
+                safe_post = redact_secrets(_snippet(payload_post))
+                safe_get = redact_secrets(_snippet(payload_get))
+                raise ProviderError(
+                    f"Workday HTTP {st_get} via GET {safe_url} :: "
+                    f"POST_JSON:{st_post}:{safe_post} | GET:{st_get}:{safe_get}"
                 )
             batch = _extract_jobs_from_payload(payload_get, site)
             jobs.extend(batch)
