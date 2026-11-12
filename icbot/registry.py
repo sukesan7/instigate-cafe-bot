@@ -92,4 +92,3 @@ def register_ic_commands(
     else:
         tree.add_command(root, override=override)
     return root
-
