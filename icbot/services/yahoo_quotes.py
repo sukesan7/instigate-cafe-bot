@@ -115,6 +115,22 @@ async def _get_session() -> aiohttp.ClientSession:
         return _SESSION
 
 
+async def init_session() -> aiohttp.ClientSession:
+    """Explicitly initialize the shared Yahoo Finance HTTP session during startup."""
+    return await _get_session()
+
+
+async def close_session() -> None:
+    """Close and clear the shared Yahoo Finance HTTP session and crumb cache."""
+    global _SESSION, _CRUMB, _CRUMB_EXP_TS
+    session = _SESSION
+    _SESSION = None
+    _CRUMB = None
+    _CRUMB_EXP_TS = 0.0
+    if session is not None and not session.closed:
+        await session.close()
+
+
 async def _refresh_crumb(session: aiohttp.ClientSession, debug: bool) -> str:
     """Refresh cookie+crumb."""
     # Step 1: hit fc.yahoo.com to populate cookies

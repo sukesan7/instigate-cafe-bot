@@ -29,6 +29,7 @@ env:
   WORKDAY_POLL_SECONDS: "0"
   JOBS_BOOTSTRAP_POST: "false"
   TTC_BOOTSTRAP_POST_LATEST: "false"
+  ICBOT_ALLOW_GATEWAY: "false"
 
 jobs:
   quality:

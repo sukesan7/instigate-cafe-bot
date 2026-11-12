@@ -11,8 +11,14 @@ class Database:
     def __init__(self, path: str):
         self.path = path
         self._lock = asyncio.Lock()
+        self._closed = False
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
 
     async def init(self) -> None:
+        self._closed = False
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
                 """
@@ -268,3 +274,8 @@ class Database:
             for sql, params in statements:
                 await db.execute(sql, params)
             await db.commit()
+
+    async def close(self) -> None:
+        """Drain pending write lock and mark database handle closed for shutdown symmetry."""
+        async with self._lock:
+            self._closed = True

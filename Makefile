@@ -25,7 +25,8 @@ SAFE_ENV := env \
 	JOBS_POLL_SECONDS="0" \
 	WORKDAY_POLL_SECONDS="0" \
 	JOBS_BOOTSTRAP_POST="false" \
-	TTC_BOOTSTRAP_POST_LATEST="false"
+	TTC_BOOTSTRAP_POST_LATEST="false" \
+	ICBOT_ALLOW_GATEWAY="false"
 
 # Repository formatting/lint and type-checking targets (respecting pyproject.toml excludes)
 STYLE_PATHS := .

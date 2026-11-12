@@ -41,6 +41,20 @@ async def _get_session() -> aiohttp.ClientSession:
         return _SESSION
 
 
+async def init_session() -> aiohttp.ClientSession:
+    """Explicitly initialize the shared Esplora HTTP session during startup."""
+    return await _get_session()
+
+
+async def close_session() -> None:
+    """Close and clear the shared Esplora HTTP session during shutdown/rollback."""
+    global _SESSION
+    session = _SESSION
+    _SESSION = None
+    if session is not None and not session.closed:
+        await session.close()
+
+
 @dataclass(frozen=True)
 class AddressTx:
     txid: str

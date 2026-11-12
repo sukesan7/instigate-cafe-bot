@@ -191,8 +191,9 @@ class Settings:
     workday_poll_seconds: int = 0  # if 0, defaults to jobs_poll_seconds
     workday_timeout_seconds: int = 12
 
-    # Dev
+    # Dev & Runtime Safeguard
     force_guild_resync: bool = False
+    allow_gateway: bool = False
 
     # Economy
     daily_claim_amount: int = 100
@@ -329,6 +330,7 @@ class Settings:
         workday_timeout_seconds = _to_int(os.getenv("WORKDAY_TIMEOUT_SECONDS", "12"), 12)
 
         force_guild_resync = _to_bool(os.getenv("FORCE_GUILD_RESYNC", "false"), False)
+        allow_gateway = _to_bool(os.getenv("ICBOT_ALLOW_GATEWAY", "false"), False)
 
         daily_claim_amount = _to_int(os.getenv("DAILY_CLAIM_AMOUNT", "100"), 100)
 
@@ -436,6 +438,7 @@ class Settings:
             workday_poll_seconds=workday_poll_seconds,
             workday_timeout_seconds=workday_timeout_seconds,
             force_guild_resync=force_guild_resync,
+            allow_gateway=allow_gateway,
             daily_claim_amount=daily_claim_amount,
             bj_starting_bankroll=bj_starting_bankroll,
             bj_dealer_hits_soft_17=bj_dealer_hits_soft_17,

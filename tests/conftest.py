@@ -174,6 +174,7 @@ def _isolate_environment(monkeypatch: pytest.MonkeyPatch):
         "JOBS_BOOTSTRAP_POST",
         "TTC_BOOTSTRAP_POST_LATEST",
         "GO_BOOTSTRAP_POST_LATEST",
+        "ICBOT_ALLOW_GATEWAY",
     )
     for flag in disabled_flags:
         monkeypatch.setenv(flag, "false")

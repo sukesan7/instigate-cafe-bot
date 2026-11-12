@@ -224,6 +224,7 @@ def audit_env_example(repo_root: Path) -> list[Finding]:
         "BTC_WATCH_ENABLED",
         "JOBS_BOOTSTRAP_POST",
         "TTC_BOOTSTRAP_POST_LATEST",
+        "ICBOT_ALLOW_GATEWAY",
     ]
 
     with open(env_example, encoding="utf-8") as f:

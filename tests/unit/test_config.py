@@ -19,6 +19,7 @@ def test_settings_from_empty_env_is_safe():
     assert settings.llm_enabled is False
     assert settings.market_watch_enabled is False
     assert settings.btc_watch_enabled is False
+    assert settings.allow_gateway is False
     assert settings.embed_accent_color == 0xA64DFF
     assert settings.embed_footer_text == "Instigate Cafe"
     assert settings.workday_poll_seconds == settings.jobs_poll_seconds
@@ -94,3 +95,4 @@ def test_env_example_has_empty_secrets_and_disabled_pollers():
     assert kv["LLM_ENABLED"] == "false"
     assert kv["MARKET_WATCH_ENABLED"] == "false"
     assert kv["BTC_WATCH_ENABLED"] == "false"
+    assert kv["ICBOT_ALLOW_GATEWAY"] == "false"
