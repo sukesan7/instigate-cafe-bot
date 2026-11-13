@@ -383,6 +383,52 @@ class GuildSettingsStore:
         gid = int(guild_id)
         await self.db.execute("DELETE FROM guild_settings WHERE guild_id=?", (gid,))
 
+    async def export_guild_config(self, guild_id: int) -> dict[str, Any]:
+        """Export non-secret per-guild configuration overrides in a portable format."""
+        gid = int(guild_id)
+        if not _is_valid_snowflake(gid, allow_zero=False):
+            raise ConfigValidationError(
+                f"guild_id must be a valid Discord snowflake (1..{MAX_SNOWFLAKE}), got {guild_id!r}."
+            )
+        cfg = await self.get(gid)
+        return {
+            "format_version": 1,
+            "exported_at": self._now(),
+            "guild_id": gid,
+            "overrides": dict(cfg.overrides) if cfg is not None else {},
+        }
+
+    async def import_guild_config(
+        self,
+        guild_id: int,
+        payload: Mapping[str, Any],
+        *,
+        overwrite: bool = False,
+    ) -> GuildSettings:
+        """Non-destructively import and validate per-guild configuration overrides.
+
+        Safety:
+            - Validates that no secret keys or process-only keys are imported.
+            - When overwrite=False (default), merges non-destructively onto existing overrides.
+            - When overwrite=True, completely replaces overrides.
+        """
+        gid = int(guild_id)
+        if not _is_valid_snowflake(gid, allow_zero=False):
+            raise ConfigValidationError(
+                f"guild_id must be a valid Discord snowflake (1..{MAX_SNOWFLAKE}), got {guild_id!r}."
+            )
+        if not isinstance(payload, Mapping):
+            raise ConfigValidationError("Guild configuration import payload must be a mapping / JSON object.")
+
+        raw_overrides = payload.get("overrides", payload)
+        if not isinstance(raw_overrides, Mapping):
+            raise ConfigValidationError("Payload overrides must be a mapping / JSON object.")
+
+        validated = validate_guild_overrides(raw_overrides)
+        if overwrite:
+            return await self.set_overrides(gid, validated)
+        return await self.update_overrides(gid, validated)
+
     async def resolve_for_guild(self, base: Settings, guild_id: int | None) -> Settings:
         if not guild_id or not _is_valid_snowflake(int(guild_id), allow_zero=False):
             return base

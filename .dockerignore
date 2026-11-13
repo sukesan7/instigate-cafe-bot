@@ -1,0 +1,50 @@
+# ==============================================================================
+# Docker / Container Ignore Rules for Instigate Cafe Bot
+# Guarantees that private SQLite databases, secrets, and lore are never baked
+# into production Docker or Railway images.
+# ==============================================================================
+
+# Secrets and environment files
+.env
+.env.*
+.envrc
+!.env.example
+
+# SQLite Databases, WAL Journals, and Local State
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.db.bak
+ic_stock.db
+tmu_grades.db
+ic_stock-dev.db
+
+# Private Community Lore & Local Personality Files
+tools/lore.tmu_files.json
+tools/lore.json
+lore.tmu_files.json
+lore.json
+!tools/lore.example.json
+!tests/fixtures/synthetic_lore.json
+
+# Local scratch and test artifacts
+scratch/
+assets/temp/
+distribution.png
+tmu_raw.html
+*.log
+
+# Git and virtual environments
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/

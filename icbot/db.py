@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import os
+import sqlite3
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import aiosqlite
@@ -20,6 +23,27 @@ class MigrationError(Exception):
 
 class MigrationIntegrityError(MigrationError):
     """Raised when PRAGMA integrity_check or foreign_key_check fails."""
+
+
+@dataclass(frozen=True)
+class StorageHealthReport:
+    """Storage health diagnostic metrics and integrity status."""
+
+    db_path: str
+    integrity_ok: bool
+    integrity_message: str
+    foreign_keys_ok: bool
+    foreign_key_violations: list[tuple[Any, ...]]
+    journal_mode: str
+    page_size: int
+    page_count: int
+    freelist_count: int
+    db_size_bytes: int
+    wal_size_bytes: int
+    schema_version: int
+    applied_migrations: list[int]
+    table_row_counts: dict[str, int]
+    is_read_only: bool
 
 
 @dataclass(frozen=True)
@@ -678,6 +702,20 @@ class Database:
             raise RuntimeError("Database is closed.")
 
         await self.check_integrity()
+
+        # Fail closed if installed database is newer than maximum supported migration version
+        async with self._lock:
+            conn = await self._ensure_connected()
+            cur_uv = await conn.execute("PRAGMA user_version;")
+            uv_row = await cur_uv.fetchone()
+            current_uv = int(uv_row[0]) if uv_row else 0
+            max_v = max(m.version for m in MIGRATIONS)
+            if current_uv > max_v:
+                raise MigrationError(
+                    f"Installed database schema (user_version={current_uv}) is newer than the highest "
+                    f"supported migration version ({max_v}). Failing closed to prevent corruption."
+                )
+
         plan = await self.plan_migrations(target_version=target_version)
         if dry_run:
             return plan
@@ -695,14 +733,207 @@ class Database:
         await self.check_integrity()
         return plan
 
-    async def backup(self, dest_path: str) -> None:
-        """Create an online live backup of the database to dest_path."""
+    async def get_storage_health(self) -> StorageHealthReport:
+        """Run storage-health diagnostics including page metrics, sizes, row counts, and integrity."""
         if self._closed:
             raise RuntimeError("Database is closed.")
         async with self._lock:
+            conn = await self._ensure_connected()
+            # Integrity check
+            cur = await conn.execute("PRAGMA integrity_check;")
+            rows = list(await cur.fetchall() or [])
+            integrity_ok = bool(rows and rows[0][0] == "ok")
+            integrity_msg = ", ".join(str(r[0]) for r in rows) if rows else "no output"
+
+            # Foreign key check
+            cur_fk = await conn.execute("PRAGMA foreign_key_check;")
+            fk_violations = [tuple(r) for r in (await cur_fk.fetchall() or [])]
+            foreign_keys_ok = len(fk_violations) == 0
+
+            # Journal mode & page metrics
+            cur_jm = await conn.execute("PRAGMA journal_mode;")
+            jm_row = await cur_jm.fetchone()
+            journal_mode = str(jm_row[0]) if jm_row else "unknown"
+
+            cur_ps = await conn.execute("PRAGMA page_size;")
+            ps_row = await cur_ps.fetchone()
+            page_size = int(ps_row[0]) if ps_row else 4096
+
+            cur_pc = await conn.execute("PRAGMA page_count;")
+            pc_row = await cur_pc.fetchone()
+            page_count = int(pc_row[0]) if pc_row else 0
+
+            cur_fc = await conn.execute("PRAGMA freelist_count;")
+            fc_row = await cur_fc.fetchone()
+            freelist_count = int(fc_row[0]) if fc_row else 0
+
+            cur_uv = await conn.execute("PRAGMA user_version;")
+            uv_row = await cur_uv.fetchone()
+            schema_version = int(uv_row[0]) if uv_row else 0
+
+            # File byte sizes
+            db_size = 0
+            wal_size = 0
+            if self.path != ":memory:" and not self.path.startswith("file::memory:"):
+                try:
+                    db_size = os.path.getsize(self.path)
+                except OSError:
+                    db_size = 0
+                try:
+                    wal_size = os.path.getsize(self.path + "-wal")
+                except OSError:
+                    wal_size = 0
+
+            # Applied migrations
+            applied_migrations: list[int] = []
+            cur_mig_tbl = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+            )
+            if await cur_mig_tbl.fetchone():
+                cur_migs = await conn.execute("SELECT version FROM schema_migrations ORDER BY version ASC")
+                applied_migrations = [int(r[0]) for r in (await cur_migs.fetchall() or [])]
+
+            # Table row counts
+            cur_tables = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name ASC"
+            )
+            tables = [str(r[0]) for r in (await cur_tables.fetchall() or [])]
+            table_row_counts: dict[str, int] = {}
+            for t in tables:
+                try:
+                    cur_cnt = await conn.execute(f"SELECT COUNT(*) FROM {t}")
+                    cnt_r = await cur_cnt.fetchone()
+                    table_row_counts[t] = int(cnt_r[0]) if cnt_r else 0
+                except (sqlite3.OperationalError, aiosqlite.Error):
+                    table_row_counts[t] = -1
+
+            cur_ro = await conn.execute("PRAGMA query_only;")
+            ro_row = await cur_ro.fetchone()
+            is_read_only = bool(ro_row and ro_row[0] == 1)
+
+            return StorageHealthReport(
+                db_path=self.path,
+                integrity_ok=integrity_ok,
+                integrity_message=integrity_msg,
+                foreign_keys_ok=foreign_keys_ok,
+                foreign_key_violations=fk_violations,
+                journal_mode=journal_mode,
+                page_size=page_size,
+                page_count=page_count,
+                freelist_count=freelist_count,
+                db_size_bytes=db_size,
+                wal_size_bytes=wal_size,
+                schema_version=schema_version,
+                applied_migrations=applied_migrations,
+                table_row_counts=table_row_counts,
+                is_read_only=is_read_only,
+            )
+
+    async def backup(self, dest_path: str, *, verify_integrity: bool = True) -> Path:
+        """Create a consistent online backup to dest_path using SQLite's backup API.
+
+        Args:
+            dest_path: Destination path for the backup file.
+            verify_integrity: When True, executes PRAGMA integrity_check on the generated snapshot.
+
+        Returns:
+            The Path of the validated backup file.
+        """
+        if self._closed:
+            raise RuntimeError("Database is closed.")
+        dest = Path(dest_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        async with self._lock:
             src_conn = await self._ensure_connected()
-            async with aiosqlite.connect(dest_path) as dst_conn:
+            async with aiosqlite.connect(str(dest)) as dst_conn:
                 await src_conn.backup(dst_conn)
+
+        if verify_integrity:
+            async with aiosqlite.connect(str(dest)) as verify_conn:
+                cur = await verify_conn.execute("PRAGMA integrity_check;")
+                rows = list(await cur.fetchall() or [])
+                if not rows or rows[0][0] != "ok":
+                    raise MigrationIntegrityError(f"Backup snapshot integrity check failed: {rows}")
+        return dest
+
+    async def restore(self, backup_path: str, *, verify_integrity: bool = True) -> None:
+        """Restore active database from an online backup snapshot with pre- and post-flight verification.
+
+        Args:
+            backup_path: Source backup file path.
+            verify_integrity: When True, validates integrity of the backup before restoring.
+        """
+        if self._closed:
+            raise RuntimeError("Database is closed.")
+        src = Path(backup_path)
+        if not src.exists():
+            raise FileNotFoundError(f"Backup file not found: {backup_path}")
+
+        if verify_integrity:
+            try:
+                async with aiosqlite.connect(str(src)) as verify_conn:
+                    cur = await verify_conn.execute("PRAGMA integrity_check;")
+                    rows = list(await cur.fetchall() or [])
+                    if not rows or rows[0][0] != "ok":
+                        raise MigrationIntegrityError(f"Cannot restore from corrupt backup: {rows}")
+            except (sqlite3.DatabaseError, aiosqlite.Error) as exc:
+                raise MigrationIntegrityError(f"Cannot restore from corrupt backup: {exc}") from exc
+
+        async with self._lock:
+            if self._conn is not None:
+                await self._conn.close()
+                self._conn = None
+
+            # Online backup from snapshot into self.path
+            async with aiosqlite.connect(str(src)) as bkp_conn, aiosqlite.connect(self.path) as dst_conn:
+                await bkp_conn.backup(dst_conn)
+
+            # Re-establish managed connection
+            await self._ensure_connected()
+
+        await self.check_integrity()
+
+    async def prune_stale_data(
+        self,
+        *,
+        now_ts: int | None = None,
+        job_seen_days: int = 90,
+        alert_dedupe_days: int = 30,
+        workday_cache_days: int = 14,
+        grades_cache_days: int = 180,
+    ) -> dict[str, int]:
+        """Prune expired transient checkpoints and stale caches while preserving immutable ledgers.
+
+        Safety: Never touches or prunes ``economy_ledger`` or ``admin_audit_log``.
+        """
+        now = now_ts if now_ts is not None else int(time.time())
+        pruned: dict[str, int] = {}
+        async with self.write_transaction() as tx:
+            # 1. job_seen
+            js_cutoff = now - max(1, int(job_seen_days)) * 86400
+            cur_js = await tx.execute("DELETE FROM job_seen WHERE first_seen_unix < ?", (js_cutoff,))
+            pruned["job_seen"] = cur_js.rowcount if cur_js.rowcount >= 0 else 0
+
+            # 2. alert_delivery_dedupes
+            ad_cutoff = now - max(1, int(alert_dedupe_days)) * 86400
+            cur_ad = await tx.execute(
+                "DELETE FROM alert_delivery_dedupes WHERE delivered_at < ?", (ad_cutoff,)
+            )
+            pruned["alert_delivery_dedupes"] = cur_ad.rowcount if cur_ad.rowcount >= 0 else 0
+
+            # 3. workday_cxs_cache
+            wd_cutoff = now - max(1, int(workday_cache_days)) * 86400
+            cur_wd = await tx.execute(
+                "DELETE FROM workday_cxs_cache WHERE last_updated_unix < ?", (wd_cutoff,)
+            )
+            pruned["workday_cxs_cache"] = cur_wd.rowcount if cur_wd.rowcount >= 0 else 0
+
+            # 4. grades_course_cache
+            gr_cutoff = now - max(1, int(grades_cache_days)) * 86400
+            cur_gr = await tx.execute("DELETE FROM grades_course_cache WHERE last_updated < ?", (gr_cutoff,))
+            pruned["grades_course_cache"] = cur_gr.rowcount if cur_gr.rowcount >= 0 else 0
+
+        return pruned
 
     async def migrate_legacy_guild_data(
         self,
