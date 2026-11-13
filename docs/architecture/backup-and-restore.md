@@ -134,3 +134,4 @@ All high-frequency access patterns are covered by compound primary keys and targ
 
 1. **Incompatible Forward Schemas**: If a database has a `PRAGMA user_version` greater than `max(MIGRATIONS)`, `db.migrate()` aborts immediately with `MigrationError` rather than attempting unsafe mutations.
 2. **Read-Only / Disk-Full Fail-Closed Behavior**: When a database cannot accept writes (e.g. disk full or read-only filesystem), SQLite raises `sqlite3.OperationalError`. The unit of work (`write_transaction`) automatically issues `ROLLBACK`, leaving existing balances and ledger entries uncorrupted.
+
