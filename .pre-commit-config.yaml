@@ -42,15 +42,36 @@ repos:
         types: [file]
 
       - id: ruff-check
-        name: Ruff lint
+        name: Ruff lint (ruff check .)
         language: system
-        entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" check "$@"' --
-        types: [python]
-        exclude: ^(\.venv|assets|docs)/
+        entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" check .'
+        pass_filenames: false
+        always_run: true
 
       - id: ruff-format-check
-        name: Ruff format check
+        name: Ruff format check (ruff format --check .)
         language: system
-        entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" format --check "$@"' --
-        types: [python]
-        exclude: ^(\.venv|assets|docs)/
+        entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" format --check .'
+        pass_filenames: false
+        always_run: true
+
+      - id: mypy-check
+        name: Mypy static type check (mypy .)
+        language: system
+        entry: bash -c 'MYPY=$([ -x .venv/bin/mypy ] && echo .venv/bin/mypy || echo mypy); exec "$MYPY" .'
+        pass_filenames: false
+        always_run: true
+
+      - id: smoke-offline
+        name: Offline import and command registry smoke check
+        language: system
+        entry: bash -c 'PY=$([ -x .venv/bin/python ] && echo .venv/bin/python || echo python3); exec "$PY" tools/smoke_offline.py'
+        pass_filenames: false
+        always_run: true
+
+      - id: pytest-check
+        name: Pytest offline test suite (pytest .)
+        language: system
+        entry: bash -c 'export DISCORD_TOKEN="" ICBOT_ALLOW_GATEWAY="false"; PYTEST=$([ -x .venv/bin/pytest ] && echo .venv/bin/pytest || echo pytest); exec "$PYTEST" .'
+        pass_filenames: false
+        always_run: true
