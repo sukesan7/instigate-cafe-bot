@@ -261,12 +261,12 @@ async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> No
         await interaction.followup.send("Error: you do not have permission to modify exams.", ephemeral=True)
         return
 
-    row = await db.fetchone("SELECT id FROM exams WHERE id = ?", (int(exam_id),))
-    if not row:
-        await interaction.followup.send("Error: no exam found with that ID.", ephemeral=True)
-        return
-
-    await db.execute("DELETE FROM exams WHERE id = ?", (int(exam_id),))
+    async with db.write_transaction() as tx:
+        row = await tx.fetchone("SELECT id FROM exams WHERE id = ?", (int(exam_id),))
+        if not row:
+            await interaction.followup.send("Error: no exam found with that ID.", ephemeral=True)
+            return
+        await tx.execute("DELETE FROM exams WHERE id = ?", (int(exam_id),))
     await interaction.followup.send(f"Removed exam ID {exam_id}.", ephemeral=True)
 
 

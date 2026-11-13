@@ -192,6 +192,7 @@ class ServiceContainer:
 
         self._bj_sessions: SessionManager | None = bj_sessions
         self._use_module_bj_fallback = bool(use_module_bj_fallback)
+        self._grades_cache: Any = None
 
         self.gemini_generate_fn = gemini_generate_fn
         self.fetch_quotes_fn = fetch_quotes_fn
@@ -249,6 +250,16 @@ class ServiceContainer:
 
             self._bj_sessions = SessionManager(clock=self.clock)
         return self._bj_sessions
+
+    @property
+    def grades_cache(self) -> Any:
+        """Lazy grades course cache store backed by shared database."""
+        if self._grades_cache is None:
+            from icbot.features.grades import GradesCacheStore
+
+            target_db = self.db if self.db is not None else self.settings.grades_db_path
+            self._grades_cache = GradesCacheStore(target_db)
+        return self._grades_cache
 
     async def ensure_http_session(self) -> aiohttp.ClientSession:
         """Return an open shared ``aiohttp.ClientSession``, creating it when owned by container."""

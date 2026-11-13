@@ -14,7 +14,7 @@ from discord import app_commands
 from icbot.app import casino
 from icbot.config import Settings
 from icbot.container import get_container, resolve_guild_settings
-from icbot.db import Database
+from icbot.db import Database, Transaction
 from icbot.embeds import game as game_embed
 from icbot.games.blackjack_engine import GameState
 from icbot.services.user_service import InsufficientBalanceError
@@ -60,7 +60,7 @@ class BlackjackStore:
         self.starting_bankroll = int(starting_bankroll)
         self._clock: Callable[[], float] = clock if clock is not None else time.time
 
-    async def _ensure_user_conn(self, conn: aiosqlite.Connection, user_id: int) -> None:
+    async def _ensure_user_conn(self, conn: aiosqlite.Connection | Transaction, user_id: int) -> None:
         uid = int(user_id)
         await conn.execute(
             "INSERT OR IGNORE INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
@@ -76,30 +76,27 @@ class BlackjackStore:
 
     async def ensure_user(self, user_id: int) -> None:
         """Ensure both the central `users` row and `blackjack_users` stats row exist."""
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await self._ensure_user_conn(conn, user_id)
-            await conn.commit()
+        async with self.db.write_transaction() as tx:
+            await self._ensure_user_conn(tx, user_id)
 
     async def get_bankroll(self, user_id: int) -> int:
         """Read balance from the central `users` table."""
         uid = int(user_id)
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await self._ensure_user_conn(conn, uid)
-            cur = await conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
+        async with self.db.write_transaction() as tx:
+            await self._ensure_user_conn(tx, uid)
+            cur = await tx.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
             row = await cur.fetchone()
-            await conn.commit()
         return int(row[0]) if row is not None else self.starting_bankroll
 
     async def get_reset_count(self, user_id: int) -> int:
         uid = int(user_id)
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await self._ensure_user_conn(conn, uid)
-            cur = await conn.execute(
+        async with self.db.write_transaction() as tx:
+            await self._ensure_user_conn(tx, uid)
+            cur = await tx.execute(
                 "SELECT reset_count FROM blackjack_users WHERE user_id=?",
                 (uid,),
             )
             row = await cur.fetchone()
-            await conn.commit()
         return int(row[0]) if row is not None and row[0] is not None else 0
 
     async def reserve_wager(self, user_id: int, amount: int) -> int:
@@ -108,18 +105,16 @@ class BlackjackStore:
         if amount <= 0:
             raise ValueError("Bet must be >= 1.")
         uid = int(user_id)
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await self._ensure_user_conn(conn, uid)
-            cur = await conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
+        async with self.db.write_transaction() as tx:
+            await self._ensure_user_conn(tx, uid)
+            cur = await tx.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
             row = await cur.fetchone()
             available = int(row[0]) if row is not None else self.starting_bankroll
             if available < amount:
-                await conn.commit()
                 raise _InsufficientWagerError(available)
             new_balance = available - amount
-            await conn.execute("UPDATE users SET balance=? WHERE user_id=?", (new_balance, uid))
-            await conn.execute("UPDATE blackjack_users SET bankroll=? WHERE user_id=?", (new_balance, uid))
-            await conn.commit()
+            await tx.execute("UPDATE users SET balance=? WHERE user_id=?", (new_balance, uid))
+            await tx.execute("UPDATE blackjack_users SET bankroll=? WHERE user_id=?", (new_balance, uid))
         return new_balance
 
     async def refund_wager(self, user_id: int, amount: int) -> int:
@@ -128,15 +123,14 @@ class BlackjackStore:
         if amount <= 0:
             return await self.get_bankroll(user_id)
         uid = int(user_id)
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await self._ensure_user_conn(conn, uid)
-            cur = await conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
+        async with self.db.write_transaction() as tx:
+            await self._ensure_user_conn(tx, uid)
+            cur = await tx.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
             row = await cur.fetchone()
             cur_balance = int(row[0]) if row is not None else self.starting_bankroll
             new_balance = cur_balance + amount
-            await conn.execute("UPDATE users SET balance=? WHERE user_id=?", (new_balance, uid))
-            await conn.execute("UPDATE blackjack_users SET bankroll=? WHERE user_id=?", (new_balance, uid))
-            await conn.commit()
+            await tx.execute("UPDATE users SET balance=? WHERE user_id=?", (new_balance, uid))
+            await tx.execute("UPDATE blackjack_users SET bankroll=? WHERE user_id=?", (new_balance, uid))
         return new_balance
 
     async def apply_delta_and_stats(
@@ -149,14 +143,14 @@ class BlackjackStore:
         uid = int(user_id)
         delta = int(delta)
         hands_played = int(hands_played)
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await self._ensure_user_conn(conn, uid)
-            cur = await conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
+        async with self.db.write_transaction() as tx:
+            await self._ensure_user_conn(tx, uid)
+            cur = await tx.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
             bal_row = await cur.fetchone()
             bankroll = (int(bal_row[0]) if bal_row is not None else self.starting_bankroll) + delta
-            await conn.execute("UPDATE users SET balance=? WHERE user_id=?", (bankroll, uid))
+            await tx.execute("UPDATE users SET balance=? WHERE user_id=?", (bankroll, uid))
 
-            cur2 = await conn.execute(
+            cur2 = await tx.execute(
                 "SELECT wins, losses, pushes, hands_played FROM blackjack_users WHERE user_id=?",
                 (uid,),
             )
@@ -167,11 +161,10 @@ class BlackjackStore:
             pushes += result_counts.get("push", 0)
             played += hands_played
 
-            await conn.execute(
+            await tx.execute(
                 "UPDATE blackjack_users SET bankroll=?, wins=?, losses=?, pushes=?, hands_played=? WHERE user_id=?",
                 (bankroll, wins, losses, pushes, played, uid),
             )
-            await conn.commit()
         return bankroll
 
     async def leaderboard(self, limit: int = 10) -> list[tuple[int, int]]:
@@ -186,26 +179,25 @@ class BlackjackStore:
     async def reset_user(self, user_id: int) -> int:
         """Reset bankroll/stats and increment the user's reset counter."""
         uid = int(user_id)
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await self._ensure_user_conn(conn, uid)
-            cur = await conn.execute(
+        async with self.db.write_transaction() as tx:
+            await self._ensure_user_conn(tx, uid)
+            cur = await tx.execute(
                 "SELECT reset_count FROM blackjack_users WHERE user_id=?",
                 (uid,),
             )
             row = await cur.fetchone()
             resets = (int(row[0]) if row is not None and row[0] is not None else 0) + 1
 
-            await conn.execute(
+            await tx.execute(
                 "UPDATE users SET balance=? WHERE user_id=?",
                 (self.starting_bankroll, uid),
             )
-            await conn.execute(
+            await tx.execute(
                 "UPDATE blackjack_users "
                 "SET bankroll=?, hands_played=0, wins=0, losses=0, pushes=0, reset_count=? "
                 "WHERE user_id=?",
                 (self.starting_bankroll, resets, uid),
             )
-            await conn.commit()
         return resets
 
 

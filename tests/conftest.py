@@ -13,6 +13,7 @@ import socket
 import sys
 import time
 import urllib.request
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -239,11 +240,24 @@ def synthetic_settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
-async def tmp_db(tmp_path: Path) -> Database:
+async def tmp_db(tmp_path: Path) -> AsyncIterator[Database]:
     db_file = tmp_path / "test_ic.db"
     database = Database(str(db_file))
     await database.init()
-    return database
+    try:
+        yield database
+    finally:
+        await database.close()
+
+
+@pytest.fixture(autouse=True)
+async def _cleanup_grades_stores() -> AsyncIterator[None]:
+    yield
+    from icbot.features import grades as grades_mod
+
+    for store in list(grades_mod._STORES.values()):
+        await store.close()
+    grades_mod._STORES.clear()
 
 
 @pytest.fixture

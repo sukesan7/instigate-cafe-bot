@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import io
 import json
 import logging
 import re
+import sqlite3
+import time
 import urllib.parse
+from typing import Any
 
 import aiohttp
 import aiosqlite
@@ -14,6 +19,7 @@ from discord import app_commands
 
 from icbot.app import ic
 from icbot.container import get_container, resolve_guild_settings
+from icbot.db import Database
 from icbot.embeds import system as system_embed
 from icbot.errors import format_exception_safe, redact_secrets
 
@@ -22,18 +28,117 @@ log = logging.getLogger(__name__)
 DB_PATH = "tmu_grades.db"
 
 
-async def _init_db(db_path: str | None = None):
-    eff_db = db_path or DB_PATH
-    async with aiosqlite.connect(eff_db) as db:
-        await db.execute("""
+class GradesCacheStore:
+    """Store abstraction for caching TMU Grades course distribution data."""
+
+    def __init__(self, db: Database | str | None = None) -> None:
+        if isinstance(db, Database):
+            self._db = db
+            self._owns_db = False
+        elif isinstance(db, str):
+            self._db = Database(db)
+            self._owns_db = True
+        elif db is None:
+            self._db = Database(DB_PATH)
+            self._owns_db = True
+        else:
+            raise TypeError(f"Unsupported db type: {type(db)}")
+
+    @property
+    def db(self) -> Database:
+        return self._db
+
+    async def init(self) -> None:
+        """Initialize the underlying database and ensure grades cache tables exist."""
+        await self._db.init()
+        # Backwards compatibility: ensure both namespaced table and legacy course_cache exist
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS grades_course_cache (
+                course_code TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                parsed_data TEXT NOT NULL DEFAULT '[]',
+                last_updated INTEGER NOT NULL
+            )
+            """
+        )
+        await self._db.execute(
+            """
             CREATE TABLE IF NOT EXISTS course_cache (
                 course_code TEXT PRIMARY KEY,
                 title TEXT,
                 parsed_data JSON,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-        await db.commit()
+            """
+        )
+
+    async def get_course(self, course_code: str) -> dict[str, Any] | None:
+        code = course_code.lower().strip()
+        # Check namespaced table first
+        try:
+            row = await self._db.fetchone(
+                "SELECT title, parsed_data FROM grades_course_cache WHERE course_code = ?",
+                (code,),
+            )
+            if row:
+                return {"title": str(row[0]), "professors": json.loads(str(row[1]))}
+        except (aiosqlite.Error, sqlite3.Error, json.JSONDecodeError, OSError, ValueError) as exc:
+            log.debug("Grades cache read error on namespaced table: %s", exc)
+
+        # Fallback to legacy un-namespaced table if present
+        try:
+            row = await self._db.fetchone(
+                "SELECT title, parsed_data FROM course_cache WHERE course_code = ?",
+                (code,),
+            )
+            if row:
+                return {"title": str(row[0]), "professors": json.loads(str(row[1]))}
+        except (aiosqlite.Error, sqlite3.Error, json.JSONDecodeError, OSError, ValueError) as exc:
+            log.debug("Grades cache read error on legacy table: %s", exc)
+
+        return None
+
+    async def set_course(self, course_code: str, title: str, professors: list[dict[str, Any]]) -> None:
+        code = course_code.lower().strip()
+        payload = json.dumps(professors)
+        now_ts = int(time.time())
+
+        # Write to namespaced table
+        await self._db.execute(
+            """
+            INSERT OR REPLACE INTO grades_course_cache (course_code, title, parsed_data, last_updated)
+            VALUES (?, ?, ?, ?)
+            """,
+            (code, title, payload, now_ts),
+        )
+        # Also mirror to legacy course_cache table for backwards compatibility
+        try:
+            await self._db.execute(
+                """
+                INSERT OR REPLACE INTO course_cache (course_code, title, parsed_data)
+                VALUES (?, ?, ?)
+                """,
+                (code, title, payload),
+            )
+        except (aiosqlite.Error, sqlite3.Error, json.JSONDecodeError, OSError, ValueError) as exc:
+            log.debug("Skipping legacy course_cache mirror: %s", exc)
+
+    async def close(self) -> None:
+        if self._owns_db:
+            await self._db.close()
+
+
+_STORES: dict[str, GradesCacheStore] = {}
+
+
+async def _init_db(db_path: str | None = None) -> GradesCacheStore:
+    eff_db = db_path or DB_PATH
+    if eff_db not in _STORES or _STORES[eff_db].db.is_closed:
+        store = GradesCacheStore(eff_db)
+        await store.init()
+        _STORES[eff_db] = store
+    return _STORES[eff_db]
 
 
 async def _fetch_grades_html(url: str, headers: dict[str, str], session: aiohttp.ClientSession) -> str | None:
@@ -49,23 +154,19 @@ async def fetch_course_data(
     *,
     db_path: str | None = None,
     session: aiohttp.ClientSession | None = None,
-) -> dict | None:
+    store: GradesCacheStore | None = None,
+) -> dict[str, Any] | None:
     """Fetch from TMU Grades or return cached payload."""
     eff_db = db_path or DB_PATH
-    await _init_db(eff_db)  # Ensure DB is ready
+    if store is None:
+        store = await _init_db(eff_db)
     course_code = course_code.lower().strip()
 
     # Check cache first
-    async with (
-        aiosqlite.connect(eff_db) as db,
-        db.execute(
-            "SELECT title, parsed_data FROM course_cache WHERE course_code = ?", (course_code,)
-        ) as cursor,
-    ):
-        row = await cursor.fetchone()
-        if row:
-            log.info("Serving %s from local SQLite cache.", course_code)
-            return {"title": row[0], "professors": json.loads(row[1])}
+    cached = await store.get_course(course_code)
+    if cached is not None:
+        log.info("Serving %s from local SQLite cache.", course_code)
+        return cached
 
     # Not in cache, scrape live
     url = f"https://tmu.grades.zone/course/{urllib.parse.quote(course_code)}"
@@ -130,15 +231,7 @@ async def fetch_course_data(
         )
 
     # Save to Cache
-    async with aiosqlite.connect(eff_db) as db:
-        await db.execute(
-            """
-            INSERT OR REPLACE INTO course_cache (course_code, title, parsed_data)
-            VALUES (?, ?, ?)
-        """,
-            (course_code, course_title, json.dumps(results)),
-        )
-        await db.commit()
+    await store.set_course(course_code, course_title, results)
 
     return {"title": course_title, "professors": results}
 
@@ -220,9 +313,15 @@ async def grades_command(interaction: discord.Interaction, course: str):
         if container.http_session is not None and not container.http_session.closed
         else None
     )
+    store = getattr(container, "grades_cache", None) if eff_db_path == "tmu_grades.db" else None
 
     try:
-        data = await fetch_course_data(course, db_path=eff_db_path, session=shared_session)
+        data = await fetch_course_data(
+            course,
+            db_path=eff_db_path if store is None else None,
+            session=shared_session,
+            store=store,
+        )
         if not data:
             await interaction.followup.send(
                 embed=system_embed(

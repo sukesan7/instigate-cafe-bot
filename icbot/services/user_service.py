@@ -5,8 +5,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-import aiosqlite
-
 from icbot.db import Database
 from icbot.errors import BotError
 from icbot.errors import InsufficientBalanceError as BaseInsufficientBalanceError
@@ -78,8 +76,8 @@ class UserStore:
         aurl = str(avatar_url)
         now = self._now()
 
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await conn.execute(
+        async with self.db.write_transaction() as tx:
+            await tx.execute(
                 "INSERT OR IGNORE INTO users "
                 "(user_id, display_name, avatar_url, balance, created_at, daily_claim_ts) "
                 "VALUES (?, ?, ?, ?, ?, 0)",
@@ -95,17 +93,16 @@ class UserStore:
                     updates.append("avatar_url=?")
                     params.append(aurl)
                 params.append(uid)
-                await conn.execute(
+                await tx.execute(
                     f"UPDATE users SET {', '.join(updates)} WHERE user_id=?",
                     tuple(params),
                 )
-            cur = await conn.execute(
+            cur = await tx.execute(
                 "SELECT user_id, display_name, avatar_url, balance, created_at, daily_claim_ts "
                 "FROM users WHERE user_id=?",
                 (uid,),
             )
             row = await cur.fetchone()
-            await conn.commit()
 
         if row is None:  # pragma: no cover - defensive
             raise RuntimeError(f"Failed to ensure user row for {uid}")
@@ -150,18 +147,17 @@ class UserStore:
         uid = int(user_id)
         now = self._now()
 
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await conn.execute(
+        async with self.db.write_transaction() as tx:
+            await tx.execute(
                 "INSERT OR IGNORE INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
                 (uid, self.starting_balance, now),
             )
-            await conn.execute(
+            await tx.execute(
                 "UPDATE users SET balance = balance + ? WHERE user_id=?",
                 (amount, uid),
             )
-            cur = await conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
+            cur = await tx.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
             row = await cur.fetchone()
-            await conn.commit()
 
         return int(row[0]) if row is not None else self.starting_balance + amount
 
@@ -173,24 +169,22 @@ class UserStore:
         uid = int(user_id)
         now = self._now()
 
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await conn.execute(
+        async with self.db.write_transaction() as tx:
+            await tx.execute(
                 "INSERT OR IGNORE INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
                 (uid, self.starting_balance, now),
             )
-            cur = await conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
+            cur = await tx.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
             row = await cur.fetchone()
             current = int(row[0]) if row is not None else self.starting_balance
             if current < amount:
-                await conn.commit()
                 raise InsufficientBalanceError(f"Insufficient balance. Need ${amount}, have ${current}.")
 
             new_balance = current - amount
-            await conn.execute(
+            await tx.execute(
                 "UPDATE users SET balance=? WHERE user_id=?",
                 (new_balance, uid),
             )
-            await conn.commit()
         return new_balance
 
     async def set_balance(self, user_id: int, amount: int) -> int:
@@ -199,16 +193,15 @@ class UserStore:
         uid = int(user_id)
         now = self._now()
 
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await conn.execute(
+        async with self.db.write_transaction() as tx:
+            await tx.execute(
                 "INSERT OR IGNORE INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
                 (uid, self.starting_balance, now),
             )
-            await conn.execute(
+            await tx.execute(
                 "UPDATE users SET balance=? WHERE user_id=?",
                 (amount, uid),
             )
-            await conn.commit()
         return amount
 
     # ------------------------------------------------------------------
@@ -223,12 +216,12 @@ class UserStore:
         now = self._now()
         uid = int(user_id)
 
-        async with self.db._lock, aiosqlite.connect(self.db.path) as conn:
-            await conn.execute(
+        async with self.db.write_transaction() as tx:
+            await tx.execute(
                 "INSERT OR IGNORE INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
                 (uid, self.starting_balance, now),
             )
-            cur = await conn.execute(
+            cur = await tx.execute(
                 "SELECT balance, daily_claim_ts FROM users WHERE user_id=?",
                 (uid,),
             )
@@ -238,13 +231,11 @@ class UserStore:
 
             next_available = last_claim + DAILY_COOLDOWN_SECONDS
             if now < next_available:
-                await conn.commit()
                 raise DailyAlreadyClaimedError(next_claim_ts=next_available)
 
             new_balance = current + self.daily_claim_amount
-            await conn.execute(
+            await tx.execute(
                 "UPDATE users SET balance=?, daily_claim_ts=? WHERE user_id=?",
                 (new_balance, now, uid),
             )
-            await conn.commit()
         return self.daily_claim_amount, new_balance
