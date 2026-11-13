@@ -11,7 +11,7 @@ from discord import app_commands
 
 from icbot.app import exam
 from icbot.config import Settings
-from icbot.container import get_container, resolve_guild_settings
+from icbot.container import extract_guild_id, get_container, resolve_guild_settings
 from icbot.embeds import system
 from icbot.permissions import is_admin_or_allowed
 
@@ -92,13 +92,15 @@ def _parse_date_time(date_str: str, time_str: str, tz_name: str) -> int:
     return int(dt.timestamp())
 
 
-async def _fetch_exams(db: Any) -> list[ExamItem]:
+async def _fetch_exams(db: Any, guild_id: int = 0) -> list[ExamItem]:
     rows = await db.fetchall(
         """
         SELECT id, course_code, course_name, start_ts, end_ts, location, notes
         FROM exams
+        WHERE guild_id = ?
         ORDER BY start_ts ASC
-        """
+        """,
+        (int(guild_id),),
     )
     out: list[ExamItem] = []
     for r in rows:
@@ -138,8 +140,9 @@ async def exams_cmd(interaction: discord.Interaction) -> None:
         return
 
     tz_name = str(getattr(settings, "exams_tz", "America/Toronto") or "America/Toronto")
+    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
 
-    exams = await _fetch_exams(db)
+    exams = await _fetch_exams(db, gid)
     if not exams:
         e = system(
             settings,
@@ -204,6 +207,7 @@ async def exams_add_cmd(
         return
 
     tz_name = str(getattr(settings, "exams_tz", "America/Toronto") or "America/Toronto")
+    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
 
     try:
         start_ts = _parse_date_time(date, start_time, tz_name)
@@ -222,10 +226,11 @@ async def exams_add_cmd(
     now_ts = int(get_container(interaction.client).clock())
     exam_id = await db.execute_insert(
         """
-        INSERT INTO exams (course_code, course_name, start_ts, end_ts, location, notes, created_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO exams (guild_id, course_code, course_name, start_ts, end_ts, location, notes, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            gid,
             (course_code or "").strip(),
             (course_name or "").strip(),
             int(start_ts),
@@ -261,12 +266,15 @@ async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> No
         await interaction.followup.send("Error: you do not have permission to modify exams.", ephemeral=True)
         return
 
+    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
     async with db.write_transaction() as tx:
-        row = await tx.fetchone("SELECT id FROM exams WHERE id = ?", (int(exam_id),))
+        row = await tx.fetchone("SELECT id FROM exams WHERE id = ? AND guild_id = ?", (int(exam_id), gid))
         if not row:
-            await interaction.followup.send("Error: no exam found with that ID.", ephemeral=True)
+            await interaction.followup.send(
+                "Error: no exam found with that ID in this server.", ephemeral=True
+            )
             return
-        await tx.execute("DELETE FROM exams WHERE id = ?", (int(exam_id),))
+        await tx.execute("DELETE FROM exams WHERE id = ? AND guild_id = ?", (int(exam_id), gid))
     await interaction.followup.send(f"Removed exam ID {exam_id}.", ephemeral=True)
 
 
@@ -283,5 +291,6 @@ async def exams_clear_cmd(interaction: discord.Interaction) -> None:
         await interaction.followup.send("Error: you do not have permission to modify exams.", ephemeral=True)
         return
 
-    await db.execute("DELETE FROM exams")
-    await interaction.followup.send("Cleared all exams.", ephemeral=True)
+    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
+    await db.execute("DELETE FROM exams WHERE guild_id = ?", (gid,))
+    await interaction.followup.send("Cleared all exams for this server.", ephemeral=True)

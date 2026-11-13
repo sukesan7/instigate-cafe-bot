@@ -61,10 +61,11 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
 
     # ---- Blackjack stats ----
     try:
+        gid = int(getattr(settings, "guild_id", 0) or 0)
         bj_row = (
             await db.fetchone(
-                "SELECT hands_played, wins, losses, pushes, reset_count FROM blackjack_users WHERE user_id=?",
-                (target.id,),
+                "SELECT hands_played, wins, losses, pushes, reset_count FROM blackjack_users WHERE guild_id=? AND user_id=?",
+                (gid, target.id),
             )
             if db is not None
             else None

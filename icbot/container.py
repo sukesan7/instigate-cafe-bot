@@ -9,6 +9,7 @@ clients that do not subclass ``CampusBot``.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import random
 import sqlite3
 import ssl
@@ -305,27 +306,41 @@ class ServiceContainer:
             if not go_session.closed:
                 await go_session.close()
 
-    def user_store(self, settings: Settings | None = None, *, db: Database | None = None) -> UserStore:
+    def user_store(
+        self,
+        settings: Settings | None = None,
+        *,
+        db: Database | None = None,
+        guild_id: int | None = None,
+    ) -> UserStore:
         eff_settings = settings or self.settings
         eff_db = db if db is not None else self.db
         if eff_db is None:
             raise RuntimeError("Database is not initialized on ServiceContainer")
+        gid = int(guild_id) if guild_id is not None else int(getattr(eff_settings, "guild_id", 0) or 0)
         return UserStore(
             eff_db,
+            guild_id=gid,
             starting_balance=int(getattr(eff_settings, "bj_starting_bankroll", 1000) or 1000),
             daily_claim_amount=int(getattr(eff_settings, "daily_claim_amount", 100) or 100),
             clock=self.clock,
         )
 
     def fun_market_store(
-        self, settings: Settings | None = None, *, db: Database | None = None
+        self,
+        settings: Settings | None = None,
+        *,
+        db: Database | None = None,
+        guild_id: int | None = None,
     ) -> FunMarketStore:
         eff_settings = settings or self.settings
         eff_db = db if db is not None else self.db
         if eff_db is None:
             raise RuntimeError("Database is not initialized on ServiceContainer")
+        gid = int(guild_id) if guild_id is not None else int(getattr(eff_settings, "guild_id", 0) or 0)
         return FunMarketStore(
             eff_db,
+            guild_id=gid,
             starting_bankroll=int(getattr(eff_settings, "bj_starting_bankroll", 1000) or 1000),
             tz_name=str(
                 getattr(eff_settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto"
@@ -334,7 +349,11 @@ class ServiceContainer:
         )
 
     def blackjack_store(
-        self, settings: Settings | None = None, *, db: Database | None = None
+        self,
+        settings: Settings | None = None,
+        *,
+        db: Database | None = None,
+        guild_id: int | None = None,
     ) -> BlackjackStore:
         from icbot.features.blackjack import BlackjackStore
 
@@ -342,9 +361,11 @@ class ServiceContainer:
         eff_db = db if db is not None else self.db
         if eff_db is None:
             raise RuntimeError("Database is not initialized on ServiceContainer")
+        gid = int(guild_id) if guild_id is not None else int(getattr(eff_settings, "guild_id", 0) or 0)
         return BlackjackStore(
             eff_db,
             int(getattr(eff_settings, "bj_starting_bankroll", 1000) or 1000),
+            guild_id=gid,
             clock=self.clock,
         )
 
@@ -374,13 +395,14 @@ class ServiceContainer:
             store = GuildSettingsStore(self.db, clock=self.clock)
             self.guild_settings = store
         if store is None:
-            return self.settings
+            return dataclasses.replace(self.settings, guild_id=int(guild_id))
         try:
-            return await store.resolve_for_guild(self.settings, int(guild_id))
+            resolved = await store.resolve_for_guild(self.settings, int(guild_id))
+            return dataclasses.replace(resolved, guild_id=int(guild_id))
         except (sqlite3.OperationalError, aiosqlite.OperationalError) as exc:
             # Tolerate partial/unmigrated test DB mocks lacking guild_settings table
             if "guild_settings" in str(exc).lower():
-                return self.settings
+                return dataclasses.replace(self.settings, guild_id=int(guild_id))
             raise
 
 

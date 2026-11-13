@@ -1198,7 +1198,7 @@ class Settings:
             return default if v is None else str(v)
 
         def _parse_int_field(env_key: str, field: str, default: int, *, snowflake: bool = False) -> int:
-            raw = _env(env_key, "").strip()
+            raw = _env(env_key, "").split("#")[0].strip()
             if not raw:
                 return default
             try:
@@ -1214,7 +1214,7 @@ class Settings:
             return n
 
         def _parse_float_field(env_key: str, field: str, default: float) -> float:
-            raw = _env(env_key, "").strip()
+            raw = _env(env_key, "").split("#")[0].strip()
             if not raw:
                 return default
             try:
@@ -1224,7 +1224,7 @@ class Settings:
                 return default
 
         def _parse_bool_field(env_key: str, field: str, default: bool) -> bool:
-            raw = _env(env_key, "").strip().lower()
+            raw = _env(env_key, "").split("#")[0].strip().lower()
             if not raw:
                 return default
             if raw in _TRUE_VALUES:
@@ -1354,7 +1354,7 @@ class Settings:
         ttc_mastodon_base = _env("TTC_MASTODON_BASE", "").strip()
         ttc_mastodon_acct = _env("TTC_MASTODON_ACCT", "").strip()
         ttc_poll_seconds = _parse_int_field("TTC_POLL_SECONDS", "ttc_poll_seconds", 120)
-        ttc_alert_level = _env("TTC_ALERT_LEVEL", "major").strip().lower() or "major"
+        ttc_alert_level = _env("TTC_ALERT_LEVEL", "major").split("#")[0].strip().lower() or "major"
         ttc_bootstrap_post_latest = _parse_bool_field(
             "TTC_BOOTSTRAP_POST_LATEST", "ttc_bootstrap_post_latest", False
         )
@@ -1371,7 +1371,7 @@ class Settings:
             "GO_ALERTS_CHANNEL_ID", "go_alerts_channel_id", 0, snowflake=True
         )
         go_poll_seconds = _parse_int_field("GO_POLL_SECONDS", "go_poll_seconds", 180)
-        go_alert_level = _env("GO_ALERT_LEVEL", "major").strip().lower() or "major"
+        go_alert_level = _env("GO_ALERT_LEVEL", "major").split("#")[0].strip().lower() or "major"
         go_bootstrap_post_latest = _parse_bool_field(
             "GO_BOOTSTRAP_POST_LATEST", "go_bootstrap_post_latest", True
         )

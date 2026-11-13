@@ -29,7 +29,6 @@ from icbot.scheduler import (
     seconds_until_next_local_time,
 )
 from icbot.services.crypto_fng import FearGreed
-from icbot.services.fun_market import FunMarketStore
 from icbot.services.gemini_client import GeminiError
 from icbot.services.yahoo_quotes import Quote
 from icbot.tasks import job_alerts, jobs_workday_alerts, market_daily_report
@@ -556,7 +555,7 @@ async def test_daily_report_dst_schedule_same_day_idempotency_and_forbidden_auto
     bot.get_channel = lambda cid: forbidden_ch if int(cid) == forbidden_ch.id else None  # type: ignore[method-assign]
 
     await bot.setup_hook()
-    store = FunMarketStore(bot.db, clock=clock, tz_name=tz_name)
+    store = services.fun_market_store(settings)
     await store.sync_catalog()
     ic_before = await store.get_stock("IC")
     assert ic_before is not None

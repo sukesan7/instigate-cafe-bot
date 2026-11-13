@@ -12,6 +12,20 @@ pytestmark = pytest.mark.unit
 
 
 def test_settings_from_empty_env_is_safe():
+    # Verify explicitly empty environment dictionary
+    explicit_empty = Settings.from_env(environ={})
+    assert explicit_empty.token == ""
+    assert explicit_empty.guild_id == 0
+    assert explicit_empty.guild_id_invalid is False
+    assert explicit_empty.llm_enabled is False
+    assert explicit_empty.market_watch_enabled is False
+    assert explicit_empty.btc_watch_enabled is False
+    assert explicit_empty.allow_gateway is False
+    assert explicit_empty.embed_accent_color == 0xA64DFF
+    assert explicit_empty.embed_footer_text == "Instigate Cafe"
+    assert explicit_empty.workday_poll_seconds == explicit_empty.jobs_poll_seconds
+
+    # Verify isolated test environment defaults
     settings = Settings.from_env()
     assert settings.token == ""
     assert settings.guild_id == 0

@@ -191,6 +191,7 @@ def _isolate_environment(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setenv("DB_PATH", ":memory:")
     monkeypatch.setenv("JOBS_POLL_SECONDS", "0")
+    monkeypatch.setenv("WORKDAY_POLL_SECONDS", "0")
 
     try:
         import dotenv

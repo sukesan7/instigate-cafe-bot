@@ -54,83 +54,181 @@ class BlackjackStore:
         db: Database,
         starting_bankroll: int,
         *,
+        guild_id: int = 0,
         clock: Callable[[], float] | None = None,
     ):
         self.db = db
+        self.guild_id = int(guild_id or 0)
         self.starting_bankroll = int(starting_bankroll)
         self._clock: Callable[[], float] = clock if clock is not None else time.time
 
-    async def _ensure_user_conn(self, conn: aiosqlite.Connection | Transaction, user_id: int) -> None:
+    def _resolve_gid(self, guild_id: int | None) -> int:
+        return int(guild_id) if guild_id is not None else self.guild_id
+
+    async def _ensure_user_conn(
+        self,
+        conn: aiosqlite.Connection | Transaction,
+        user_id: int,
+        guild_id: int | None = None,
+    ) -> None:
         uid = int(user_id)
+        gid = self._resolve_gid(guild_id)
         await conn.execute(
-            "INSERT OR IGNORE INTO users (user_id, balance, created_at) VALUES (?, ?, ?)",
-            (uid, self.starting_bankroll, int(self._clock())),
+            "INSERT OR IGNORE INTO users (guild_id, user_id, balance, created_at) VALUES (?, ?, ?, ?)",
+            (gid, uid, self.starting_bankroll, int(self._clock())),
         )
-        cur = await conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
+        cur = await conn.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
         bal_row = await cur.fetchone()
         bal = int(bal_row[0]) if bal_row is not None else self.starting_bankroll
         await conn.execute(
-            "INSERT OR IGNORE INTO blackjack_users (user_id, bankroll) VALUES (?, ?)",
-            (uid, bal),
+            "INSERT OR IGNORE INTO blackjack_users (guild_id, user_id, bankroll) VALUES (?, ?, ?)",
+            (gid, uid, bal),
         )
 
-    async def ensure_user(self, user_id: int) -> None:
+    async def ensure_user(self, user_id: int, *, guild_id: int | None = None) -> None:
         """Ensure both the central `users` row and `blackjack_users` stats row exist."""
+        gid = self._resolve_gid(guild_id)
         async with self.db.write_transaction() as tx:
-            await self._ensure_user_conn(tx, user_id)
+            await self._ensure_user_conn(tx, user_id, gid)
 
-    async def get_bankroll(self, user_id: int) -> int:
-        """Read balance from the central `users` table."""
+    async def get_bankroll(self, user_id: int, *, guild_id: int | None = None) -> int:
+        """Read balance from the central `users` table for this guild."""
         uid = int(user_id)
+        gid = self._resolve_gid(guild_id)
         async with self.db.write_transaction() as tx:
-            await self._ensure_user_conn(tx, uid)
-            cur = await tx.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
+            await self._ensure_user_conn(tx, uid, gid)
+            cur = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
             row = await cur.fetchone()
         return int(row[0]) if row is not None else self.starting_bankroll
 
-    async def get_reset_count(self, user_id: int) -> int:
+    async def get_reset_count(self, user_id: int, *, guild_id: int | None = None) -> int:
         uid = int(user_id)
+        gid = self._resolve_gid(guild_id)
         async with self.db.write_transaction() as tx:
-            await self._ensure_user_conn(tx, uid)
+            await self._ensure_user_conn(tx, uid, gid)
             cur = await tx.execute(
-                "SELECT reset_count FROM blackjack_users WHERE user_id=?",
-                (uid,),
+                "SELECT reset_count FROM blackjack_users WHERE guild_id=? AND user_id=?",
+                (gid, uid),
             )
             row = await cur.fetchone()
         return int(row[0]) if row is not None and row[0] is not None else 0
 
-    async def reserve_wager(self, user_id: int, amount: int) -> int:
-        """Atomically deduct an active wager up front into escrow."""
+    async def reserve_wager(
+        self,
+        user_id: int,
+        amount: int,
+        *,
+        guild_id: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> int:
+        """Atomically deduct an active wager up front into escrow with ledger recording."""
         amount = int(amount)
         if amount <= 0:
             raise ValueError("Bet must be >= 1.")
         uid = int(user_id)
+        gid = self._resolve_gid(guild_id)
+        now_ts = int(self._clock())
+
         async with self.db.write_transaction() as tx:
-            await self._ensure_user_conn(tx, uid)
-            cur = await tx.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
-            row = await cur.fetchone()
-            available = int(row[0]) if row is not None else self.starting_bankroll
-            if available < amount:
+            if idempotency_key:
+                cur_idem = await tx.execute(
+                    "SELECT balance_after FROM economy_ledger WHERE transaction_id=?",
+                    (str(idempotency_key),),
+                )
+                idem_row = await cur_idem.fetchone()
+                if idem_row is not None:
+                    return int(idem_row[0])
+
+            await self._ensure_user_conn(tx, uid, gid)
+
+            # Atomic conditional update
+            cur = await tx.execute(
+                "UPDATE users SET balance = balance - ? WHERE guild_id=? AND user_id=? AND balance >= ?",
+                (amount, gid, uid, amount),
+            )
+            if cur.rowcount == 0:
+                cur_bal = await tx.execute(
+                    "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                )
+                bal_row = await cur_bal.fetchone()
+                available = int(bal_row[0]) if bal_row is not None else self.starting_bankroll
                 raise _InsufficientWagerError(available)
-            new_balance = available - amount
-            await tx.execute("UPDATE users SET balance=? WHERE user_id=?", (new_balance, uid))
-            await tx.execute("UPDATE blackjack_users SET bankroll=? WHERE user_id=?", (new_balance, uid))
+
+            cur2 = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
+            row2 = await cur2.fetchone()
+            new_balance = int(row2[0]) if row2 is not None else 0
+
+            await tx.execute(
+                "UPDATE blackjack_users SET bankroll=? WHERE guild_id=? AND user_id=?",
+                (new_balance, gid, uid),
+            )
+
+            tx_id = (
+                str(idempotency_key)
+                if idempotency_key
+                else f"bj_bet:{gid}:{uid}:{now_ts}:{time.monotonic_ns()}"
+            )
+            await tx.execute(
+                """
+                INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                VALUES (?, ?, ?, ?, ?, 'bet', 'blackjack', ?)
+                """,
+                (tx_id, gid, uid, -amount, new_balance, now_ts),
+            )
         return new_balance
 
-    async def refund_wager(self, user_id: int, amount: int) -> int:
+    async def refund_wager(
+        self,
+        user_id: int,
+        amount: int,
+        *,
+        guild_id: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> int:
         """Return an escrowed wager if a hand cannot start or split."""
         amount = int(amount)
+        gid = self._resolve_gid(guild_id)
         if amount <= 0:
-            return await self.get_bankroll(user_id)
+            return await self.get_bankroll(user_id, guild_id=gid)
         uid = int(user_id)
+        now_ts = int(self._clock())
+
         async with self.db.write_transaction() as tx:
-            await self._ensure_user_conn(tx, uid)
-            cur = await tx.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
+            if idempotency_key:
+                cur_idem = await tx.execute(
+                    "SELECT balance_after FROM economy_ledger WHERE transaction_id=?",
+                    (str(idempotency_key),),
+                )
+                idem_row = await cur_idem.fetchone()
+                if idem_row is not None:
+                    return int(idem_row[0])
+
+            await self._ensure_user_conn(tx, uid, gid)
+            await tx.execute(
+                "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
+                (amount, gid, uid),
+            )
+            cur = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
             row = await cur.fetchone()
-            cur_balance = int(row[0]) if row is not None else self.starting_bankroll
-            new_balance = cur_balance + amount
-            await tx.execute("UPDATE users SET balance=? WHERE user_id=?", (new_balance, uid))
-            await tx.execute("UPDATE blackjack_users SET bankroll=? WHERE user_id=?", (new_balance, uid))
+            new_balance = int(row[0]) if row is not None else self.starting_bankroll
+
+            await tx.execute(
+                "UPDATE blackjack_users SET bankroll=? WHERE guild_id=? AND user_id=?",
+                (new_balance, gid, uid),
+            )
+
+            tx_id = (
+                str(idempotency_key)
+                if idempotency_key
+                else f"bj_refund:{gid}:{uid}:{now_ts}:{time.monotonic_ns()}"
+            )
+            await tx.execute(
+                """
+                INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                VALUES (?, ?, ?, ?, ?, 'refund', 'blackjack', ?)
+                """,
+                (tx_id, gid, uid, amount, new_balance, now_ts),
+            )
         return new_balance
 
     async def apply_delta_and_stats(
@@ -139,20 +237,39 @@ class BlackjackStore:
         delta: int,
         result_counts: dict[str, int],
         hands_played: int,
+        *,
+        guild_id: int | None = None,
+        idempotency_key: str | None = None,
     ) -> int:
         uid = int(user_id)
+        gid = self._resolve_gid(guild_id)
         delta = int(delta)
         hands_played = int(hands_played)
+        now_ts = int(self._clock())
+
         async with self.db.write_transaction() as tx:
-            await self._ensure_user_conn(tx, uid)
-            cur = await tx.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
+            if idempotency_key:
+                cur_idem = await tx.execute(
+                    "SELECT balance_after FROM economy_ledger WHERE transaction_id=?",
+                    (str(idempotency_key),),
+                )
+                idem_row = await cur_idem.fetchone()
+                if idem_row is not None:
+                    return int(idem_row[0])
+
+            await self._ensure_user_conn(tx, uid, gid)
+            if delta != 0:
+                await tx.execute(
+                    "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
+                    (delta, gid, uid),
+                )
+            cur = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
             bal_row = await cur.fetchone()
-            bankroll = (int(bal_row[0]) if bal_row is not None else self.starting_bankroll) + delta
-            await tx.execute("UPDATE users SET balance=? WHERE user_id=?", (bankroll, uid))
+            bankroll = int(bal_row[0]) if bal_row is not None else self.starting_bankroll
 
             cur2 = await tx.execute(
-                "SELECT wins, losses, pushes, hands_played FROM blackjack_users WHERE user_id=?",
-                (uid,),
+                "SELECT wins, losses, pushes, hands_played FROM blackjack_users WHERE guild_id=? AND user_id=?",
+                (gid, uid),
             )
             row = await cur2.fetchone()
             wins, losses, pushes, played = map(int, row) if row is not None else (0, 0, 0, 0)
@@ -162,41 +279,67 @@ class BlackjackStore:
             played += hands_played
 
             await tx.execute(
-                "UPDATE blackjack_users SET bankroll=?, wins=?, losses=?, pushes=?, hands_played=? WHERE user_id=?",
-                (bankroll, wins, losses, pushes, played, uid),
+                "UPDATE blackjack_users SET bankroll=?, wins=?, losses=?, pushes=?, hands_played=? WHERE guild_id=? AND user_id=?",
+                (bankroll, wins, losses, pushes, played, gid, uid),
             )
+
+            if delta != 0:
+                tx_id = (
+                    str(idempotency_key)
+                    if idempotency_key
+                    else f"bj_payout:{gid}:{uid}:{now_ts}:{time.monotonic_ns()}"
+                )
+                await tx.execute(
+                    """
+                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'payout', 'blackjack', ?)
+                    """,
+                    (tx_id, gid, uid, delta, bankroll, now_ts),
+                )
         return bankroll
 
-    async def leaderboard(self, limit: int = 10) -> list[tuple[int, int]]:
-        """Leaderboard by balance from the central users table."""
+    async def leaderboard(self, limit: int = 10, *, guild_id: int | None = None) -> list[tuple[int, int]]:
+        """Leaderboard by balance from the central users table for this guild."""
+        gid = self._resolve_gid(guild_id)
         limit = max(1, min(limit, 25))
         rows = await self.db.fetchall(
-            "SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT ?",
-            (limit,),
+            "SELECT user_id, balance FROM users WHERE guild_id=? ORDER BY balance DESC LIMIT ?",
+            (gid, limit),
         )
         return [(int(uid), int(br)) for uid, br in rows]
 
-    async def reset_user(self, user_id: int) -> int:
-        """Reset bankroll/stats and increment the user's reset counter."""
+    async def reset_user(self, user_id: int, *, guild_id: int | None = None) -> int:
+        """Reset bankroll/stats and increment the user's reset counter in this guild."""
         uid = int(user_id)
+        gid = self._resolve_gid(guild_id)
+        now_ts = int(self._clock())
+
         async with self.db.write_transaction() as tx:
-            await self._ensure_user_conn(tx, uid)
+            await self._ensure_user_conn(tx, uid, gid)
             cur = await tx.execute(
-                "SELECT reset_count FROM blackjack_users WHERE user_id=?",
-                (uid,),
+                "SELECT reset_count FROM blackjack_users WHERE guild_id=? AND user_id=?",
+                (gid, uid),
             )
             row = await cur.fetchone()
             resets = (int(row[0]) if row is not None and row[0] is not None else 0) + 1
 
             await tx.execute(
-                "UPDATE users SET balance=? WHERE user_id=?",
-                (self.starting_bankroll, uid),
+                "UPDATE users SET balance=? WHERE guild_id=? AND user_id=?",
+                (self.starting_bankroll, gid, uid),
             )
             await tx.execute(
                 "UPDATE blackjack_users "
                 "SET bankroll=?, hands_played=0, wins=0, losses=0, pushes=0, reset_count=? "
-                "WHERE user_id=?",
-                (self.starting_bankroll, resets, uid),
+                "WHERE guild_id=? AND user_id=?",
+                (self.starting_bankroll, resets, gid, uid),
+            )
+            tx_id = f"bj_reset:{gid}:{uid}:{now_ts}:{time.monotonic_ns()}"
+            await tx.execute(
+                """
+                INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                VALUES (?, ?, ?, 0, ?, 'admin_set', 'blackjack_reset', ?)
+                """,
+                (tx_id, gid, uid, self.starting_bankroll, now_ts),
             )
         return resets
 
