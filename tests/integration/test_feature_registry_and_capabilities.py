@@ -77,9 +77,9 @@ def test_feature_manifest_completeness_and_contract():
 
         all_supplied.extend(m.commands_supplied)
 
-    # 41 commands with zero overlap across modules
-    assert len(all_supplied) == 41
-    assert len(set(all_supplied)) == 41
+    # 47 commands with zero overlap across modules
+    assert len(all_supplied) == 47
+    assert len(set(all_supplied)) == 47
 
     # Every command maps back to its module
     for cmd in all_supplied:
@@ -96,7 +96,7 @@ def test_route_inventory_before_and_after_registry_enhancement():
     root = register_ic_commands(tree, override=True)
     names = registered_qualified_names(root)
 
-    assert len(names) == 41
+    assert len(names) == 47
     all_manifest_cmds = {cmd for m in FEATURE_MANIFESTS.values() for cmd in m.commands_supplied}
     assert set(names) == all_manifest_cmds
 

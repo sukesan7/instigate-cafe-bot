@@ -176,7 +176,7 @@ def main() -> int:
     commands_registered = list(app.ic.walk_commands())
     leaf_commands = registry.iter_leaf_commands()
     assert len(registry.FEATURE_MODULES) >= 17, "Expected >= 17 feature modules"
-    assert len(leaf_commands) == 41, f"Expected 41 leaf commands, got {len(leaf_commands)}"
+    assert len(leaf_commands) == 47, f"Expected 47 leaf commands, got {len(leaf_commands)}"
 
     print(
         f"[OK] Offline smoke check passed: "

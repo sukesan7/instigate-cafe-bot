@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
@@ -331,6 +331,20 @@ def resolve_effective_settings(base: Settings, guild_cfg: GuildSettings | None) 
     return dataclasses.replace(base, **validated)
 
 
+@dataclass(frozen=True)
+class GuildSettingsAuditEntry:
+    """Immutable audit record tracking administrative per-guild configuration changes."""
+
+    audit_id: int
+    guild_id: int
+    actor_id: int
+    action: str
+    changed_keys: tuple[str, ...]
+    previous_json: str
+    new_json: str
+    created_at: int
+
+
 class GuildSettingsStore:
     """SQLite-backed CRUD store for non-secret per-guild configuration overrides."""
 
@@ -340,6 +354,58 @@ class GuildSettingsStore:
 
     def _now(self) -> int:
         return int(self._clock() if self._clock is not None else time.time())
+
+    async def record_audit(
+        self,
+        guild_id: int,
+        actor_id: int,
+        action: str,
+        changed_keys: Sequence[str],
+        previous_json: str,
+        new_json: str,
+    ) -> None:
+        """Persist an audit log entry for a configuration modification."""
+        now = self._now()
+        keys_str = ",".join(sorted(changed_keys))
+        await self.db.execute(
+            """
+            INSERT INTO guild_settings_audit (
+                guild_id, actor_id, action, changed_keys, previous_json, new_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (int(guild_id), int(actor_id), str(action), keys_str, str(previous_json), str(new_json), now),
+        )
+
+    async def get_audit_history(self, guild_id: int, limit: int = 10) -> list[GuildSettingsAuditEntry]:
+        """Retrieve recent configuration audit entries for ``guild_id`` in reverse chronological order."""
+        gid = int(guild_id)
+        rows = await self.db.fetchall(
+            """
+            SELECT audit_id, guild_id, actor_id, action, changed_keys, previous_json, new_json, created_at
+            FROM guild_settings_audit
+            WHERE guild_id = ?
+            ORDER BY created_at DESC, audit_id DESC
+            LIMIT ?
+            """,
+            (gid, max(1, min(limit, 50))),
+        )
+        entries: list[GuildSettingsAuditEntry] = []
+        for r in rows or []:
+            raw_keys = str(r[4])
+            parsed_keys = tuple(k.strip() for k in raw_keys.split(",") if k.strip())
+            entries.append(
+                GuildSettingsAuditEntry(
+                    audit_id=int(r[0]),
+                    guild_id=int(r[1]),
+                    actor_id=int(r[2]),
+                    action=str(r[3]),
+                    changed_keys=parsed_keys,
+                    previous_json=str(r[5]),
+                    new_json=str(r[6]),
+                    created_at=int(r[7]),
+                )
+            )
+        return entries
 
     async def get(self, guild_id: int) -> GuildSettings | None:
         gid = int(guild_id)
@@ -360,8 +426,17 @@ class GuildSettingsStore:
             raise ConfigValidationError(f"guild_settings payload for guild {gid} must be a JSON object")
         return GuildSettings(guild_id=gid, overrides=parsed, updated_at=int(updated_at or 0))
 
-    async def set_overrides(self, guild_id: int, overrides: Mapping[str, Any]) -> GuildSettings:
+    async def set_overrides(
+        self,
+        guild_id: int,
+        overrides: Mapping[str, Any],
+        *,
+        actor_id: int = 0,
+    ) -> GuildSettings:
         gid = int(guild_id)
+        existing = await self.get(gid)
+        prev_payload = json.dumps(dict(existing.overrides), sort_keys=True) if existing is not None else "{}"
+
         now = self._now()
         gs = GuildSettings(guild_id=gid, overrides=overrides, updated_at=now)
         payload = json.dumps(dict(gs.overrides), sort_keys=True)
@@ -372,11 +447,28 @@ class GuildSettingsStore:
             """,
             (gid, payload, now),
         )
+        if actor_id > 0:
+            changed = list(set(overrides.keys()) | (set(existing.overrides.keys()) if existing else set()))
+            await self.record_audit(
+                guild_id=gid,
+                actor_id=actor_id,
+                action="set",
+                changed_keys=changed,
+                previous_json=prev_payload,
+                new_json=payload,
+            )
         return gs
 
-    async def update_overrides(self, guild_id: int, updates: Mapping[str, Any]) -> GuildSettings:
+    async def update_overrides(
+        self,
+        guild_id: int,
+        updates: Mapping[str, Any],
+        *,
+        actor_id: int = 0,
+    ) -> GuildSettings:
         gid = int(guild_id)
         existing = await self.get(gid)
+        prev_payload = json.dumps(dict(existing.overrides), sort_keys=True) if existing is not None else "{}"
         merged: dict[str, Any] = dict(existing.overrides) if existing is not None else {}
         for k, v in updates.items():
             key = str(k).strip()
@@ -384,7 +476,45 @@ class GuildSettingsStore:
                 merged.pop(key, None)
             else:
                 merged[key] = v
-        return await self.set_overrides(gid, merged)
+        now = self._now()
+        gs = GuildSettings(guild_id=gid, overrides=merged, updated_at=now)
+        new_payload = json.dumps(dict(gs.overrides), sort_keys=True)
+        await self.db.execute(
+            """
+            INSERT OR REPLACE INTO guild_settings (guild_id, settings_json, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (gid, new_payload, now),
+        )
+        if actor_id > 0:
+            await self.record_audit(
+                guild_id=gid,
+                actor_id=actor_id,
+                action="update",
+                changed_keys=list(updates.keys()),
+                previous_json=prev_payload,
+                new_json=new_payload,
+            )
+        return gs
+
+    async def reset_overrides(self, guild_id: int, *, actor_id: int = 0) -> bool:
+        """Reset all per-guild configuration overrides back to default process settings."""
+        gid = int(guild_id)
+        existing = await self.get(gid)
+        if existing is None:
+            return False
+        prev_payload = json.dumps(dict(existing.overrides), sort_keys=True)
+        await self.db.execute("DELETE FROM guild_settings WHERE guild_id=?", (gid,))
+        if actor_id > 0:
+            await self.record_audit(
+                guild_id=gid,
+                actor_id=actor_id,
+                action="reset",
+                changed_keys=tuple(existing.overrides.keys()),
+                previous_json=prev_payload,
+                new_json="{}",
+            )
+        return True
 
     async def clear(self, guild_id: int) -> None:
         gid = int(guild_id)

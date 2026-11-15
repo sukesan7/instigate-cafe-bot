@@ -170,9 +170,16 @@ class FakeResponse:
         self.ephemeral = False
         self.sent_messages: list[RecordedMessage] = []
         self.edit_messages: list[RecordedMessage] = []
+        self.sent_modals: list[Any] = []
 
     def is_done(self) -> bool:
         return self._done
+
+    async def send_modal(self, modal: Any) -> None:
+        if self._done:
+            raise discord.InteractionResponded(self._interaction)  # type: ignore[arg-type]
+        self._done = True
+        self.sent_modals.append(modal)
 
     async def defer(self, *, ephemeral: bool = False, thinking: bool = False) -> None:
         if self._done:
@@ -317,6 +324,10 @@ class FakeInteraction:
         self.followup = FakeFollowup(self.response)
         self.message = message
         self._original_message: FakeMessage | None = message
+
+    @property
+    def guild_id(self) -> int | None:
+        return getattr(self.guild, "id", None)
 
     def _sync_original_message(self, rec: RecordedMessage) -> None:
         if self._original_message is None:

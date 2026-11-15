@@ -592,6 +592,30 @@ async def _migrate_0004_guild_scoped_economy_and_ledger(tx: Transaction) -> None
     )
 
 
+async def _migrate_0005_guild_settings_audit(tx: Transaction) -> None:
+    """Introduce audit log table for per-guild configuration changes."""
+    await tx.execute(
+        """
+        CREATE TABLE IF NOT EXISTS guild_settings_audit (
+            audit_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id      INTEGER NOT NULL,
+            actor_id      INTEGER NOT NULL,
+            action        TEXT    NOT NULL,
+            changed_keys  TEXT    NOT NULL,
+            previous_json TEXT    NOT NULL,
+            new_json      TEXT    NOT NULL,
+            created_at    INTEGER NOT NULL
+        )
+        """
+    )
+    await tx.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_guild_settings_audit_guild
+        ON guild_settings_audit (guild_id, created_at DESC)
+        """
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(version=1, name="0001_baseline_schema", up=_migrate_0001_baseline),
     Migration(version=2, name="0002_grades_cache", up=_migrate_0002_grades_cache),
@@ -600,6 +624,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=4,
         name="0004_guild_scoped_economy_and_ledger",
         up=_migrate_0004_guild_scoped_economy_and_ledger,
+    ),
+    Migration(
+        version=5,
+        name="0005_guild_settings_audit",
+        up=_migrate_0005_guild_settings_audit,
     ),
 )
 
