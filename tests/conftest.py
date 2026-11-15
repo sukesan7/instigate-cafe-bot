@@ -39,6 +39,20 @@ from tests.helpers import (
 )
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Ensure process-level offline safety defaults before test collection begins."""
+    # Prevent live tokens from leaking into test processes regardless of caller shell or .env
+    os.environ["DISCORD_TOKEN"] = ""
+    os.environ["ICBOT_ALLOW_GATEWAY"] = "false"
+    os.environ["DB_PATH"] = ":memory:"
+    try:
+        import dotenv
+
+        dotenv.load_dotenv = lambda *args, **kwargs: False
+    except ImportError:
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _disable_outbound_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
     """Fail closed on any unmocked outbound socket/HTTP/DNS call during tests."""

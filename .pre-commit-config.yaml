@@ -34,9 +34,16 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: mypy-check
+        name: Mypy static type check (mypy .)
+        language: system
+        entry: bash -c 'MYPY=$([ -x .venv/bin/mypy ] && echo .venv/bin/mypy || echo mypy); exec "$MYPY" .'
+        pass_filenames: false
+        always_run: true
+
       - id: pytest-check
         name: Pytest offline test suite (pytest .)
         language: system
-        entry: bash -c 'export DISCORD_TOKEN="" ICBOT_ALLOW_GATEWAY="false"; PYTEST=$([ -x .venv/bin/pytest ] && echo .venv/bin/pytest || echo pytest); exec "$PYTEST" .'
+        entry: bash -c 'PYTEST=$([ -x .venv/bin/pytest ] && echo .venv/bin/pytest || echo pytest); exec "$PYTEST" .'
         pass_filenames: false
         always_run: true
