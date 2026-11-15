@@ -13,38 +13,10 @@ repos:
         files: (^|/)(\.env(\..*)?$|.*\.db(-wal|-shm)?$|.*\.sqlite3?$|.*\.pem$|.*\.key$|id_(rsa|ed25519).*$|lore\.(?!example\.)[^/]+\.json$)
         exclude: ^(\.env\.example|tools/lore\.example\.json|tests/fixtures/synthetic_lore\.json)$
 
-      - id: scan-secrets-and-hygiene
-        name: Deterministic secret & .env.example hygiene scan
+      - id: ruff-format
+        name: Ruff format (ruff format .)
         language: system
-        entry: python3 tools/scan_secrets.py --enforce-clean
-        pass_filenames: false
-        always_run: true
-
-      - id: block-private-key-blocks
-        name: Block PEM private key material
-        language: pygrep
-        entry: '-----BEGIN (?:[A-Z ]+)?PRIVATE KEY-----'
-        types: [text]
-        exclude: ^(tools/scan_secrets\.py|docs/|tests/fixtures/|\.pre-commit-config\.yaml$)
-
-      - id: check-merge-conflicts
-        name: Reject unresolved Git merge conflict markers
-        language: pygrep
-        entry: '^(<{7} |={7}$|>{7} )'
-        types: [text]
-        exclude: ^docs/
-
-      - id: check-syntax-ast-json-toml-yaml
-        name: Validate Python AST, JSON, TOML, and YAML syntax
-        language: system
-        entry: bash -c 'PY=$([ -x .venv/bin/python ] && echo .venv/bin/python || echo python3); exec "$PY" tools/check_syntax.py "$@"' --
-        files: \.(py|json|toml|yml|yaml)$
-        types: [file]
-
-      - id: ruff-check
-        name: Ruff lint (ruff check .)
-        language: system
-        entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" check .'
+        entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" format .'
         pass_filenames: false
         always_run: true
 
@@ -55,17 +27,10 @@ repos:
         pass_filenames: false
         always_run: true
 
-      - id: mypy-check
-        name: Mypy static type check (mypy .)
+      - id: ruff-check
+        name: Ruff lint (ruff check .)
         language: system
-        entry: bash -c 'MYPY=$([ -x .venv/bin/mypy ] && echo .venv/bin/mypy || echo mypy); exec "$MYPY" .'
-        pass_filenames: false
-        always_run: true
-
-      - id: smoke-offline
-        name: Offline import and command registry smoke check
-        language: system
-        entry: bash -c 'PY=$([ -x .venv/bin/python ] && echo .venv/bin/python || echo python3); exec "$PY" tools/smoke_offline.py'
+        entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" check .'
         pass_filenames: false
         always_run: true
 

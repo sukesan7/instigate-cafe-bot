@@ -27,7 +27,7 @@ from icbot.db import Database
 from icbot.errors import BotError, format_exception_safe, safe_error_summary
 from icbot.guild_config import GuildSettingsStore
 from icbot.permissions import is_admin_or_allowed
-from icbot.registry import register_ic_commands
+from icbot.registry import check_command_gate, register_ic_commands
 from icbot.scheduler import (
     TaskHealth,
     TaskSupervisor,
@@ -169,6 +169,8 @@ async def on_app_command_error(
 class _CafeCommandTree(app_commands.CommandTree["CampusBot"]):
     async def interaction_check(self, interaction: discord.Interaction[CampusBot], /) -> bool:
         eff_settings = await resolve_guild_settings(self.client, interaction)
+        if not await check_command_gate(interaction, eff_settings):
+            return False
         return await ic_channel_gate(interaction, eff_settings)
 
     async def on_error(

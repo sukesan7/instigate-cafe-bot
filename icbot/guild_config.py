@@ -58,6 +58,10 @@ PROCESS_ONLY_KEYS: frozenset[str] = frozenset(
 
 GUILD_OVERRIDABLE_KEYS: frozenset[str] = frozenset(
     {
+        # Feature profile & module overrides
+        "feature_profile",
+        "enabled_features",
+        "disabled_features",
         # Channels & roles
         "stock_channel_id",
         "user_command_channel_id",
@@ -166,6 +170,7 @@ _FLOAT_KEYS = frozenset(
 
 _STR_KEYS = frozenset(
     {
+        "feature_profile",
         "embed_logo_url",
         "embed_footer_text",
         "exams_tz",
@@ -190,6 +195,8 @@ _STR_KEYS = frozenset(
 
 _STR_LIST_KEYS = frozenset(
     {
+        "enabled_features",
+        "disabled_features",
         "notes_sites",
         "jobs_location_allowlist",
         "jobs_keywords_allowlist",

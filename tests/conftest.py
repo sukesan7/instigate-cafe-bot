@@ -171,6 +171,9 @@ def _isolate_environment(monkeypatch: pytest.MonkeyPatch):
         "TTC_MASTODON_BASE",
         "TTC_MASTODON_ACCT",
         "BTC_WATCH_ADDRESSES",
+        "FEATURE_PROFILE",
+        "ENABLED_FEATURES",
+        "DISABLED_FEATURES",
     )
     for var in cleared_vars:
         monkeypatch.setenv(var, "")

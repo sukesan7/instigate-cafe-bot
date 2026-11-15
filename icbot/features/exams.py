@@ -14,6 +14,7 @@ from icbot.config import Settings
 from icbot.container import extract_guild_id, get_container, resolve_guild_settings
 from icbot.embeds import system
 from icbot.permissions import is_admin_or_allowed
+from icbot.registry import guard_feature
 
 
 @dataclass(frozen=True)
@@ -195,6 +196,8 @@ async def exams_add_cmd(
     location: str | None = None,
     notes: str | None = None,
 ) -> None:
+    if not await guard_feature(interaction, "academics"):
+        return
     await interaction.response.defer(thinking=True, ephemeral=True)
 
     settings, db = await _get_settings_and_db(interaction)
@@ -255,6 +258,8 @@ async def exams_add_cmd(
 @exam.command(name="remove", description="(Admin) Remove an exam by ID.")
 @app_commands.describe(exam_id="The exam ID shown in /ic exams.")
 async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> None:
+    if not await guard_feature(interaction, "academics"):
+        return
     await interaction.response.defer(thinking=True, ephemeral=True)
 
     settings, db = await _get_settings_and_db(interaction)
@@ -280,6 +285,8 @@ async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> No
 
 @exam.command(name="clear", description="(Admin) Remove ALL exams.")
 async def exams_clear_cmd(interaction: discord.Interaction) -> None:
+    if not await guard_feature(interaction, "academics"):
+        return
     await interaction.response.defer(thinking=True, ephemeral=True)
 
     settings, db = await _get_settings_and_db(interaction)

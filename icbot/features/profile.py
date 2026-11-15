@@ -9,6 +9,7 @@ from discord import app_commands
 from icbot.app import ic
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
+from icbot.registry import guard_feature
 from icbot.services.fun_market import FunMarketError
 from icbot.services.user_service import DailyAlreadyClaimedError
 
@@ -23,6 +24,8 @@ log = logging.getLogger(__name__)
 @ic.command(name="profile", description="View your (or another user's) profile.")
 @app_commands.describe(user="User to view (defaults to you)")
 async def profile_cmd(interaction: discord.Interaction, user: discord.User | None = None):
+    if not await guard_feature(interaction, "economy"):
+        return
     await interaction.response.defer(thinking=True)
 
     target = user or interaction.user
@@ -119,6 +122,8 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
 
 @ic.command(name="dailyclaim", description="Claim your daily $100 reward.")
 async def daily_cmd(interaction: discord.Interaction):
+    if not await guard_feature(interaction, "economy"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     container = get_container(interaction.client)
     store = container.user_store(settings)

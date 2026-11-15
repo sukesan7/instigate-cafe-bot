@@ -8,6 +8,7 @@ from icbot.app import ic
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 from icbot.errors import safe_error_summary
+from icbot.registry import guard_feature
 from icbot.services.gemini_client import GeminiError
 
 # 5MB limit
@@ -173,5 +174,7 @@ class ResumeReviewer:
 async def resume_cmd(
     interaction: discord.Interaction, discipline: Literal["SWE", "HW", "ELE"], file: discord.Attachment
 ):
+    if not await guard_feature(interaction, "ai"):
+        return
     await interaction.response.defer(thinking=True)
     await ResumeReviewer.review(interaction, file, discipline)

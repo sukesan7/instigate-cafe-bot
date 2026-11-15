@@ -7,12 +7,15 @@ from icbot.app import casino
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import game as game_embed
 from icbot.games.slots_engine import payout_table, reel_display, spin
+from icbot.registry import guard_feature
 from icbot.services.user_service import InsufficientBalanceError
 
 
 @casino.command(name="slots", description="Spin the slot machine!")
 @app_commands.describe(bet="Bet amount (integer)")
 async def slots_cmd(interaction: discord.Interaction, bet: int = 10):
+    if not await guard_feature(interaction, "casino"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
 
     if bet <= 0:

@@ -13,6 +13,7 @@ from icbot.embeds import stock as stock_embed
 from icbot.embeds import system as system_embed
 from icbot.errors import safe_error_summary
 from icbot.permissions import is_admin_or_allowed
+from icbot.registry import guard_feature
 from icbot.services.fun_market import FunMarketError, FunMarketStore, format_signed_money
 from icbot.utils import parse_signed_int
 
@@ -159,6 +160,8 @@ async def portfolio(interaction: discord.Interaction, user: discord.User | None 
 @icse.command(name="buy", description="Buy a stock (long).")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def buy(interaction: discord.Interaction, symbol: str, qty: int):
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
     try:
@@ -182,6 +185,8 @@ async def buy(interaction: discord.Interaction, symbol: str, qty: int):
 @icse.command(name="sell", description="Sell a long position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def sell(interaction: discord.Interaction, symbol: str, qty: int):
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
     try:
@@ -206,6 +211,8 @@ async def sell(interaction: discord.Interaction, symbol: str, qty: int):
 @icse.command(name="short", description="Open/increase a short position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def short(interaction: discord.Interaction, symbol: str, qty: int):
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
     try:
@@ -235,6 +242,8 @@ async def short(interaction: discord.Interaction, symbol: str, qty: int):
 @icse.command(name="cover", description="Cover (close) a short position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def cover(interaction: discord.Interaction, symbol: str, qty: int):
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
     try:
@@ -335,6 +344,8 @@ async def history(interaction: discord.Interaction, limit: int = 10, symbol: str
 @admin.command(name="move", description="Admin: move a stock by +/- delta.")
 @app_commands.describe(symbol="Example: IC", change="Examples: +10, -5", reason="Optional reason")
 async def admin_move(interaction: discord.Interaction, symbol: str, change: str, reason: str | None = None):
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     if not is_admin_or_allowed(interaction, settings):
         await interaction.response.send_message("❌ You don’t have permission.", ephemeral=True)
@@ -375,6 +386,8 @@ async def admin_move(interaction: discord.Interaction, symbol: str, change: str,
 @admin.command(name="set", description="Admin: set a stock to an exact price.")
 @app_commands.describe(symbol="Example: IC", value="New price (>=1)", reason="Optional reason")
 async def admin_set(interaction: discord.Interaction, symbol: str, value: int, reason: str | None = None):
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     if not is_admin_or_allowed(interaction, settings):
         await interaction.response.send_message("❌ You don’t have permission.", ephemeral=True)
@@ -405,6 +418,8 @@ async def admin_set(interaction: discord.Interaction, symbol: str, value: int, r
 
 @admin.command(name="sync_catalog", description="Admin: sync the code-defined stock catalog into the DB.")
 async def sync_catalog_cmd(interaction: discord.Interaction):
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     if not is_admin_or_allowed(interaction, settings):
         await interaction.response.send_message("❌ You don’t have permission.", ephemeral=True)
@@ -424,6 +439,8 @@ async def sync_catalog_cmd(interaction: discord.Interaction):
 @admin.command(name="weekroll", description="Admin: reset weekly change baseline to current prices.")
 @app_commands.describe(note="Optional note")
 async def weekroll_cmd(interaction: discord.Interaction, note: str | None = None):
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     if not is_admin_or_allowed(interaction, settings):
         await interaction.response.send_message("❌ You don’t have permission.", ephemeral=True)

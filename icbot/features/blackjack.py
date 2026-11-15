@@ -17,6 +17,7 @@ from icbot.container import get_container, resolve_guild_settings
 from icbot.db import Database, Transaction
 from icbot.embeds import game as game_embed
 from icbot.games.blackjack_engine import GameState
+from icbot.registry import guard_feature
 from icbot.services.user_service import InsufficientBalanceError
 
 log = logging.getLogger(__name__)
@@ -1096,6 +1097,8 @@ class BlackjackView(discord.ui.View):
 @casino.command(name="blackjack", description="Start an interactive blackjack hand (buttons).")
 @app_commands.describe(bet="Bet amount (integer). Default 10.")
 async def blackjack(interaction: discord.Interaction, bet: int = 10):
+    if not await guard_feature(interaction, "casino"):
+        return
     try:
         embed, view, _is_live = await _begin_hand(interaction, bet=int(bet))
     except _BJStartError as e:

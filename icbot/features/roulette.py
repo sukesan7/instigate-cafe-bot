@@ -12,6 +12,7 @@ from icbot.games.roulette_engine import (
     evaluate,
     spin,
 )
+from icbot.registry import guard_feature
 from icbot.services.user_service import InsufficientBalanceError
 
 VALID_BET_TYPES = {
@@ -75,6 +76,8 @@ async def roulette_cmd(
     bet_type: str,
     number: str | None = None,
 ):
+    if not await guard_feature(interaction, "casino"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
 
     # Validate bet amount

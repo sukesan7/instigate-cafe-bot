@@ -23,6 +23,12 @@ _HHMM_RE = re.compile(r"^(\d{2}):(\d{2})$")
 _TRUE_VALUES = ("1", "true", "yes", "y", "on")
 _FALSE_VALUES = ("0", "false", "no", "n", "off")
 _VALID_ALERT_LEVELS = frozenset({"major", "all"})
+KNOWN_FEATURE_PROFILES: frozenset[str] = frozenset(
+    {"default", "student_core", "community_full", "toronto_tmu"}
+)
+KNOWN_MODULE_IDS: frozenset[str] = frozenset(
+    {"core", "academics", "careers", "transit", "economy", "casino", "market", "ai", "sports"}
+)
 
 
 def _to_int(value: Any, default: int = 0, *, clamp_snowflake: bool = False) -> int:
@@ -496,6 +502,11 @@ class Settings:
     task_startup_jitter_seconds: float = 15.0
     task_max_backoff_seconds: float = 1800.0
 
+    # Feature registry & presets
+    feature_profile: str = "default"
+    enabled_features: list[str] | None = None
+    disabled_features: list[str] | None = None
+
     # Economy
     daily_claim_amount: int = 100
 
@@ -714,6 +725,9 @@ class Settings:
         financial: FinancialAlertsConfig | None = None,
         sports: SportsConfig | None = None,
         scheduler: SchedulerConfig | None = None,
+        feature_profile: str = "default",
+        enabled_features: Sequence[str] | None = None,
+        disabled_features: Sequence[str] | None = None,
     ) -> Settings:
         """Assemble a composite ``Settings`` instance from typed sub-configs."""
         d = discord or DiscordConfig()
@@ -827,6 +841,9 @@ class Settings:
             db_path=s.db_path,
             grades_db_path=s.grades_db_path,
             lore_path=s.lore_path,
+            feature_profile=feature_profile,
+            enabled_features=list(enabled_features) if enabled_features is not None else None,
+            disabled_features=list(disabled_features) if disabled_features is not None else None,
         )
 
     @property
@@ -1155,6 +1172,25 @@ class Settings:
             _err("market_daily_report_top_n", "market_daily_report_top_n must be >= 1.")
         if self.btc_watch_cooldown_minutes < 0:
             _err("btc_watch_cooldown_minutes", "btc_watch_cooldown_minutes must be >= 0.")
+
+        # Feature profile & module validations
+        if self.feature_profile and self.feature_profile.strip().lower() not in KNOWN_FEATURE_PROFILES:
+            _warn(
+                "feature_profile",
+                f"Unknown feature_profile {self.feature_profile!r}; known presets are {', '.join(sorted(KNOWN_FEATURE_PROFILES))}.",
+            )
+        for mod in self.enabled_features or ():
+            if mod not in KNOWN_MODULE_IDS:
+                _warn(
+                    "enabled_features",
+                    f"Unknown module_id {mod!r} in enabled_features; known modules are {', '.join(sorted(KNOWN_MODULE_IDS))}.",
+                )
+        for mod in self.disabled_features or ():
+            if mod not in KNOWN_MODULE_IDS:
+                _warn(
+                    "disabled_features",
+                    f"Unknown module_id {mod!r} in disabled_features; known modules are {', '.join(sorted(KNOWN_MODULE_IDS))}.",
+                )
 
         # Enabled integration prerequisite warnings (non-fatal degradation)
         caps = self.capabilities()
@@ -1504,6 +1540,9 @@ class Settings:
             _env("RMP_UNIVERSITY", "Toronto Metropolitan University").strip()
             or "Toronto Metropolitan University"
         )
+        feature_profile = _env("FEATURE_PROFILE", "default").strip() or "default"
+        enabled_features = _to_str_list(_env("ENABLED_FEATURES", ""))
+        disabled_features = _to_str_list(_env("DISABLED_FEATURES", ""))
 
         # Preserve fallback rule only when workday_poll_seconds was non-negative unset/zero
         if workday_poll_seconds == 0:
@@ -1610,6 +1649,9 @@ class Settings:
             notes_sites=notes_sites,
             lore_path=lore_path,
             rmp_university=rmp_university,
+            feature_profile=feature_profile,
+            enabled_features=enabled_features,
+            disabled_features=disabled_features,
         )
         if strict:
             settings.validate(strict=True, extra_issues=raw_issues)

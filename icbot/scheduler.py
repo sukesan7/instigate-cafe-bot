@@ -298,8 +298,11 @@ def build_default_task_specs(
     run_daily_report: Callable[[], Awaitable[Any]],
 ) -> tuple[TaskSpec, ...]:
     """Build the canonical registry of all 8 background/triggered bot tasks."""
+    from icbot.registry import is_feature_enabled
 
     def _ttc_enabled(s: Settings, _killed: bool) -> tuple[bool, str]:
+        if not is_feature_enabled("transit", s):
+            return False, "Transit feature is disabled"
         if not int(getattr(s, "ttc_alerts_channel_id", 0) or 0):
             return False, "TTC_ALERTS_CHANNEL_ID not configured"
         if not (getattr(s, "ttc_mastodon_base", "") or "").strip():
@@ -311,6 +314,8 @@ def build_default_task_specs(
         return True, ""
 
     def _go_enabled(s: Settings, _killed: bool) -> tuple[bool, str]:
+        if not is_feature_enabled("transit", s):
+            return False, "Transit feature is disabled"
         if not _go_channel(s):
             return False, "GO alert channel not configured"
         if not (getattr(s, "go_api_key", "") or "").strip():
@@ -320,6 +325,8 @@ def build_default_task_specs(
         return True, ""
 
     def _jobs_enabled(s: Settings, _killed: bool) -> tuple[bool, str]:
+        if not is_feature_enabled("careers", s):
+            return False, "Careers feature is disabled"
         if not _jobs_channel(s):
             return False, "JOB_ALERTS_CHANNEL_ID not configured"
         if int(getattr(s, "jobs_poll_seconds", 0) or 0) <= 0:
@@ -339,6 +346,8 @@ def build_default_task_specs(
         return True, ""
 
     def _workday_enabled(s: Settings, _killed: bool) -> tuple[bool, str]:
+        if not is_feature_enabled("careers", s):
+            return False, "Careers feature is disabled"
         if not _jobs_channel(s):
             return False, "JOB_ALERTS_CHANNEL_ID not configured"
         wd = getattr(s, "workday_sites", None) or []
@@ -352,6 +361,8 @@ def build_default_task_specs(
         return True, ""
 
     def _market_enabled(s: Settings, _killed: bool) -> tuple[bool, str]:
+        if not is_feature_enabled("market", s):
+            return False, "Market feature is disabled"
         if not bool(getattr(s, "market_watch_enabled", False)):
             return False, "MARKET_WATCH_ENABLED=false"
         if not _mw_channel(s):
@@ -361,6 +372,8 @@ def build_default_task_specs(
         return True, ""
 
     def _btc_enabled(s: Settings, _killed: bool) -> tuple[bool, str]:
+        if not is_feature_enabled("market", s):
+            return False, "Market feature is disabled"
         if not bool(getattr(s, "btc_watch_enabled", False)):
             return False, "BTC_WATCH_ENABLED=false"
         if not _btc_channel(s):
@@ -372,6 +385,8 @@ def build_default_task_specs(
         return True, ""
 
     def _daily_enabled(s: Settings, _killed: bool) -> tuple[bool, str]:
+        if not is_feature_enabled("market", s):
+            return False, "Market feature is disabled"
         if not bool(getattr(s, "market_daily_report_enabled", False)):
             return False, "MARKET_DAILY_REPORT_ENABLED=false"
         if not _dr_channel(s):
@@ -379,6 +394,8 @@ def build_default_task_specs(
         return True, ""
 
     def _llm_enabled(s: Settings, llm_killed: bool) -> tuple[bool, str]:
+        if not is_feature_enabled("ai", s):
+            return False, "AI feature is disabled"
         if not bool(getattr(s, "llm_enabled", False)):
             return False, "LLM_ENABLED=false"
         if not (getattr(s, "gemini_api_key", "") or "").strip():

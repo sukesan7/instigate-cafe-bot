@@ -72,6 +72,9 @@ norecursedirs = [
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "--strict-markers -m 'not live_smoke'"
+filterwarnings = [
+    "ignore:'audioop' is deprecated and slated for removal in Python 3.13:DeprecationWarning",
+]
 markers = [
     "unit: Pure unit tests with no database, Discord, or outbound network dependencies.",
     "storage: Storage integration tests using temporary isolated SQLite databases.",
