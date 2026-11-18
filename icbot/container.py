@@ -194,6 +194,8 @@ class ServiceContainer:
         self._bj_sessions: SessionManager | None = bj_sessions
         self._use_module_bj_fallback = bool(use_module_bj_fallback)
         self._grades_cache: Any = None
+        self._academic_catalog: Any = None
+        self._academic_registry: Any = None
 
         self.gemini_generate_fn = gemini_generate_fn
         self.fetch_quotes_fn = fetch_quotes_fn
@@ -261,6 +263,27 @@ class ServiceContainer:
             target_db = self.db if self.db is not None else self.settings.grades_db_path
             self._grades_cache = GradesCacheStore(target_db)
         return self._grades_cache
+
+    @property
+    def academic_catalog(self) -> Any:
+        """Lazy per-guild manual course and external resource catalog (offline baseline)."""
+        if self._academic_catalog is None and self.db is not None:
+            from icbot.academics.catalog import ManualResourceCatalogStore
+
+            self._academic_catalog = ManualResourceCatalogStore(self.db, clock=self.clock)
+        return self._academic_catalog
+
+    @property
+    def academic_registry(self) -> Any:
+        """Lazy academic provider registry combining manual catalog and optional plugins."""
+        if self._academic_registry is None:
+            from icbot.academics.providers import build_default_academic_registry
+
+            self._academic_registry = build_default_academic_registry(
+                catalog=self.academic_catalog,
+                notes_cache=self.notes_cache,
+            )
+        return self._academic_registry
 
     async def ensure_http_session(self) -> aiohttp.ClientSession:
         """Return an open shared ``aiohttp.ClientSession``, creating it when owned by container."""

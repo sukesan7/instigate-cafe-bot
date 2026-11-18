@@ -205,6 +205,11 @@ class AcademicsConfig:
     exams_tz: str = "America/Toronto"
     notes_sites: tuple[str, ...] = ()
     rmp_university: str = "Toronto Metropolitan University"
+    campus_id: str = ""
+    campus_url: str = ""
+    academic_course_aliases: tuple[str, ...] = ()
+    academic_allowed_hosts: tuple[str, ...] = ()
+    academic_enabled_providers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -573,8 +578,13 @@ class Settings:
     # Lore
     lore_path: str = ""
 
-    # RateMyProfessors
+    # RateMyProfessors & Campus Academics
     rmp_university: str = "Toronto Metropolitan University"
+    campus_id: str = ""
+    campus_url: str = ""
+    academic_course_aliases: list[str] | None = None
+    academic_allowed_hosts: list[str] | None = None
+    academic_enabled_providers: list[str] | None = None
 
     # ---- Typed component views ----
 
@@ -617,6 +627,11 @@ class Settings:
             exams_tz=self.exams_tz,
             notes_sites=tuple(self.notes_sites or ()),
             rmp_university=self.rmp_university,
+            campus_id=self.campus_id,
+            campus_url=self.campus_url,
+            academic_course_aliases=tuple(self.academic_course_aliases or ()),
+            academic_allowed_hosts=tuple(self.academic_allowed_hosts or ()),
+            academic_enabled_providers=tuple(self.academic_enabled_providers or ()),
         )
 
     @property
@@ -817,6 +832,11 @@ class Settings:
             exams_tz=a.exams_tz,
             notes_sites=list(a.notes_sites),
             rmp_university=a.rmp_university,
+            campus_id=a.campus_id,
+            campus_url=a.campus_url,
+            academic_course_aliases=list(a.academic_course_aliases),
+            academic_allowed_hosts=list(a.academic_allowed_hosts),
+            academic_enabled_providers=list(a.academic_enabled_providers),
             llm_enabled=g.llm_enabled,
             llm_cooldown_seconds=g.llm_cooldown_seconds,
             llm_max_messages=g.llm_max_messages,
@@ -1087,6 +1107,8 @@ class Settings:
             _err("go_api_base", "go_api_base cannot be empty when GO alerts are enabled.")
         if self.btc_esplora_base_url and not _is_valid_http_url(self.btc_esplora_base_url):
             _err("btc_esplora_base_url", "btc_esplora_base_url must be a valid http:// or https:// URL.")
+        if self.campus_url and not _is_valid_http_url(self.campus_url):
+            _err("campus_url", "campus_url must be a valid http:// or https:// URL.")
 
         for sport_field in (
             "sports_rss_nba",
@@ -1614,6 +1636,11 @@ class Settings:
             _env("RMP_UNIVERSITY", "Toronto Metropolitan University").strip()
             or "Toronto Metropolitan University"
         )
+        campus_id = _env("CAMPUS_ID", "").strip()
+        campus_url = _env("CAMPUS_URL", "").strip()
+        academic_course_aliases = _to_str_list(_env("ACADEMIC_COURSE_ALIASES", ""))
+        academic_allowed_hosts = _to_str_list(_env("ACADEMIC_ALLOWED_HOSTS", ""))
+        academic_enabled_providers = _to_str_list(_env("ACADEMIC_ENABLED_PROVIDERS", ""))
         feature_profile = _env("FEATURE_PROFILE", "default").strip() or "default"
         enabled_features = _to_str_list(_env("ENABLED_FEATURES", ""))
         disabled_features = _to_str_list(_env("DISABLED_FEATURES", ""))
@@ -1731,6 +1758,11 @@ class Settings:
             notes_sites=notes_sites,
             lore_path=lore_path,
             rmp_university=rmp_university,
+            campus_id=campus_id,
+            campus_url=campus_url,
+            academic_course_aliases=academic_course_aliases,
+            academic_allowed_hosts=academic_allowed_hosts,
+            academic_enabled_providers=academic_enabled_providers,
             feature_profile=feature_profile,
             enabled_features=enabled_features,
             disabled_features=disabled_features,

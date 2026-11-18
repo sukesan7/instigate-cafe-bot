@@ -17,6 +17,7 @@ import numpy as np
 from bs4 import BeautifulSoup
 from discord import app_commands
 
+from icbot.academics.models import campus_from_settings
 from icbot.app import ic
 from icbot.container import get_container, resolve_guild_settings
 from icbot.db import Database
@@ -300,64 +301,102 @@ def generate_chart(course_title: str, professors: list) -> io.BytesIO:
     return buf
 
 
-@ic.command(name="grades", description="Fetch TMU grade distributions by course code")
+@ic.command(name="grades", description="Fetch historical grade distributions when supported for this campus.")
 @app_commands.describe(course="The course code (e.g., ele888, cps109)")
 async def grades_command(interaction: discord.Interaction, course: str):
     await interaction.response.defer(thinking=True)
 
     settings = await resolve_guild_settings(interaction.client, interaction)
     container = get_container(interaction.client)
-    eff_db_path = DB_PATH if DB_PATH != "tmu_grades.db" else settings.grades_db_path
+    campus = campus_from_settings(settings)
     shared_session = (
         container.http_session
         if container.http_session is not None and not container.http_session.closed
         else None
     )
-    store = getattr(container, "grades_cache", None) if eff_db_path == "tmu_grades.db" else None
 
     try:
-        data = await fetch_course_data(
+        result = await container.academic_registry.get_grade_distribution(
             course,
-            db_path=eff_db_path if store is None else None,
+            campus=campus,
+            settings=settings,
             session=shared_session,
-            store=store,
+            clock=container.clock,
         )
-        if not data:
+
+        if result.status == "unsupported_campus":
+            await interaction.followup.send(
+                embed=system_embed(
+                    settings,
+                    title="Grade Provider Not Available",
+                    summary=result.error_message
+                    or f"No grade distribution provider is configured for **{campus.name}**.",
+                    footer_hint=campus.name,
+                )
+            )
+            return
+
+        if result.status in ("error", "unsafe_url"):
+            await interaction.followup.send(
+                embed=system_embed(
+                    settings,
+                    title="Grades Error",
+                    summary="An error occurred while querying the grade distribution provider.",
+                    footer_hint=result.provenance.provider_name,
+                )
+            )
+            return
+
+        dist = result.data
+        if not result.ok or dist is None:
             await interaction.followup.send(
                 embed=system_embed(
                     settings,
                     title="Course Not Found",
-                    summary=f"Could not locate grade distributions for `{course}`. Ensure the course code is valid on `tmu.grades.zone`.",
+                    summary=f"Could not locate grade distributions for `{course}` via **{result.provenance.provider_name}**.",
+                    footer_hint=result.provenance.provider_name,
                 )
             )
             return
 
-        if not data["professors"]:
+        if not dist.professors:
             await interaction.followup.send(
                 embed=system_embed(
                     settings,
                     title="No Professor Data",
-                    summary=f"`{data['title']}` exists, but has no discrete professor distributions available.",
+                    summary=f"`{dist.course_title}` exists, but has no discrete professor distributions available.",
+                    footer_hint=result.provenance.provider_name,
                 )
             )
             return
 
-        # Build Graph
-        chart_bytes = generate_chart(data["title"], data["professors"])
+        legacy_profs = [p.to_legacy_dict() for p in dist.professors]
+        chart_bytes = generate_chart(dist.course_title, legacy_profs)
         file = discord.File(chart_bytes, filename="distribution.png")
+
+        summary_lines: list[str] = []
+        if dist.source_url:
+            summary_lines.append(f"[View on {result.provenance.provider_name}]({dist.source_url})")
+        if len(dist.professors) > 20:
+            summary_lines.append(f"*Showing 20 of {len(dist.professors)} instructor records.*")
+
+        fields: list[tuple[str, str, bool]] = [
+            (
+                prof.name,
+                f"**{prof.students} students** | {prof.avg} | {prof.common}\n*{prof.term}*",
+                False,
+            )
+            for prof in dist.professors[:20]
+        ]
 
         embed = system_embed(
             settings,
-            title=data["title"],
-            summary="[View on TMU Grades Zone](https://tmu.grades.zone/course/"
-            + urllib.parse.quote(course.lower().strip())
-            + ")",
+            title=dist.course_title,
+            summary="\n".join(summary_lines) or result.provenance.attribution,
+            fields=fields,
+            footer_hint=result.provenance.provider_name,
         )
         embed.set_image(url="attachment://distribution.png")
-
-        for prof in data["professors"]:
-            val = f"**{prof['students']} students** | {prof['avg']} | {prof['common']}\n*{prof['term']}*"
-            embed.add_field(name=prof["name"], value=val, inline=False)
 
         await interaction.followup.send(embed=embed, file=file)
 

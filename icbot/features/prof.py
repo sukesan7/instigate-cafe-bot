@@ -6,6 +6,7 @@ import aiohttp
 import discord
 from discord import app_commands
 
+from icbot.academics.models import ProfessorRecord, ProviderProvenance, campus_from_settings
 from icbot.app import ic
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
@@ -188,7 +189,53 @@ async def _scoped_http_session(session: aiohttp.ClientSession | None):
         yield temp_session
 
 
-@ic.command(name="prof", description="Lookup a professor's rating on RateMyProfessors.")
+def build_prof_record_embed(
+    settings,
+    record: ProfessorRecord,
+    provenance: ProviderProvenance | None = None,
+) -> discord.Embed:
+    """Build a Discord embed from a typed ``ProfessorRecord`` with source attribution."""
+    wta_str = f"{round(record.would_take_again_pct)}%" if record.would_take_again_pct >= 0 else "N/A"
+
+    title = f"🍎 {record.full_name} — {record.avg_rating}/5.0"
+    if record.avg_rating == 0 and record.num_ratings == 0:
+        title = f"🍎 {record.full_name} — No Ratings"
+
+    summary = (
+        f"**{record.institution}** • {record.department}\n"
+        f"Total Ratings: **{record.num_ratings}**\n"
+        f"Difficulty: **{round(record.avg_difficulty, 1)} / 5.0**\n"
+        f"Would Take Again: **{wta_str}**"
+    )
+
+    fields: list[tuple[str, str, bool]] = []
+    if record.top_tags:
+        fields.append(("🏷️ Top Tags", ", ".join(record.top_tags[:5]), False))
+
+    if record.recent_reviews:
+        recent_comments = []
+        for rev in record.recent_reviews[:3]:
+            comment = rev.comment
+            if len(comment) > 100:
+                comment = comment[:100] + "..."
+            recent_comments.append(f"**{rev.course_code}** ({rev.helpful_rating}/5): {comment}")
+        if recent_comments:
+            fields.append(("💬 Recent Reviews", "\n\n".join(recent_comments), False))
+
+    footer_label = provenance.provider_name if provenance is not None else "RateMyProfessors"
+    embed = system_embed(
+        settings,
+        title=title,
+        summary=summary,
+        fields=fields,
+        footer_hint=footer_label,
+    )
+    if record.profile_url:
+        embed.url = record.profile_url
+    return embed
+
+
+@ic.command(name="prof", description="Lookup a professor's rating via the campus professor provider.")
 @app_commands.describe(name="The name of the professor to lookup.")
 async def prof_cmd(interaction: discord.Interaction, name: str):
     await interaction.response.defer(thinking=True)
@@ -199,33 +246,49 @@ async def prof_cmd(interaction: discord.Interaction, name: str):
 
     settings = await resolve_guild_settings(interaction.client, interaction)
     container = get_container(interaction.client)
-    university_name = getattr(settings, "rmp_university", "Toronto Metropolitan University")
+    campus = campus_from_settings(settings)
     open_session = (
         container.http_session
         if container.http_session is not None and not container.http_session.closed
         else None
     )
 
-    async with _scoped_http_session(open_session) as session:
-        # 1. Fetch school ID
-        school_id = await get_school_id(session, university_name)
-        if not school_id:
-            await interaction.followup.send(
-                f"❌ Could not locate the University ID for `{university_name}`.", ephemeral=True
-            )
-            return
+    result = await container.academic_registry.search_professors(
+        name,
+        campus=campus,
+        settings=settings,
+        session=open_session,
+        clock=container.clock,
+    )
 
-        # 2. Search Professor
-        profs = await search_prof(session, name, school_id)
-
-    if not profs:
+    if result.status == "unsupported_campus":
         await interaction.followup.send(
-            f"❌ Could not find a professor matching `{name}` at {university_name}.", ephemeral=True
+            f"ℹ️ {result.error_message or f'No professor provider is configured for {campus.name}.'}",
+            ephemeral=True,
         )
         return
 
+    if result.status in ("error", "unsafe_url"):
+        await interaction.followup.send(
+            f"❌ Professor lookup provider (`{result.provenance.provider_name}`) encountered an error.",
+            ephemeral=True,
+        )
+        return
+
+    if not result.ok or not result.data:
+        if result.error_code == "institution_not_found":
+            await interaction.followup.send(
+                f"❌ Could not locate the University ID for `{campus.name}`.", ephemeral=True
+            )
+            return
+        await interaction.followup.send(
+            f"❌ Could not find a professor matching `{name}` at {campus.name}.", ephemeral=True
+        )
+        return
+
+    profs = result.data
     if len(profs) > 5:
-        names = [f"{p.get('firstName')} {p.get('lastName')} ({p.get('department')})" for p in profs[:5]]
+        names = [f"{p.full_name} ({p.department})" for p in profs[:5]]
         await interaction.followup.send(
             f"⚠️ Found {len(profs)} results for `{name}`. Please be more specific.\n"
             f"Top matches: {', '.join(names)}",
@@ -233,9 +296,5 @@ async def prof_cmd(interaction: discord.Interaction, name: str):
         )
         return
 
-    # If 1-5 results, we'll just take the top exact match or highest rated one if there are conflicts.
-    # Usually exact string searches sort exactly the one you want to the top.
-    best_match = profs[0]
-
-    embed = build_prof_embed(settings, best_match, university_name)
+    embed = build_prof_record_embed(settings, profs[0], result.provenance)
     await interaction.followup.send(embed=embed)

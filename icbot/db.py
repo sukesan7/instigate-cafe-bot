@@ -616,6 +616,60 @@ async def _migrate_0005_guild_settings_audit(tx: Transaction) -> None:
     )
 
 
+async def _migrate_0006_academic_catalog_and_exam_fields(tx: Transaction) -> None:
+    """Introduce guild-scoped manual academic course/resource catalog and optional exam metadata."""
+    await tx.execute(
+        """
+        CREATE TABLE IF NOT EXISTS academic_courses (
+            guild_id        INTEGER NOT NULL DEFAULT 0,
+            normalized_key  TEXT    NOT NULL,
+            display_code    TEXT    NOT NULL,
+            title           TEXT    NOT NULL DEFAULT '',
+            campus_id       TEXT    NOT NULL DEFAULT '',
+            department_code TEXT    NOT NULL DEFAULT '',
+            aliases_json    TEXT    NOT NULL DEFAULT '[]',
+            term            TEXT    NOT NULL DEFAULT '',
+            created_at      INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, normalized_key)
+        )
+        """
+    )
+
+    await tx.execute(
+        """
+        CREATE TABLE IF NOT EXISTS academic_resources (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id           INTEGER NOT NULL DEFAULT 0,
+            course_key         TEXT    NOT NULL,
+            display_code       TEXT    NOT NULL,
+            title              TEXT    NOT NULL,
+            url                TEXT    NOT NULL,
+            resource_type      TEXT    NOT NULL DEFAULT 'notes',
+            source_attribution TEXT    NOT NULL DEFAULT '',
+            license_note       TEXT    NOT NULL DEFAULT '',
+            added_by           INTEGER NOT NULL DEFAULT 0,
+            created_at         INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    await tx.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_academic_resources_guild_course
+        ON academic_resources (guild_id, course_key)
+        """
+    )
+
+    cur = await tx.execute("PRAGMA table_info(exams)")
+    exam_cols = [str(r[1]) for r in (await cur.fetchall() or [])]
+    if exam_cols:
+        if "course_key" not in exam_cols:
+            await tx.execute("ALTER TABLE exams ADD COLUMN course_key TEXT NOT NULL DEFAULT ''")
+        if "organizer" not in exam_cols:
+            await tx.execute("ALTER TABLE exams ADD COLUMN organizer TEXT NOT NULL DEFAULT ''")
+        if "visibility" not in exam_cols:
+            await tx.execute("ALTER TABLE exams ADD COLUMN visibility TEXT NOT NULL DEFAULT 'guild'")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(version=1, name="0001_baseline_schema", up=_migrate_0001_baseline),
     Migration(version=2, name="0002_grades_cache", up=_migrate_0002_grades_cache),
@@ -629,6 +683,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=5,
         name="0005_guild_settings_audit",
         up=_migrate_0005_guild_settings_audit,
+    ),
+    Migration(
+        version=6,
+        name="0006_academic_catalog_and_exam_fields",
+        up=_migrate_0006_academic_catalog_and_exam_fields,
     ),
 )
 

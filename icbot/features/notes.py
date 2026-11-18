@@ -1,22 +1,26 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 import aiohttp
 import discord
 from discord import app_commands
 
+from icbot.academics.models import ResourceLink, campus_from_settings, normalize_course_key
+from icbot.academics.providers import fetch_notes_spa_links
 from icbot.app import ic
-from icbot.container import NotesCache, get_container, resolve_guild_settings
+from icbot.config import Settings
+from icbot.container import NotesCache, extract_guild_id, get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 
 # Module-level fallback cache for direct external callers that omit a NotesCache instance.
 _NOTES_CACHE: tuple[float, dict[str, list[tuple[str, str]]]] = (0.0, {})
 _CACHE_TTL_SECONDS = 6 * 3600  # 6 hours TTL
+_FIELDS_PER_PAGE = 8
 
 
 @asynccontextmanager
@@ -29,72 +33,30 @@ async def _scoped_http_session(session: aiohttp.ClientSession | None):
 
 
 async def fetch_notes_from_site(
-    session: aiohttp.ClientSession, title: str, base_url: str
+    session: aiohttp.ClientSession,
+    title: str,
+    base_url: str,
+    *,
+    allowed_hosts: list[str] | tuple[str, ...] | None = None,
 ) -> list[tuple[str, str]]:
-    """
-    Fetches a standard GitHub Pages SPA (like Jasper's) and extracts notion links.
-    """
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-        }
-        # 1. Fetch the root index.html
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with session.get(base_url, headers=headers, timeout=timeout) as resp:
-            if resp.status != 200:
-                print(f"[NOTES] Failed to fetch {base_url} (HTTP {resp.status})")
-                return []
-            html = await resp.text()
-
-        raw_links = set(re.findall(r'https://[^\.]+\.notion\.site/[^\s"\'\\>}]+', html))
-
-        # 2. Find the main index-*.js bundle if available
-        # The regex accommodates different absolute/relative paths based on the base_url
-        js_match = re.search(r'src="([^"]+/assets/index-[a-f0-9]+\.js)"', html)
-        if js_match:
-            js_path = js_match.group(1)
-            if js_path.startswith("/"):
-                js_url = f"{base_url.split('/')[0]}//{base_url.split('/')[2]}{js_path}"
-            else:
-                js_url = f"{base_url.rstrip('/')}/{js_path}"
-
-            async with session.get(js_url, headers=headers, timeout=timeout) as js_resp:
-                if js_resp.status == 200:
-                    js_text = await js_resp.text()
-                    js_links = re.findall(r'https://[^\.]+\.notion\.site/[^\s"\'\\>}]+', js_text)
-                    raw_links.update(js_links)
-
-        # 4. Extract notion links that contain course codes.
-        results = []
-        for rl in raw_links:
-            # Look for 3-4 letters optionally followed by a dash or space, then 3-4 numbers.
-            code_match = re.search(r"([A-Z]{3,4}[-\s]?\d{3,4})", rl, re.IGNORECASE)
-
-            if code_match:
-                course_code = code_match.group(1).upper().replace("-", "").replace(" ", "")
-                results.append((course_code, rl))
-
-        print(f"[NOTES] Successfully parsed {len(results)} links from {title}")
-        return results
-    except (aiohttp.ClientError, TimeoutError, UnicodeDecodeError, ValueError) as e:
-        print(f"[NOTES] Error fetching from {title} ({base_url}): {e}")
-        return []
+    """Fetch a Notion-index SPA after strict HTTPS + SSRF URL validation."""
+    links, _err = await fetch_notes_spa_links(session, title, base_url, allowed_hosts=allowed_hosts)
+    return links
 
 
 async def get_all_notes(
-    settings,
+    settings: Any,
     *,
     cache: NotesCache | None = None,
     session: aiohttp.ClientSession | None = None,
     clock: Callable[[], float] | None = None,
 ) -> dict[str, list[tuple[str, str]]]:
-    """Retrieve all parsed notes, utilizing an injected or fallback in-memory cache if fresh."""
+    """Retrieve all parsed SPA notes, utilizing an injected or fallback in-memory cache if fresh."""
     global _NOTES_CACHE
     now = clock() if clock is not None else time.time()
 
     sites_raw = getattr(settings, "notes_sites", None)
     if not sites_raw:
-        print("[NOTES] No NOTES_SITES configured in env.")
         return {}
 
     sites_key = tuple(str(s).strip() for s in sites_raw if str(s).strip())
@@ -107,31 +69,32 @@ async def get_all_notes(
         if cache_data and (now - cache_ts) < _CACHE_TTL_SECONDS:
             return cache_data
 
-    # Parse site configs: "Title|URL"
     sites: list[tuple[str, str]] = []
     for s in sites_raw:
         parts = s.split("|", 1)
         if len(parts) == 2:
             title = parts[0].strip()
-            # Clean up the URL: User might wrap it in extra quotes inside the .env
             url = parts[1].strip().strip('"').strip("'")
-            sites.append((title, url))
+            if title and url:
+                sites.append((title, url))
 
     if not sites:
         return {}
 
+    allowed_hosts = getattr(settings, "academic_allowed_hosts", None)
     new_cache: dict[str, list[tuple[str, str]]] = {}
 
-    # Fetch concurrently using shared session when available
     async with _scoped_http_session(session) as http_session:
-        tasks = [fetch_notes_from_site(http_session, title, url) for title, url in sites]
+        tasks = [
+            fetch_notes_from_site(http_session, title, url, allowed_hosts=allowed_hosts)
+            for title, url in sites
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for (title, _url), res in zip(sites, results, strict=True):
             if isinstance(res, BaseException):
                 if isinstance(res, asyncio.CancelledError):
                     raise res
-                print(f"[NOTES] Task error for {title}: {res}")
             elif res:
                 new_cache[title] = res
 
@@ -143,14 +106,124 @@ async def get_all_notes(
     return new_cache
 
 
-@ic.command(name="notes", description="Search through available course notes repositories.")
-@app_commands.describe(course="The course code (e.g. ELE888, ele 888)")
+def _build_notes_fields(links: list[ResourceLink]) -> list[tuple[str, str, bool]]:
+    """Group external resource links by source attribution into Discord-safe embed fields."""
+    grouped: dict[str, list[ResourceLink]] = {}
+    for item in links:
+        group_name = item.source_attribution or item.title or "Course Resources"
+        grouped.setdefault(group_name, []).append(item)
+
+    fields: list[tuple[str, str, bool]] = []
+    for group_name, group_links in grouped.items():
+        seen_urls: set[str] = set()
+        lines: list[str] = []
+        for link in group_links:
+            if link.url in seen_urls:
+                continue
+            seen_urls.add(link.url)
+            if link.resource_id.startswith("notes_spa:"):
+                lines.append(f"• [Link to Notion]({link.url})")
+            else:
+                type_tag = f" ({link.resource_type})" if link.resource_type else ""
+                lines.append(f"• [{link.title}]({link.url}){type_tag}")
+        if lines:
+            value = "\n".join(lines[:15])
+            if len(lines) > 15:
+                value += f"\n… and {len(lines) - 15} more"
+            fields.append((group_name[:256], value[:1024], False))
+    return fields
+
+
+def build_notes_page_embed(
+    settings: Settings,
+    *,
+    course_display: str,
+    campus_name: str,
+    all_fields: list[tuple[str, str, bool]],
+    total_matches: int,
+    page: int,
+    total_pages: int,
+    degraded_providers: list[str] | None = None,
+) -> discord.Embed:
+    """Build a single paginated course-notes embed respecting Discord limits."""
+    start = page * _FIELDS_PER_PAGE
+    page_fields = all_fields[start : start + _FIELDS_PER_PAGE]
+    summary = (
+        f"Found **{total_matches}** resource link(s) for **{course_display}** ({campus_name}).\n"
+        "*External links only — rights remain with original authors/institutions.*"
+    )
+    if degraded_providers:
+        summary += f"\n⚠️ Some optional sources were unavailable: {', '.join(degraded_providers)}"
+
+    footer_hint = f"Course Notes • Page {page + 1}/{total_pages}" if total_pages > 1 else "Course Notes"
+    return system_embed(
+        settings,
+        title=f"📚 Course Notes — {course_display}",
+        summary=summary,
+        fields=page_fields,
+        footer_hint=footer_hint,
+    )
+
+
+class NotesPaginationView(discord.ui.View):
+    """Pagination controls when a course search returns more resource groups than fit on one page."""
+
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        course_display: str,
+        campus_name: str,
+        all_fields: list[tuple[str, str, bool]],
+        total_matches: int,
+        degraded_providers: list[str] | None = None,
+    ) -> None:
+        super().__init__(timeout=180)
+        self.settings = settings
+        self.course_display = course_display
+        self.campus_name = campus_name
+        self.all_fields = all_fields
+        self.total_matches = total_matches
+        self.degraded_providers = degraded_providers or []
+        self.current_page = 0
+        self.total_pages = max(1, (len(all_fields) + _FIELDS_PER_PAGE - 1) // _FIELDS_PER_PAGE)
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        self.prev_button.disabled = self.current_page <= 0
+        self.next_button.disabled = self.current_page >= self.total_pages - 1
+
+    def current_embed(self) -> discord.Embed:
+        return build_notes_page_embed(
+            self.settings,
+            course_display=self.course_display,
+            campus_name=self.campus_name,
+            all_fields=self.all_fields,
+            total_matches=self.total_matches,
+            page=self.current_page,
+            total_pages=self.total_pages,
+            degraded_providers=self.degraded_providers,
+        )
+
+    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.current_page = max(0, self.current_page - 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.current_page = min(self.total_pages - 1, self.current_page + 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+
+@ic.command(name="notes", description="Search through available course notes and study resources.")
+@app_commands.describe(course="The course code (e.g. ELE888, CS 135, COMP-2404)")
 async def notes_cmd(interaction: discord.Interaction, course: str):
     await interaction.response.defer(thinking=True)
 
-    # Normalize user input (e.g. "ele 888" -> "ELE888")
-    normalized_course = "".join(course.split()).upper()
-
+    normalized_course = normalize_course_key(course)
     if len(normalized_course) < 3:
         await interaction.followup.send("❌ Please provide a more specific course code.", ephemeral=True)
         return
@@ -161,51 +234,78 @@ async def notes_cmd(interaction: discord.Interaction, course: str):
 
     settings = await resolve_guild_settings(interaction.client, interaction)
     container = get_container(interaction.client)
+    campus = campus_from_settings(settings)
+    guild_id = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
     open_session = (
         container.http_session
         if container.http_session is not None and not container.http_session.closed
         else None
     )
-    all_notes = await get_all_notes(
-        settings,
-        cache=container.notes_cache,
+
+    provider_results = await container.academic_registry.search_notes(
+        course,
+        campus=campus,
+        guild_id=guild_id,
+        settings=settings,
         session=open_session,
         clock=container.clock,
     )
 
-    if not all_notes:
+    collected_links: list[ResourceLink] = []
+    degraded_providers: list[str] = []
+    any_configured = False
+
+    for res in provider_results:
+        if res.status != "disabled":
+            any_configured = True
+        if res.ok and res.data:
+            collected_links.extend(res.data)
+        elif res.status in ("error", "unsafe_url"):
+            degraded_providers.append(res.provenance.provider_name)
+
+    if not collected_links:
+        if not any_configured:
+            await interaction.followup.send(
+                "❌ No notes sources or manual guild catalog entries are configured yet.",
+                ephemeral=True,
+            )
+            return
+        if degraded_providers:
+            await interaction.followup.send(
+                f"❌ No notes found for `{course}` (optional source error: {', '.join(degraded_providers)}).",
+                ephemeral=True,
+            )
+            return
         await interaction.followup.send(
-            "❌ Internal error linking to notes sites. Check configuration.", ephemeral=True
+            f"❌ No notes found for `{course}` across configured repositories or this server's catalog."
         )
         return
 
-    # Look for matches across all sites
-    fields = []
-    matches = 0
+    all_fields = _build_notes_fields(collected_links)
+    total_matches = len({link.url for link in collected_links})
+    course_display = course.strip().upper()
+    total_pages = max(1, (len(all_fields) + _FIELDS_PER_PAGE - 1) // _FIELDS_PER_PAGE)
 
-    for title, links in all_notes.items():
-        # Find exact matches first, fallback to partial matches if course search is slightly off
-        site_matches = [url for code, url in links if normalized_course == code]
-        if not site_matches:
-            # Fallback to loose matching if exact fails (e.g., if user types ELE8)
-            site_matches = [url for code, url in links if normalized_course in code]
-
-        if site_matches:
-            # Create a markdown list of links if there's multiple (usually there's only 1)
-            links_str = "\n".join(f"• [Link to Notion]({url})" for url in set(site_matches))
-            fields.append((title, links_str, False))
-            matches += len(site_matches)
-
-    if not fields:
-        await interaction.followup.send(f"❌ No notes found for `{course}` across configured repositories.")
+    if total_pages > 1:
+        view = NotesPaginationView(
+            settings=settings,
+            course_display=course_display,
+            campus_name=campus.name,
+            all_fields=all_fields,
+            total_matches=total_matches,
+            degraded_providers=degraded_providers,
+        )
+        await interaction.followup.send(embed=view.current_embed(), view=view)
         return
 
-    embed = system_embed(
+    embed = build_notes_page_embed(
         settings,
-        title=f"📚 Course Notes — {course.upper()}",
-        summary=f"Found **{matches}** notes repository containing this course.",
-        fields=fields,
-        footer_hint="Engineering Notes",
+        course_display=course_display,
+        campus_name=campus.name,
+        all_fields=all_fields,
+        total_matches=total_matches,
+        page=0,
+        total_pages=1,
+        degraded_providers=degraded_providers,
     )
-
     await interaction.followup.send(embed=embed)
