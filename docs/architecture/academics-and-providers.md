@@ -88,3 +88,29 @@ Additive, reversible migration in [`icbot/db.py`](file:///home/sukesan/dev/disco
 | `academic_allowed_hosts` | `ACADEMIC_ALLOWED_HOSTS` | `notes.example.org,tmu.grades.zone` | Optional domain allowlist for server-side academic fetches |
 | `academic_enabled_providers` | `ACADEMIC_ENABLED_PROVIDERS` | `manual_catalog,rmp_graphql` | Optional explicit subset of enabled academic provider IDs |
 
+---
+
+## 7. Adapter Hardening, Caching & Rendering Boundaries
+
+Retrieval, parsing, caching, and Discord presentation are separated into dedicated modules under `icbot/academics/`:
+
+- **Caching & Freshness (`icbot/academics/cache.py`)**:
+  - `AcademicProviderCache` caches results by composite key `(provider_id, campus_id, query_key)`.
+  - Positive TTLs: Notes SPA `6h`, RMP school ID `12h`, RMP professor lookup `6h`, Grades memory cache `6h` + SQLite cache `7d`.
+  - Explicit negative caching: `not_found` cached `5m` (`300s`); transient `error` / timeouts / schema drift cached `60s` so repeat queries do not hammer failing upstreams.
+  - Embeds surface `Source: <attribution> • Last fetched: <t:UNIX:R> (live|cached)`.
+- **Notes SPA Bounded Parsing (`icbot/academics/parsers.py`)**:
+  - `parse_notes_spa_html` (`<= 512 KiB`) and `parse_notes_spa_bundle` (`<= 2 MiB`, `<= 500` links) replace unbounded regex scraping with `BeautifulSoup` + HTTPS/SSRF-validated URL extraction.
+  - Administrator-managed `ManualCatalogNotesProvider` always remains available offline even when external SPAs time out or are unconfigured.
+- **TMU Grades Zone Alignment, Storage & Licensing (`icbot/academics/parsers.py`, `icbot/features/grades.py`)**:
+  - `parse_tmu_grades_html` fixes the historical index-shift bug where skipping `"All Professors"` or decorative flex `<div>` containers shifted discrete professors onto the wrong grade distribution array. It aligns by (1) named JSON instructor objects when present, (2) valid-row index when counts match aggregate+discrete, (3) discrete-row index when aggregate has no distribution, or (4) unique student-count totals with an explicit alignment warning.
+  - Storage routes through `ServiceContainer.grades_cache` (backed by the installation's `Database` or configured `GRADES_DB_PATH`) instead of a hardcoded `tmu_grades.db` file.
+  - Never ship pre-populated/copied grades databases in this repository; `TmuGradesZoneProvider` is strictly gated to TMU campuses (`is_tmu_campus`) and only used where permitted.
+- **Off-Event-Loop Matplotlib Rendering & Accessibility (`icbot/academics/charts.py`)**:
+  - `render_grade_distribution_chart_async` executes Matplotlib's thread-safe object-oriented `Figure` + `FigureCanvasAgg` API inside `asyncio.to_thread(...)`, eliminating `pyplot` global state and `plt.style.use(...)` side effects.
+  - Figures are deterministically cleared in `finally`, plotted professors are capped at `MAX_CHART_PROFESSORS = 8`, PNG magic bytes and Discord attachment size (`<= 2 MiB`) are validated, and `build_accessible_grade_summary` supplies both Discord attachment alt-text (`File.description`) and an inline accessible text fallback.
+- **RateMyProfessors Unofficial GraphQL Governance (`icbot/academics/providers.py`, `icbot/features/prof.py`)**:
+  - The RateMyProfessors GraphQL endpoint (`https://www.ratemyprofessors.com/graphql`) is **unofficial** and undocumented; operators must review applicable terms of service and keep traffic low via conservative caching (12h school IDs, 6h professor results, negative caching on errors/not-found).
+  - Defensive parsers (`parse_rmp_school_response`, `parse_rmp_prof_response`) convert upstream schema changes into `SchemaDriftError` (`error_code="schema_drift"`), degrading `/ic prof` cleanly without affecting core academic features (manual notes catalog and exam planner).
+
+

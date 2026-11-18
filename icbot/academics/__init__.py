@@ -2,7 +2,21 @@
 
 from __future__ import annotations
 
+from icbot.academics.cache import (
+    AcademicProviderCache,
+    CacheKey,
+    format_freshness_line,
+)
 from icbot.academics.catalog import CatalogValidationError, ManualResourceCatalogStore
+from icbot.academics.charts import (
+    MAX_CHART_BYTES,
+    MAX_CHART_PROFESSORS,
+    ChartRenderError,
+    ChartRenderResult,
+    build_accessible_grade_summary,
+    render_grade_distribution_chart,
+    render_grade_distribution_chart_async,
+)
 from icbot.academics.exams_service import (
     CSV_EXPORT_HEADERS,
     MAX_IMPORT_BYTES,
@@ -48,6 +62,17 @@ from icbot.academics.models import (
     resolve_course_key,
     slugify_campus_id,
 )
+from icbot.academics.parsers import (
+    ParsedNotesSpaHtml,
+    ParsedTmuGrades,
+    PayloadLimitError,
+    SchemaDriftError,
+    parse_notes_spa_bundle,
+    parse_notes_spa_html,
+    parse_rmp_prof_response,
+    parse_rmp_school_response,
+    parse_tmu_grades_html,
+)
 from icbot.academics.providers import (
     AcademicProviderRegistry,
     GradeDistributionProvider,
@@ -68,12 +93,18 @@ from icbot.academics.url_safety import (
 
 __all__ = [
     "CSV_EXPORT_HEADERS",
+    "MAX_CHART_BYTES",
+    "MAX_CHART_PROFESSORS",
     "MAX_IMPORT_BYTES",
     "MAX_IMPORT_EVENTS",
     "MAX_IMPORT_LINES",
+    "AcademicProviderCache",
     "AcademicProviderRegistry",
+    "CacheKey",
     "Campus",
     "CatalogValidationError",
+    "ChartRenderError",
+    "ChartRenderResult",
     "Course",
     "Department",
     "DstResolution",
@@ -93,6 +124,9 @@ __all__ = [
     "NotesProvider",
     "NotesSpaProvider",
     "ParsedExamDraft",
+    "ParsedNotesSpaHtml",
+    "ParsedTmuGrades",
+    "PayloadLimitError",
     "ProfessorGradeRow",
     "ProfessorProvider",
     "ProfessorRecord",
@@ -103,8 +137,10 @@ __all__ = [
     "ProviderStatus",
     "ResourceLink",
     "RmpProfessorProvider",
+    "SchemaDriftError",
     "TmuGradesZoneProvider",
     "UrlValidationResult",
+    "build_accessible_grade_summary",
     "build_default_academic_registry",
     "campus_from_settings",
     "compute_due_exam_reminders",
@@ -112,6 +148,7 @@ __all__ = [
     "export_exams_ics",
     "fetch_notes_spa_links",
     "format_exam_timestamp",
+    "format_freshness_line",
     "is_tmu_campus",
     "mark_exam_reminder_delivered",
     "normalize_course_key",
@@ -119,6 +156,13 @@ __all__ = [
     "parse_exam_datetime",
     "parse_exams_csv",
     "parse_exams_ics",
+    "parse_notes_spa_bundle",
+    "parse_notes_spa_html",
+    "parse_rmp_prof_response",
+    "parse_rmp_school_response",
+    "parse_tmu_grades_html",
+    "render_grade_distribution_chart",
+    "render_grade_distribution_chart_async",
     "resolve_course_key",
     "slugify_campus_id",
     "validate_fetch_url",

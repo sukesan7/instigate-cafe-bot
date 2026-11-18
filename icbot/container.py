@@ -194,6 +194,7 @@ class ServiceContainer:
         self._bj_sessions: SessionManager | None = bj_sessions
         self._use_module_bj_fallback = bool(use_module_bj_fallback)
         self._grades_cache: Any = None
+        self._academic_cache: Any = None
         self._academic_catalog: Any = None
         self._academic_registry: Any = None
 
@@ -265,6 +266,15 @@ class ServiceContainer:
         return self._grades_cache
 
     @property
+    def academic_cache(self) -> Any:
+        """Lazy unified provider+campus+query TTL and negative-cache store."""
+        if self._academic_cache is None:
+            from icbot.academics.cache import AcademicProviderCache
+
+            self._academic_cache = AcademicProviderCache()
+        return self._academic_cache
+
+    @property
     def academic_catalog(self) -> Any:
         """Lazy per-guild manual course and external resource catalog (offline baseline)."""
         if self._academic_catalog is None and self.db is not None:
@@ -282,6 +292,9 @@ class ServiceContainer:
             self._academic_registry = build_default_academic_registry(
                 catalog=self.academic_catalog,
                 notes_cache=self.notes_cache,
+                provider_cache=self.academic_cache,
+                grades_store=self.grades_cache if self.db is not None else None,
+                grades_db_path=self.settings.grades_db_path,
             )
         return self._academic_registry
 

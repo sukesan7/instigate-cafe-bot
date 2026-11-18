@@ -10,6 +10,7 @@ import aiohttp
 import discord
 from discord import app_commands
 
+from icbot.academics.cache import format_freshness_line
 from icbot.academics.models import ResourceLink, campus_from_settings, normalize_course_key
 from icbot.academics.providers import fetch_notes_spa_links
 from icbot.app import ic
@@ -144,22 +145,25 @@ def build_notes_page_embed(
     page: int,
     total_pages: int,
     degraded_providers: list[str] | None = None,
+    freshness_lines: list[str] | None = None,
 ) -> discord.Embed:
     """Build a single paginated course-notes embed respecting Discord limits."""
     start = page * _FIELDS_PER_PAGE
     page_fields = all_fields[start : start + _FIELDS_PER_PAGE]
-    summary = (
-        f"Found **{total_matches}** resource link(s) for **{course_display}** ({campus_name}).\n"
-        "*External links only — rights remain with original authors/institutions.*"
-    )
+    summary_lines = [
+        f"Found **{total_matches}** resource link(s) for **{course_display}** ({campus_name}).",
+        "*External links only — rights remain with original authors/institutions.*",
+    ]
+    if freshness_lines:
+        summary_lines.extend(freshness_lines[:3])
     if degraded_providers:
-        summary += f"\n⚠️ Some optional sources were unavailable: {', '.join(degraded_providers)}"
+        summary_lines.append(f"⚠️ Some optional sources were unavailable: {', '.join(degraded_providers)}")
 
     footer_hint = f"Course Notes • Page {page + 1}/{total_pages}" if total_pages > 1 else "Course Notes"
     return system_embed(
         settings,
         title=f"📚 Course Notes — {course_display}",
-        summary=summary,
+        summary="\n".join(summary_lines),
         fields=page_fields,
         footer_hint=footer_hint,
     )
@@ -177,6 +181,7 @@ class NotesPaginationView(discord.ui.View):
         all_fields: list[tuple[str, str, bool]],
         total_matches: int,
         degraded_providers: list[str] | None = None,
+        freshness_lines: list[str] | None = None,
     ) -> None:
         super().__init__(timeout=180)
         self.settings = settings
@@ -185,6 +190,7 @@ class NotesPaginationView(discord.ui.View):
         self.all_fields = all_fields
         self.total_matches = total_matches
         self.degraded_providers = degraded_providers or []
+        self.freshness_lines = freshness_lines or []
         self.current_page = 0
         self.total_pages = max(1, (len(all_fields) + _FIELDS_PER_PAGE - 1) // _FIELDS_PER_PAGE)
         self._sync_buttons()
@@ -203,6 +209,7 @@ class NotesPaginationView(discord.ui.View):
             page=self.current_page,
             total_pages=self.total_pages,
             degraded_providers=self.degraded_providers,
+            freshness_lines=self.freshness_lines,
         )
 
     @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
@@ -253,6 +260,7 @@ async def notes_cmd(interaction: discord.Interaction, course: str):
 
     collected_links: list[ResourceLink] = []
     degraded_providers: list[str] = []
+    freshness_lines: list[str] = []
     any_configured = False
 
     for res in provider_results:
@@ -260,6 +268,7 @@ async def notes_cmd(interaction: discord.Interaction, course: str):
             any_configured = True
         if res.ok and res.data:
             collected_links.extend(res.data)
+            freshness_lines.append(format_freshness_line(res.provenance, clock=container.clock))
         elif res.status in ("error", "unsafe_url"):
             degraded_providers.append(res.provenance.provider_name)
 
@@ -294,6 +303,7 @@ async def notes_cmd(interaction: discord.Interaction, course: str):
             all_fields=all_fields,
             total_matches=total_matches,
             degraded_providers=degraded_providers,
+            freshness_lines=freshness_lines,
         )
         await interaction.followup.send(embed=view.current_embed(), view=view)
         return
@@ -307,5 +317,6 @@ async def notes_cmd(interaction: discord.Interaction, course: str):
         page=0,
         total_pages=1,
         degraded_providers=degraded_providers,
+        freshness_lines=freshness_lines,
     )
     await interaction.followup.send(embed=embed)

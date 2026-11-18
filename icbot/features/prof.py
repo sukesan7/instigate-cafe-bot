@@ -6,7 +6,9 @@ import aiohttp
 import discord
 from discord import app_commands
 
+from icbot.academics.cache import format_freshness_line
 from icbot.academics.models import ProfessorRecord, ProviderProvenance, campus_from_settings
+from icbot.academics.parsers import SchemaDriftError, parse_rmp_school_response
 from icbot.app import ic
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
@@ -95,16 +97,10 @@ async def get_school_id(session: aiohttp.ClientSession, university_name: str) ->
     data = await fetch_graphql(session, SCHOOL_SEARCH_QUERY, {"query": {"text": university_name}})
     if not data:
         return None
-
     try:
-        edges = data["data"]["newSearch"]["schools"]["edges"]
-        if not edges:
-            return None
-        # Always take the top result
-        node_id = edges[0]["node"]["id"]
-        return str(node_id) if node_id is not None else None
-    except KeyError as e:
-        log.error("[RMP] Unexpected payload tracking school ID: %s", e)
+        return parse_rmp_school_response(data)
+    except SchemaDriftError as e:
+        log.warning("[RMP] Unexpected payload tracking school ID: %s", e)
         return None
 
 
@@ -115,9 +111,11 @@ async def search_prof(session: aiohttp.ClientSession, name: str, school_id: str)
 
     try:
         edges = data["data"]["newSearch"]["teachers"]["edges"]
-        return [e["node"] for e in edges]
-    except KeyError as e:
-        log.error("[RMP] Unexpected payload tracking professor data: %s", e)
+        if not isinstance(edges, list):
+            return []
+        return [e["node"] for e in edges if isinstance(e, dict) and isinstance(e.get("node"), dict)]
+    except (KeyError, TypeError) as e:
+        log.warning("[RMP] Unexpected payload tracking professor data: %s", e)
         return []
 
 
@@ -201,12 +199,15 @@ def build_prof_record_embed(
     if record.avg_rating == 0 and record.num_ratings == 0:
         title = f"🍎 {record.full_name} — No Ratings"
 
-    summary = (
-        f"**{record.institution}** • {record.department}\n"
-        f"Total Ratings: **{record.num_ratings}**\n"
-        f"Difficulty: **{round(record.avg_difficulty, 1)} / 5.0**\n"
-        f"Would Take Again: **{wta_str}**"
-    )
+    summary_lines = [
+        f"**{record.institution}** • {record.department}",
+        f"Total Ratings: **{record.num_ratings}**",
+        f"Difficulty: **{round(record.avg_difficulty, 1)} / 5.0**",
+        f"Would Take Again: **{wta_str}**",
+    ]
+    if provenance is not None:
+        summary_lines.append(format_freshness_line(provenance))
+    summary = "\n".join(summary_lines)
 
     fields: list[tuple[str, str, bool]] = []
     if record.top_tags:
@@ -269,6 +270,13 @@ async def prof_cmd(interaction: discord.Interaction, name: str):
         return
 
     if result.status in ("error", "unsafe_url"):
+        if result.error_code == "schema_drift":
+            await interaction.followup.send(
+                f"⚠️ Professor lookup provider (`{result.provenance.provider_name}`) returned an "
+                "unexpected upstream schema. Core academic features (notes catalog, exams) remain unaffected.",
+                ephemeral=True,
+            )
+            return
         await interaction.followup.send(
             f"❌ Professor lookup provider (`{result.provenance.provider_name}`) encountered an error.",
             ephemeral=True,

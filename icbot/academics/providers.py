@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import sqlite3
 import time
 import urllib.parse
@@ -20,13 +19,18 @@ from typing import Any, Protocol, runtime_checkable
 import aiohttp
 import aiosqlite
 
+from icbot.academics.cache import (
+    DEFAULT_NEGATIVE_ERROR_TTL_SECONDS,
+    DEFAULT_NEGATIVE_NOT_FOUND_TTL_SECONDS,
+    AcademicProviderCache,
+    CacheKey,
+)
 from icbot.academics.catalog import ManualResourceCatalogStore
 from icbot.academics.models import (
     Campus,
     GradeDistribution,
     ProfessorGradeRow,
     ProfessorRecord,
-    ProfessorReview,
     ProviderProvenance,
     ProviderResult,
     ResourceLink,
@@ -34,14 +38,22 @@ from icbot.academics.models import (
     normalize_course_key,
     resolve_course_key,
 )
-from icbot.academics.url_safety import validate_fetch_url, validate_resource_url
+from icbot.academics.parsers import (
+    PayloadLimitError,
+    SchemaDriftError,
+    parse_notes_spa_bundle,
+    parse_notes_spa_html,
+    parse_rmp_prof_response,
+    parse_rmp_school_response,
+)
+from icbot.academics.url_safety import validate_fetch_url
 
 log = logging.getLogger(__name__)
 
-# Multi-campus course code pattern: handles CS 135, ELE888, COMP-2404, BIO120H1, HIST-2010A, etc.
-_COURSE_CODE_EXTRACT_RE = re.compile(r"([A-Z]{2,5}[-\s]?\d{3,4}[A-Z0-9]{0,2})", re.IGNORECASE)
-_NOTION_LINK_RE = re.compile(r'https://[^\.]+\.notion\.site/[^\s"\'\\>}]+')
 _NOTES_SPA_TTL_SECONDS = 6 * 3600
+_RMP_SCHOOL_TTL_SECONDS = 12 * 3600  # Conservative 12h school ID cache
+_RMP_PROF_TTL_SECONDS = 6 * 3600  # Conservative 6h professor rating cache
+_GRADES_MEMORY_TTL_SECONDS = 6 * 3600
 
 _PROVIDER_EXCEPTIONS = (
     aiohttp.ClientError,
@@ -218,7 +230,7 @@ async def fetch_notes_spa_links(
     *,
     allowed_hosts: Sequence[str] | None = None,
 ) -> tuple[list[tuple[str, str]], str]:
-    """Fetch a Notion-index SPA after strict HTTPS + SSRF URL validation.
+    """Fetch a Notion-index SPA after strict HTTPS + SSRF validation using bounded parsers.
 
     Returns ``(links, error_reason)`` where ``links`` is ``[(normalized_course_key, url), ...]``.
     """
@@ -241,37 +253,22 @@ async def fetch_notes_spa_links(
                 return [], f"HTTP {resp.status}"
             html = await resp.text()
 
-        raw_links = set(_NOTION_LINK_RE.findall(html))
+        parsed_html = parse_notes_spa_html(html, base_url=safe_url, allowed_hosts=allowed_hosts)
+        results: list[tuple[str, str]] = list(parsed_html.links)
+        seen: set[tuple[str, str]] = set(results)
 
-        js_match = re.search(r'src="([^"]+/assets/index-[a-f0-9]+\.js)"', html)
-        if js_match:
-            js_path = js_match.group(1)
-            if js_path.startswith("/"):
-                parsed = urllib.parse.urlparse(safe_url)
-                js_url = f"{parsed.scheme}://{parsed.netloc}{js_path}"
-            else:
-                js_url = f"{safe_url.rstrip('/')}/{js_path}"
-
-            js_check = validate_fetch_url(js_url, allowed_hosts=allowed_hosts)
-            if js_check.ok:
-                async with session.get(js_check.normalized_url, headers=headers, timeout=timeout) as js_resp:
-                    if js_resp.status == 200:
-                        js_text = await js_resp.text()
-                        raw_links.update(_NOTION_LINK_RE.findall(js_text))
-
-        results: list[tuple[str, str]] = []
-        for rl in raw_links:
-            link_check = validate_resource_url(rl, require_https=True)
-            if not link_check.ok:
-                continue
-            code_match = _COURSE_CODE_EXTRACT_RE.search(rl)
-            if code_match:
-                course_code = normalize_course_key(code_match.group(1))
-                if course_code:
-                    results.append((course_code, link_check.normalized_url))
+        if parsed_html.bundle_url:
+            async with session.get(parsed_html.bundle_url, headers=headers, timeout=timeout) as js_resp:
+                if js_resp.status == 200:
+                    js_text = await js_resp.text()
+                    js_pairs, _trunc = parse_notes_spa_bundle(js_text)
+                    for pair in js_pairs:
+                        if pair not in seen:
+                            seen.add(pair)
+                            results.append(pair)
 
         return results, ""
-    except (aiohttp.ClientError, TimeoutError, UnicodeDecodeError, ValueError) as exc:
+    except (aiohttp.ClientError, TimeoutError, UnicodeDecodeError, PayloadLimitError, ValueError) as exc:
         log.warning("[NOTES] Error fetching from %s: %s", title, exc)
         return [], str(exc)
 
@@ -282,8 +279,14 @@ class NotesSpaProvider:
     provider_id: str = "notes_spa"
     display_name: str = "Configured Notes Repositories"
 
-    def __init__(self, *, cache: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        cache: Any | None = None,
+        provider_cache: AcademicProviderCache | None = None,
+    ) -> None:
         self._cache = cache
+        self._provider_cache = provider_cache
 
     def supports_campus(self, campus: Campus) -> bool:
         return True
@@ -319,11 +322,41 @@ class NotesSpaProvider:
         aliases = getattr(settings, "academic_course_aliases", None) if settings is not None else None
 
         sites_key = tuple(str(s).strip() for s in sites_raw if str(s).strip())
+        site_cache_key = CacheKey.make(self.provider_id, campus.campus_id, "|".join(sites_key))
         cached_hit = False
+        fetched_ts = now_ts
         all_notes: dict[str, list[tuple[str, str]]] | None = None
-        if self._cache is not None:
-            all_notes = self._cache.get(sites_key, now=now, ttl_seconds=_NOTES_SPA_TTL_SECONDS)
-            if all_notes is not None:
+
+        # 1. Check unified AcademicProviderCache (supports positive + negative caching + fetched_at)
+        if self._provider_cache is not None:
+            pc_hit = self._provider_cache.get(site_cache_key, now=now)
+            if pc_hit is not None:
+                pc_val, pc_stored, pc_neg = pc_hit
+                fetched_ts = int(pc_stored)
+                cached_hit = True
+                if pc_neg and isinstance(pc_val, ProviderResult):
+                    cached_prov = ProviderProvenance(
+                        provider_id=pc_val.provenance.provider_id,
+                        provider_name=pc_val.provenance.provider_name,
+                        fetched_at=fetched_ts,
+                        attribution=pc_val.provenance.attribution,
+                        cached=True,
+                    )
+                    return ProviderResult(
+                        data=[],
+                        status=pc_val.status,
+                        provenance=cached_prov,
+                        error_code=pc_val.error_code,
+                        error_message=pc_val.error_message,
+                    )
+                if isinstance(pc_val, dict):
+                    all_notes = pc_val
+
+        # 2. Check legacy NotesCache for backwards-compatible cache partitioning
+        if all_notes is None and self._cache is not None:
+            legacy_hit = self._cache.get(sites_key, now=now, ttl_seconds=_NOTES_SPA_TTL_SECONDS)
+            if legacy_hit is not None:
+                all_notes = legacy_hit
                 cached_hit = True
 
         unsafe_errors: list[str] = []
@@ -367,8 +400,17 @@ class NotesSpaProvider:
                         elif links_list:
                             all_notes[title] = links_list
 
-            if self._cache is not None and all_notes:
-                self._cache.set(sites_key, now=now, data=all_notes)
+            if all_notes:
+                if self._cache is not None:
+                    self._cache.set(sites_key, now=now, data=all_notes)
+                if self._provider_cache is not None:
+                    self._provider_cache.set(
+                        site_cache_key,
+                        all_notes,
+                        ttl_seconds=_NOTES_SPA_TTL_SECONDS,
+                        now=now,
+                        is_negative=False,
+                    )
 
         raw_norm = normalize_course_key(course)
         resolved = resolve_course_key(course, aliases)
@@ -394,14 +436,14 @@ class NotesSpaProvider:
                         resource_type="notes",
                         source_attribution=site_title,
                         license_note="External Notion notes link — rights remain with original author.",
-                        created_at=now_ts,
+                        created_at=fetched_ts,
                     )
                 )
 
         provenance = ProviderProvenance(
             provider_id=self.provider_id,
             provider_name=self.display_name,
-            fetched_at=now_ts,
+            fetched_at=fetched_ts,
             attribution=", ".join(sorted((all_notes or {}).keys())) or self.display_name,
             cached=cached_hit,
         )
@@ -409,21 +451,31 @@ class NotesSpaProvider:
         if matched_links:
             return ProviderResult(data=matched_links, status="ok", provenance=provenance)
         if unsafe_errors and not all_notes:
-            return ProviderResult(
+            res_unsafe: ProviderResult[list[ResourceLink]] = ProviderResult(
                 data=[],
                 status="unsafe_url",
                 provenance=provenance,
                 error_code="unsafe_source_url",
                 error_message="; ".join(unsafe_errors),
             )
+            return res_unsafe
         if fetch_errors and not all_notes:
-            return ProviderResult(
+            res_err: ProviderResult[list[ResourceLink]] = ProviderResult(
                 data=[],
                 status="error",
                 provenance=provenance,
                 error_code="fetch_failed",
                 error_message="; ".join(fetch_errors),
             )
+            if self._provider_cache is not None and not cached_hit:
+                self._provider_cache.set(
+                    site_cache_key,
+                    res_err,
+                    ttl_seconds=DEFAULT_NEGATIVE_ERROR_TTL_SECONDS,
+                    now=now,
+                    is_negative=True,
+                )
+            return res_err
         return ProviderResult(data=[], status="not_found", provenance=provenance)
 
 
@@ -433,10 +485,17 @@ class NotesSpaProvider:
 
 
 class RmpProfessorProvider:
-    """Optional professor rating plugin backed by RateMyProfessors GraphQL."""
+    """Optional professor rating plugin backed by RateMyProfessors' unofficial GraphQL API.
+
+    Uses conservative positive and negative caching and defensive schema-drift parsing so
+    upstream changes never crash or impact core academic features.
+    """
 
     provider_id: str = "rmp_graphql"
-    display_name: str = "RateMyProfessors"
+    display_name: str = "RateMyProfessors (Unofficial GraphQL)"
+
+    def __init__(self, *, provider_cache: AcademicProviderCache | None = None) -> None:
+        self._provider_cache = provider_cache
 
     def supports_campus(self, campus: Campus) -> bool:
         return bool(campus.name)
@@ -451,16 +510,25 @@ class RmpProfessorProvider:
         session: aiohttp.ClientSession | None = None,
         clock: Callable[[], float] | None = None,
     ) -> ProviderResult[list[ProfessorRecord]]:
-        from icbot.features.prof import RMP_GRAPHQL_URL, get_school_id, search_prof
+        from icbot.features.prof import (
+            PROF_SEARCH_QUERY,
+            RMP_GRAPHQL_URL,
+            SCHOOL_SEARCH_QUERY,
+            fetch_graphql,
+        )
 
-        now_ts = int(clock() if clock is not None else time.time())
+        now = float(clock() if clock is not None else time.time())
+        now_ts = int(now)
         inst = str(institution or (campus.name if campus is not None else "")).strip()
+        campus_id = campus.campus_id if campus is not None else inst.lower()
+        norm_query = " ".join(str(name or "").strip().lower().split())
+
         provenance = ProviderProvenance(
             provider_id=self.provider_id,
             provider_name=self.display_name,
             fetched_at=now_ts,
             source_url=RMP_GRAPHQL_URL,
-            attribution=f"RateMyProfessors ({inst})",
+            attribution=f"RateMyProfessors — Unofficial GraphQL ({inst})",
             cached=False,
         )
 
@@ -474,7 +542,7 @@ class RmpProfessorProvider:
                 error_message=url_check.reason,
             )
 
-        if not inst or not str(name or "").strip():
+        if not inst or not norm_query:
             return ProviderResult(
                 data=[],
                 status="not_found",
@@ -483,77 +551,160 @@ class RmpProfessorProvider:
                 error_message="Professor name and institution are required.",
             )
 
+        prof_cache_key = CacheKey.make(self.provider_id, campus_id, norm_query)
+        if self._provider_cache is not None:
+            cached_res = self._provider_cache.get_provider_result(prof_cache_key, now=now)
+            if cached_res is not None:
+                return cached_res
+
+        school_cache_key = CacheKey.make("rmp_school", campus_id, inst.lower())
+
         try:
             async with _scoped_http_session(session) as http_session:
-                school_id = await get_school_id(http_session, inst)
+                school_id: str | None = None
+                school_from_cache = False
+                if self._provider_cache is not None:
+                    s_hit = self._provider_cache.get(school_cache_key, now=now)
+                    if s_hit is not None:
+                        school_id = s_hit[0]
+                        school_from_cache = True
+
+                if not school_from_cache:
+                    school_payload = await fetch_graphql(
+                        http_session, SCHOOL_SEARCH_QUERY, {"query": {"text": inst}}
+                    )
+                    if school_payload is None:
+                        err_res: ProviderResult[list[ProfessorRecord]] = ProviderResult(
+                            data=[],
+                            status="error",
+                            provenance=provenance,
+                            error_code="rmp_http_error",
+                            error_message="RateMyProfessors GraphQL request failed or timed out.",
+                        )
+                        if self._provider_cache is not None:
+                            self._provider_cache.set_provider_result(
+                                prof_cache_key,
+                                err_res,
+                                error_ttl=DEFAULT_NEGATIVE_ERROR_TTL_SECONDS,
+                                now=now,
+                            )
+                        return err_res
+                    school_id = parse_rmp_school_response(school_payload)
+                    if self._provider_cache is not None:
+                        self._provider_cache.set(
+                            school_cache_key,
+                            school_id,
+                            ttl_seconds=_RMP_SCHOOL_TTL_SECONDS
+                            if school_id
+                            else DEFAULT_NEGATIVE_NOT_FOUND_TTL_SECONDS,
+                            now=now,
+                            is_negative=school_id is None,
+                        )
+
                 if not school_id:
-                    return ProviderResult(
+                    nf_inst: ProviderResult[list[ProfessorRecord]] = ProviderResult(
                         data=[],
                         status="not_found",
                         provenance=provenance,
                         error_code="institution_not_found",
                         error_message=f"Could not locate institution ID for '{inst}'.",
                     )
-                raw_profs = await search_prof(http_session, name, school_id)
+                    if self._provider_cache is not None:
+                        self._provider_cache.set_provider_result(
+                            prof_cache_key,
+                            nf_inst,
+                            not_found_ttl=DEFAULT_NEGATIVE_NOT_FOUND_TTL_SECONDS,
+                            now=now,
+                        )
+                    return nf_inst
+
+                prof_payload = await fetch_graphql(
+                    http_session,
+                    PROF_SEARCH_QUERY,
+                    {"query": {"text": name.strip(), "schoolID": school_id}},
+                )
+                if prof_payload is None:
+                    err_prof: ProviderResult[list[ProfessorRecord]] = ProviderResult(
+                        data=[],
+                        status="error",
+                        provenance=provenance,
+                        error_code="rmp_http_error",
+                        error_message="RateMyProfessors professor query failed or timed out.",
+                    )
+                    if self._provider_cache is not None:
+                        self._provider_cache.set_provider_result(
+                            prof_cache_key,
+                            err_prof,
+                            error_ttl=DEFAULT_NEGATIVE_ERROR_TTL_SECONDS,
+                            now=now,
+                        )
+                    return err_prof
+
+                records = parse_rmp_prof_response(prof_payload, institution=inst)
+
+        except SchemaDriftError as exc:
+            log.warning("[RMP] Schema drift detected: %s", exc)
+            drift_res: ProviderResult[list[ProfessorRecord]] = ProviderResult(
+                data=[],
+                status="error",
+                provenance=provenance,
+                error_code="schema_drift",
+                error_message=f"Upstream RMP schema changed unexpectedly: {exc}",
+            )
+            if self._provider_cache is not None:
+                self._provider_cache.set_provider_result(
+                    prof_cache_key,
+                    drift_res,
+                    error_ttl=DEFAULT_NEGATIVE_ERROR_TTL_SECONDS,
+                    now=now,
+                )
+            return drift_res
         except (aiohttp.ClientError, TimeoutError, ValueError, RuntimeError) as exc:
             log.warning("[RMP] Provider search failed: %s", exc)
-            return ProviderResult(
+            fail_res: ProviderResult[list[ProfessorRecord]] = ProviderResult(
                 data=[],
                 status="error",
                 provenance=provenance,
                 error_code="rmp_fetch_error",
                 error_message=str(exc),
             )
+            if self._provider_cache is not None:
+                self._provider_cache.set_provider_result(
+                    prof_cache_key,
+                    fail_res,
+                    error_ttl=DEFAULT_NEGATIVE_ERROR_TTL_SECONDS,
+                    now=now,
+                )
+            return fail_res
 
-        if not raw_profs:
-            return ProviderResult(
+        if not records:
+            nf_prof: ProviderResult[list[ProfessorRecord]] = ProviderResult(
                 data=[],
                 status="not_found",
                 provenance=provenance,
                 error_code="professor_not_found",
                 error_message=f"No professor matching '{name}' at {inst}.",
             )
-
-        records: list[ProfessorRecord] = []
-        for raw in raw_profs:
-            full_name = f"{raw.get('firstName', '')} {raw.get('lastName', '')}".strip()
-            tags_raw = raw.get("teacherRatingTags") or []
-            tags_sorted = sorted(tags_raw, key=lambda x: x.get("tagCount", 0), reverse=True)
-            top_tags = tuple(str(t.get("tagName", "")).strip() for t in tags_sorted[:5] if t.get("tagName"))
-
-            reviews: list[ProfessorReview] = []
-            for edge in (raw.get("ratings") or {}).get("edges", []):
-                node = edge.get("node") or {}
-                reviews.append(
-                    ProfessorReview(
-                        course_code=str(node.get("class", "Unknown") or "Unknown"),
-                        helpful_rating=str(node.get("helpfulRating", "?")),
-                        difficulty_rating=str(node.get("difficultyRating", "?")),
-                        comment=str(node.get("comment", "") or ""),
-                    )
+            if self._provider_cache is not None:
+                self._provider_cache.set_provider_result(
+                    prof_cache_key,
+                    nf_prof,
+                    not_found_ttl=DEFAULT_NEGATIVE_NOT_FOUND_TTL_SECONDS,
+                    now=now,
                 )
+            return nf_prof
 
-            prof_id = str(raw.get("id", "") or "")
-            profile_url = f"https://www.ratemyprofessors.com/professor/{prof_id}" if prof_id else ""
-
-            records.append(
-                ProfessorRecord(
-                    provider_prof_id=prof_id,
-                    full_name=full_name,
-                    institution=inst,
-                    department=str(raw.get("department", "Unknown Department") or "Unknown Department"),
-                    avg_rating=float(raw.get("avgRating", 0.0) or 0.0),
-                    num_ratings=int(raw.get("numRatings", 0) or 0),
-                    avg_difficulty=float(raw.get("avgDifficulty", 0.0) or 0.0),
-                    would_take_again_pct=float(raw.get("wouldTakeAgainPercent", -1) or -1),
-                    top_tags=top_tags,
-                    recent_reviews=tuple(reviews),
-                    profile_url=profile_url,
-                    raw_payload=dict(raw),
-                )
+        ok_res: ProviderResult[list[ProfessorRecord]] = ProviderResult(
+            data=records, status="ok", provenance=provenance
+        )
+        if self._provider_cache is not None:
+            self._provider_cache.set_provider_result(
+                prof_cache_key,
+                ok_res,
+                positive_ttl=_RMP_PROF_TTL_SECONDS,
+                now=now,
             )
-
-        return ProviderResult(data=records, status="ok", provenance=provenance)
+        return ok_res
 
 
 # ---------------------------------------------------------------------------
@@ -568,9 +719,16 @@ class TmuGradesZoneProvider:
     display_name: str = "TMU Grades Zone"
     _BASE_HOST: str = "tmu.grades.zone"
 
-    def __init__(self, *, store: Any | None = None, db_path: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        store: Any | None = None,
+        db_path: str | None = None,
+        provider_cache: AcademicProviderCache | None = None,
+    ) -> None:
         self._store = store
         self._db_path = db_path
+        self._provider_cache = provider_cache
 
     def supports_campus(self, campus: Campus) -> bool:
         # Never claim coverage for non-TMU institutions
@@ -587,7 +745,8 @@ class TmuGradesZoneProvider:
     ) -> ProviderResult[GradeDistribution | None]:
         from icbot.features import grades as grades_mod
 
-        now_ts = int(clock() if clock is not None else time.time())
+        now = float(clock() if clock is not None else time.time())
+        now_ts = int(now)
         aliases = getattr(settings, "academic_course_aliases", None) if settings is not None else None
         resolved_key = resolve_course_key(course, aliases)
         source_url = (
@@ -635,38 +794,64 @@ class TmuGradesZoneProvider:
                 error_message=url_check.reason,
             )
 
+        cache_key = CacheKey.make(self.provider_id, campus.campus_id, resolved_key)
+        if self._provider_cache is not None:
+            cached_res = self._provider_cache.get_provider_result(cache_key, now=now)
+            if cached_res is not None:
+                return cached_res
+
+        # Respect injected store or configured settings.grades_db_path (no hardcoded tmu_grades.db!)
+        eff_store = self._store
         eff_db_path = self._db_path
-        if eff_db_path is None and self._store is None:
-            if grades_mod.DB_PATH != "tmu_grades.db":
-                eff_db_path = grades_mod.DB_PATH
-            elif settings is not None:
-                eff_db_path = getattr(settings, "grades_db_path", grades_mod.DB_PATH)
+        if grades_mod.DB_PATH != grades_mod.DEFAULT_GRADES_DB_PATH:
+            # Explicit monkeypatch override in isolated test harnesses
+            eff_store = None
+            eff_db_path = grades_mod.DB_PATH
+        elif eff_store is None and eff_db_path is None and settings is not None:
+            eff_db_path = getattr(settings, "grades_db_path", None)
 
         try:
-            raw = await grades_mod.fetch_course_data(
+            raw, fetched_at, from_sqlite_cache = await grades_mod.fetch_course_data_with_meta(
                 resolved_key.lower(),
-                db_path=eff_db_path if self._store is None else None,
+                db_path=eff_db_path if eff_store is None else None,
                 session=session,
-                store=self._store,
+                store=eff_store,
+                clock=clock,
             )
-        except _PROVIDER_EXCEPTIONS as exc:
+        except (PayloadLimitError, *_PROVIDER_EXCEPTIONS) as exc:
             log.warning("[GRADES] TMU Grades Zone fetch failed for %s: %s", resolved_key, exc)
-            return ProviderResult(
+            err_res: ProviderResult[GradeDistribution | None] = ProviderResult(
                 data=None,
                 status="error",
                 provenance=provenance,
-                error_code="grades_fetch_error",
+                error_code="grades_timeout" if isinstance(exc, TimeoutError) else "grades_fetch_error",
                 error_message=str(exc),
             )
+            if self._provider_cache is not None:
+                self._provider_cache.set_provider_result(
+                    cache_key,
+                    err_res,
+                    error_ttl=DEFAULT_NEGATIVE_ERROR_TTL_SECONDS,
+                    now=now,
+                )
+            return err_res
 
         if raw is None:
-            return ProviderResult(
+            nf_res: ProviderResult[GradeDistribution | None] = ProviderResult(
                 data=None,
                 status="not_found",
                 provenance=provenance,
                 error_code="course_not_found",
                 error_message=f"Course '{course}' was not found on TMU Grades Zone.",
             )
+            if self._provider_cache is not None:
+                self._provider_cache.set_provider_result(
+                    cache_key,
+                    nf_res,
+                    not_found_ttl=DEFAULT_NEGATIVE_NOT_FOUND_TTL_SECONDS,
+                    now=now,
+                )
+            return nf_res
 
         profs = tuple(
             ProfessorGradeRow(
@@ -687,7 +872,25 @@ class TmuGradesZoneProvider:
             professors=profs,
             source_url=source_url,
         )
-        return ProviderResult(data=dist, status="ok", provenance=provenance)
+        final_prov = ProviderProvenance(
+            provider_id=self.provider_id,
+            provider_name=self.display_name,
+            fetched_at=int(fetched_at or now_ts),
+            source_url=source_url,
+            attribution="TMU Grades Zone (tmu.grades.zone)",
+            cached=bool(from_sqlite_cache),
+        )
+        ok_res: ProviderResult[GradeDistribution | None] = ProviderResult(
+            data=dist, status="ok", provenance=final_prov
+        )
+        if self._provider_cache is not None:
+            self._provider_cache.set_provider_result(
+                cache_key,
+                ok_res,
+                positive_ttl=_GRADES_MEMORY_TTL_SECONDS,
+                now=now,
+            )
+        return ok_res
 
 
 # ---------------------------------------------------------------------------
@@ -910,15 +1113,19 @@ def build_default_academic_registry(
     *,
     catalog: ManualResourceCatalogStore | None = None,
     notes_cache: Any | None = None,
+    provider_cache: AcademicProviderCache | None = None,
     grades_store: Any | None = None,
     grades_db_path: str | None = None,
 ) -> AcademicProviderRegistry:
     """Assemble the default academic provider registry with manual catalog + optional plugins."""
+    eff_cache = provider_cache if provider_cache is not None else AcademicProviderCache()
     reg = AcademicProviderRegistry()
     # 1. Universal offline baseline first
     reg.register_notes_provider(ManualCatalogNotesProvider(catalog=catalog))
-    # 2. Optional remote plugins
-    reg.register_notes_provider(NotesSpaProvider(cache=notes_cache))
-    reg.register_professor_provider(RmpProfessorProvider())
-    reg.register_grade_provider(TmuGradesZoneProvider(store=grades_store, db_path=grades_db_path))
+    # 2. Optional remote plugins with unified provider+campus+query TTL & negative cache
+    reg.register_notes_provider(NotesSpaProvider(cache=notes_cache, provider_cache=eff_cache))
+    reg.register_professor_provider(RmpProfessorProvider(provider_cache=eff_cache))
+    reg.register_grade_provider(
+        TmuGradesZoneProvider(store=grades_store, db_path=grades_db_path, provider_cache=eff_cache)
+    )
     return reg

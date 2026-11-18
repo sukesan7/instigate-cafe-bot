@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CPS530 - Synthetic Named JSON Grades Fixture v1</title>
+  </head>
+  <body>
+    <main>
+      <h2>CPS530 - Web Systems Development</h2>
+
+      <div class="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start">
+        <div class="font-bold">All Professors</div>
+        <p>2023-2025</p>
+        <span data-slot="badge">Avg: B+</span>
+        <span data-slot="badge">Common: A-</span>
+        <span class="bg-accent">120 student</span>
+      </div>
+
+      <div class="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start">
+        <div class="font-bold">Prof. Grace Hopper</div>
+        <p>Fall 2025</p>
+        <span data-slot="badge">Avg: A</span>
+        <span data-slot="badge">Common: A+</span>
+        <span class="bg-accent">55 student</span>
+      </div>
+
+      <div class="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start">
+        <div class="font-bold">Prof. Edsger Dijkstra</div>
+        <p>Winter 2025</p>
+        <span data-slot="badge">Avg: B</span>
+        <span data-slot="badge">Common: B</span>
+        <span class="bg-accent">65 student</span>
+      </div>
+
+      <script>
+        window.__COURSE_DATA__ = {
+          "instructors": [
+            {
+              "name": "Prof. Edsger Dijkstra",
+              "distribution":[{"letterGrade":"B","count":45},{"letterGrade":"A-","count":20}]
+            },
+            {
+              "name": "Prof. Grace Hopper",
+              "distribution":[{"letterGrade":"A","count":25},{"letterGrade":"A+","count":30}]
+            }
+          ]
+        };
+      </script>
+    </main>
+  </body>
+</html>
+

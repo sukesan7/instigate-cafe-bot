@@ -3,21 +3,27 @@ from __future__ import annotations
 import io
 import json
 import logging
-import re
 import sqlite3
 import time
 import urllib.parse
+from collections.abc import Callable
 from typing import Any
 
 import aiohttp
 import aiosqlite
 import discord
-import matplotlib.pyplot as plt
-import numpy as np
-from bs4 import BeautifulSoup
 from discord import app_commands
 
+from icbot.academics.cache import format_freshness_line
+from icbot.academics.charts import (
+    ChartRenderError,
+    build_accessible_grade_summary,
+    render_grade_distribution_chart,
+    render_grade_distribution_chart_async,
+)
 from icbot.academics.models import campus_from_settings
+from icbot.academics.parsers import parse_tmu_grades_html
+from icbot.academics.url_safety import validate_fetch_url
 from icbot.app import ic
 from icbot.container import get_container, resolve_guild_settings
 from icbot.db import Database
@@ -26,21 +32,25 @@ from icbot.errors import format_exception_safe, redact_secrets
 
 log = logging.getLogger(__name__)
 
-DB_PATH = "tmu_grades.db"
+# Legacy sentinel kept only for backwards-compatible test monkeypatching;
+# production calls inject ServiceContainer.grades_cache / settings.grades_db_path.
+DEFAULT_GRADES_DB_PATH = "tmu_grades.db"
+DB_PATH = DEFAULT_GRADES_DB_PATH
+_DEFAULT_SQLITE_CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 days persistent cache TTL
+_TMU_GRADES_HOST = "tmu.grades.zone"
 
 
 class GradesCacheStore:
-    """Store abstraction for caching TMU Grades course distribution data."""
+    """Configurable SQLite cache store for historical course grade distribution data."""
 
-    def __init__(self, db: Database | str | None = None) -> None:
+    def __init__(self, db: Database | str) -> None:
         if isinstance(db, Database):
             self._db = db
             self._owns_db = False
         elif isinstance(db, str):
+            if not db.strip():
+                raise ValueError("GradesCacheStore db path must not be empty.")
             self._db = Database(db)
-            self._owns_db = True
-        elif db is None:
-            self._db = Database(DB_PATH)
             self._owns_db = True
         else:
             raise TypeError(f"Unsupported db type: {type(db)}")
@@ -52,7 +62,6 @@ class GradesCacheStore:
     async def init(self) -> None:
         """Initialize the underlying database and ensure grades cache tables exist."""
         await self._db.init()
-        # Backwards compatibility: ensure both namespaced table and legacy course_cache exist
         await self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS grades_course_cache (
@@ -74,16 +83,27 @@ class GradesCacheStore:
             """
         )
 
-    async def get_course(self, course_code: str) -> dict[str, Any] | None:
+    async def get_course_with_meta(
+        self,
+        course_code: str,
+        *,
+        now: float | None = None,
+        ttl_seconds: float | None = None,
+    ) -> tuple[dict[str, Any], int] | None:
+        """Return ``(payload, last_updated_ts)`` when cached and fresh, else ``None``."""
         code = course_code.lower().strip()
-        # Check namespaced table first
+        ref_now = float(now if now is not None else time.time())
+
         try:
             row = await self._db.fetchone(
-                "SELECT title, parsed_data FROM grades_course_cache WHERE course_code = ?",
+                "SELECT title, parsed_data, last_updated FROM grades_course_cache WHERE course_code = ?",
                 (code,),
             )
             if row:
-                return {"title": str(row[0]), "professors": json.loads(str(row[1]))}
+                last_updated = int(row[2] or 0)
+                if ttl_seconds is not None and last_updated > 0 and (ref_now - last_updated) >= ttl_seconds:
+                    return None
+                return {"title": str(row[0]), "professors": json.loads(str(row[1]))}, last_updated
         except (aiosqlite.Error, sqlite3.Error, json.JSONDecodeError, OSError, ValueError) as exc:
             log.debug("Grades cache read error on namespaced table: %s", exc)
 
@@ -94,18 +114,28 @@ class GradesCacheStore:
                 (code,),
             )
             if row:
-                return {"title": str(row[0]), "professors": json.loads(str(row[1]))}
+                return {"title": str(row[0]), "professors": json.loads(str(row[1]))}, int(ref_now)
         except (aiosqlite.Error, sqlite3.Error, json.JSONDecodeError, OSError, ValueError) as exc:
             log.debug("Grades cache read error on legacy table: %s", exc)
 
         return None
 
-    async def set_course(self, course_code: str, title: str, professors: list[dict[str, Any]]) -> None:
+    async def get_course(self, course_code: str) -> dict[str, Any] | None:
+        hit = await self.get_course_with_meta(course_code)
+        return hit[0] if hit is not None else None
+
+    async def set_course(
+        self,
+        course_code: str,
+        title: str,
+        professors: list[dict[str, Any]],
+        *,
+        fetched_at: int | None = None,
+    ) -> int:
         code = course_code.lower().strip()
         payload = json.dumps(professors)
-        now_ts = int(time.time())
+        now_ts = int(fetched_at if fetched_at is not None else time.time())
 
-        # Write to namespaced table
         await self._db.execute(
             """
             INSERT OR REPLACE INTO grades_course_cache (course_code, title, parsed_data, last_updated)
@@ -113,7 +143,6 @@ class GradesCacheStore:
             """,
             (code, title, payload, now_ts),
         )
-        # Also mirror to legacy course_cache table for backwards compatibility
         try:
             await self._db.execute(
                 """
@@ -124,6 +153,7 @@ class GradesCacheStore:
             )
         except (aiosqlite.Error, sqlite3.Error, json.JSONDecodeError, OSError, ValueError) as exc:
             log.debug("Skipping legacy course_cache mirror: %s", exc)
+        return now_ts
 
     async def close(self) -> None:
         if self._owns_db:
@@ -134,43 +164,57 @@ _STORES: dict[str, GradesCacheStore] = {}
 
 
 async def _init_db(db_path: str | None = None) -> GradesCacheStore:
-    eff_db = db_path or DB_PATH
-    if eff_db not in _STORES or _STORES[eff_db].db.is_closed:
-        store = GradesCacheStore(eff_db)
+    eff = db_path or DB_PATH
+    if eff not in _STORES or _STORES[eff].db.is_closed:
+        store = GradesCacheStore(eff)
         await store.init()
-        _STORES[eff_db] = store
-    return _STORES[eff_db]
+        _STORES[eff] = store
+    return _STORES[eff]
 
 
 async def _fetch_grades_html(url: str, headers: dict[str, str], session: aiohttp.ClientSession) -> str | None:
-    async with session.get(url, headers=headers) as resp:
+    check = validate_fetch_url(url, allowed_hosts=(_TMU_GRADES_HOST,))
+    if not check.ok:
+        raise ValueError(f"Unsafe grades fetch URL rejected: {check.reason}")
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with session.get(check.normalized_url, headers=headers, timeout=timeout) as resp:
         if resp.status == 404:
             return None  # Course not found
         resp.raise_for_status()
         return await resp.text()
 
 
-async def fetch_course_data(
+async def fetch_course_data_with_meta(
     course_code: str,
     *,
     db_path: str | None = None,
     session: aiohttp.ClientSession | None = None,
     store: GradesCacheStore | None = None,
-) -> dict[str, Any] | None:
-    """Fetch from TMU Grades or return cached payload."""
-    eff_db = db_path or DB_PATH
+    clock: Callable[[], float] | None = None,
+    ttl_seconds: float | None = _DEFAULT_SQLITE_CACHE_TTL_SECONDS,
+) -> tuple[dict[str, Any] | None, int, bool]:
+    """Fetch TMU Grades Zone course data with configurable SQLite cache and provenance metadata.
+
+    Returns ``(payload_or_none, fetched_at_unix, from_cache)``.
+    """
+    now = float(clock() if clock is not None else time.time())
+    now_ts = int(now)
+
     if store is None:
+        eff_db = db_path or DB_PATH
         store = await _init_db(eff_db)
-    course_code = course_code.lower().strip()
+    else:
+        await store.init()
 
-    # Check cache first
-    cached = await store.get_course(course_code)
-    if cached is not None:
-        log.info("Serving %s from local SQLite cache.", course_code)
-        return cached
+    code = course_code.lower().strip()
 
-    # Not in cache, scrape live
-    url = f"https://tmu.grades.zone/course/{urllib.parse.quote(course_code)}"
+    cached_hit = await store.get_course_with_meta(code, now=now, ttl_seconds=ttl_seconds)
+    if cached_hit is not None:
+        payload, cached_ts = cached_hit
+        log.info("Serving %s from local SQLite grades cache.", code)
+        return payload, cached_ts, True
+
+    url = f"https://{_TMU_GRADES_HOST}/course/{urllib.parse.quote(code)}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     if session is not None and not session.closed:
@@ -180,125 +224,45 @@ async def fetch_course_data(
             html = await _fetch_grades_html(url, headers, tmp_session)
 
     if html is None:
-        return None
+        return None, now_ts, False
 
-    # Parse HTML
-    clean_html = html.replace('\\"', '"')
-    soup = BeautifulSoup(clean_html, "html.parser")
+    parsed = parse_tmu_grades_html(html, code)
+    if parsed is None:
+        return None, now_ts, False
 
-    title_el = soup.find("h2")
-    if not title_el:
-        return None  # Invalid page block
+    if parsed.alignment_warning:
+        log.warning("[GRADES] Alignment note for %s: %s", code, parsed.alignment_warning)
 
-    course_title = title_el.text.strip()
-
-    distributions = []
-    for match in re.finditer(r'"distribution":(\[.*?\])', clean_html):
-        try:
-            distributions.append(json.loads(match.group(1)))
-        except (json.JSONDecodeError, ValueError) as exc:
-            log.debug("Skipping malformed distribution JSON for %s: %s", course_code, exc)
-
-    prof_blocks = soup.find_all(
-        "div",
-        class_="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start",
+    legacy_dict = parsed.to_legacy_dict()
+    stored_ts = await store.set_course(
+        code,
+        legacy_dict["title"],
+        legacy_dict["professors"],
+        fetched_at=now_ts,
     )
-
-    results = []
-    for i, block in enumerate(prof_blocks):
-        name_div = block.select_one(".font-bold")
-        if not name_div:
-            continue
-        name = name_div.text.strip()
-
-        # Skip the aggregate 'All Professors' row as per user request
-        if name.lower() == "all professors":
-            continue
-
-        term_p = block.find("p")
-        term = term_p.text.strip() if term_p else ""
-
-        badges = block.find_all("span", attrs={"data-slot": "badge"})
-        avg = badges[0].text if len(badges) > 0 else "N/A"
-        common = badges[1].text if len(badges) > 1 else "N/A"
-
-        student_span = block.select_one(".bg-accent")
-        students = student_span.text.replace("student", "").strip() if student_span else ("N/A")
-
-        dist = distributions[i] if i < len(distributions) else []
-
-        results.append(
-            {"name": name, "term": term, "avg": avg, "common": common, "students": students, "dist": dist}
-        )
-
-    # Save to Cache
-    await store.set_course(course_code, course_title, results)
-
-    return {"title": course_title, "professors": results}
+    return legacy_dict, stored_ts, False
 
 
-def generate_chart(course_title: str, professors: list) -> io.BytesIO:
-    """Generate a grouped bar chart using Matplotlib for the given professors distributions."""
-    plt.style.use("dark_background")
-    fig, ax = plt.subplots(figsize=(10, 6))
+async def fetch_course_data(
+    course_code: str,
+    *,
+    db_path: str | None = None,
+    session: aiohttp.ClientSession | None = None,
+    store: GradesCacheStore | None = None,
+) -> dict[str, Any] | None:
+    """Backwards-compatible wrapper returning the course grade payload dict or ``None``."""
+    data, _ts, _cached = await fetch_course_data_with_meta(
+        course_code,
+        db_path=db_path,
+        session=session,
+        store=store,
+    )
+    return data
 
-    # Static X-axis letter grades
-    letters = ["F-S", "F", "FNA", "D-", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
 
-    # Prepare data map
-    x = np.arange(len(letters))
-    num_profs = len(professors)
-
-    if num_profs == 0:
-        # Fallback empty chart
-        ax.text(0.5, 0.5, "No Distribution Data", ha="center", va="center", transform=ax.transAxes)
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png", bbox_inches="tight")
-        buf.seek(0)
-        plt.close(fig)
-        return buf
-
-    # Calculate dynamic bar width
-    total_width = 0.8
-    width = total_width / num_profs
-
-    cmap = plt.get_cmap("Set2")  # Nice distinct colors
-
-    max_y = 0
-    for i, prof in enumerate(professors):
-        dist = prof.get("dist", [])
-
-        # Map the json payload counts to the letter array
-        counts_map = {item["letterGrade"]: item["count"] for item in dist}
-
-        y_vals = []
-        total_students = sum(counts_map.values())
-        for letter in letters:
-            count = counts_map.get(letter, 0)
-            # We plot percentages to match the reference image's Y-axis
-            pct = (count / total_students * 100) if total_students > 0 else 0
-            y_vals.append(pct)
-            if pct > max_y:
-                max_y = pct
-
-        offset = (i - num_profs / 2) * width + width / 2
-        ax.bar(x + offset, y_vals, width, label=prof["name"], color=cmap(i % 8))
-
-    ax.set_ylabel("Percentage of Students")
-    ax.set_title(f"{course_title} - Grade Distribution")
-    ax.set_xticks(x)
-    ax.set_xticklabels(letters)
-    ax.legend()
-
-    # Minor grid lines
-    ax.yaxis.grid(True, linestyle="--", alpha=0.3)
-    ax.set_axisbelow(True)
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", dpi=100)
-    buf.seek(0)
-    plt.close(fig)
-    return buf
+def generate_chart(course_title: str, professors: list[dict[str, Any]]) -> io.BytesIO:
+    """Render a thread-safe PNG chart using Matplotlib's OO API (no global pyplot state)."""
+    return render_grade_distribution_chart(course_title, professors).to_bytes_io()
 
 
 @ic.command(name="grades", description="Fetch historical grade distributions when supported for this campus.")
@@ -353,7 +317,10 @@ async def grades_command(interaction: discord.Interaction, course: str):
                 embed=system_embed(
                     settings,
                     title="Course Not Found",
-                    summary=f"Could not locate grade distributions for `{course}` via **{result.provenance.provider_name}**.",
+                    summary=(
+                        f"Could not locate grade distributions for `{course}` via **{result.provenance.provider_name}**.\n"
+                        f"{format_freshness_line(result.provenance, clock=container.clock)}"
+                    ),
                     footer_hint=result.provenance.provider_name,
                 )
             )
@@ -371,14 +338,33 @@ async def grades_command(interaction: discord.Interaction, course: str):
             return
 
         legacy_profs = [p.to_legacy_dict() for p in dist.professors]
-        chart_bytes = generate_chart(dist.course_title, legacy_profs)
-        file = discord.File(chart_bytes, filename="distribution.png")
+        chart_file: discord.File | None = None
+        alt_text = build_accessible_grade_summary(dist.course_title, legacy_profs)
+        chart_note = ""
+
+        # Offload CPU-bound Matplotlib chart rendering off the Discord asyncio event loop
+        try:
+            chart_res = await render_grade_distribution_chart_async(dist.course_title, legacy_profs)
+            chart_file = discord.File(
+                chart_res.to_bytes_io(),
+                filename="distribution.png",
+                description=chart_res.accessible_alt_text,
+            )
+            alt_text = chart_res.accessible_alt_text
+            if chart_res.truncated_count > 0:
+                chart_note = f"*Chart plots top {chart_res.plotted_count} of {len(dist.professors)} instructors for readability.*"
+        except ChartRenderError as exc:
+            log.warning("Chart render skipped for %s, serving accessible text fallback: %s", course, exc)
+            chart_note = "*Chart image omitted; full accessible text breakdown shown below.*"
 
         summary_lines: list[str] = []
         if dist.source_url:
             summary_lines.append(f"[View on {result.provenance.provider_name}]({dist.source_url})")
-        if len(dist.professors) > 20:
-            summary_lines.append(f"*Showing 20 of {len(dist.professors)} instructor records.*")
+        summary_lines.append(format_freshness_line(result.provenance, clock=container.clock))
+        if chart_note:
+            summary_lines.append(chart_note)
+        if len(dist.professors) > 19:
+            summary_lines.append(f"*Showing 19 of {len(dist.professors)} instructor records.*")
 
         fields: list[tuple[str, str, bool]] = [
             (
@@ -386,19 +372,22 @@ async def grades_command(interaction: discord.Interaction, course: str):
                 f"**{prof.students} students** | {prof.avg} | {prof.common}\n*{prof.term}*",
                 False,
             )
-            for prof in dist.professors[:20]
+            for prof in dist.professors[:19]
         ]
+        fields.append(("Accessible Summary", alt_text, False))
 
         embed = system_embed(
             settings,
             title=dist.course_title,
-            summary="\n".join(summary_lines) or result.provenance.attribution,
+            summary="\n".join(summary_lines),
             fields=fields,
             footer_hint=result.provenance.provider_name,
         )
-        embed.set_image(url="attachment://distribution.png")
-
-        await interaction.followup.send(embed=embed, file=file)
+        if chart_file is not None:
+            embed.set_image(url="attachment://distribution.png")
+            await interaction.followup.send(embed=embed, file=chart_file)
+        else:
+            await interaction.followup.send(embed=embed)
 
     except (
         aiohttp.ClientError,

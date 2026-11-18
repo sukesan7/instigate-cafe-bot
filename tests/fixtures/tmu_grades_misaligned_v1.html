@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>COE817 - Synthetic Misaligned Grades Fixture v1</title>
+  </head>
+  <body>
+    <main>
+      <h2>COE817 - Applied Cryptography</h2>
+
+      <!-- Decorative wrapper div using same flex classes but NO .font-bold child -->
+      <div class="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start">
+        <span>Course Overview Banner</span>
+      </div>
+
+      <!-- Aggregate row that does NOT have a corresponding distribution array in the JSON payload -->
+      <div class="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start">
+        <div class="font-bold">All Professors</div>
+        <p>2022-2025</p>
+        <span data-slot="badge">Avg: B</span>
+        <span data-slot="badge">Common: B+</span>
+        <span class="bg-accent">90 student</span>
+      </div>
+
+      <!-- Discrete professor 1 (40 students) -->
+      <div class="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start">
+        <div class="font-bold">Prof. Ada Lovelace</div>
+        <p>Fall 2025</p>
+        <span data-slot="badge">Avg: A-</span>
+        <span data-slot="badge">Common: A</span>
+        <span class="bg-accent">40 student</span>
+      </div>
+
+      <!-- Discrete professor 2 (50 students) -->
+      <div class="flex h-full w-full flex-wrap items-center justify-center gap-2 lg:flex-row lg:items-start">
+        <div class="font-bold">Prof. Alan Turing</div>
+        <p>Winter 2025</p>
+        <span data-slot="badge">Avg: B</span>
+        <span data-slot="badge">Common: B+</span>
+        <span class="bg-accent">50 student</span>
+      </div>
+
+      <script>
+        window.__COURSE_DATA__ = {
+          "rows": [
+            {
+              "distribution":[{"letterGrade":"B+","count":10},{"letterGrade":"A","count":20},{"letterGrade":"A+","count":10}]
+            },
+            {
+              "distribution":[{"letterGrade":"C","count":15},{"letterGrade":"B","count":20},{"letterGrade":"B+","count":15}]
+            }
+          ]
+        };
+      </script>
+    </main>
+  </body>
+</html>
+

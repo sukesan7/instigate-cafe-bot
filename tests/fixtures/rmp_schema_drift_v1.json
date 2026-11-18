@@ -1,0 +1,15 @@
+{
+  "data": {
+    "newSearch": {
+      "renamedTeachersField": {
+        "edges": []
+      }
+    }
+  },
+  "errors": [
+    {
+      "message": "Cannot query field 'teachers' on type 'SearchResults'."
+    }
+  ]
+}
+
