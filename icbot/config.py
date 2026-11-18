@@ -210,6 +210,9 @@ class AcademicsConfig:
     academic_course_aliases: tuple[str, ...] = ()
     academic_allowed_hosts: tuple[str, ...] = ()
     academic_enabled_providers: tuple[str, ...] = ()
+    exam_reminders_enabled: bool = False
+    exam_reminders_channel_id: int = 0
+    exam_reminder_lead_hours: tuple[int, ...] = (24, 2)
 
 
 @dataclass(frozen=True)
@@ -585,6 +588,9 @@ class Settings:
     academic_course_aliases: list[str] | None = None
     academic_allowed_hosts: list[str] | None = None
     academic_enabled_providers: list[str] | None = None
+    exam_reminders_enabled: bool = False
+    exam_reminders_channel_id: int = 0
+    exam_reminder_lead_hours: list[int] | None = None
 
     # ---- Typed component views ----
 
@@ -632,6 +638,9 @@ class Settings:
             academic_course_aliases=tuple(self.academic_course_aliases or ()),
             academic_allowed_hosts=tuple(self.academic_allowed_hosts or ()),
             academic_enabled_providers=tuple(self.academic_enabled_providers or ()),
+            exam_reminders_enabled=self.exam_reminders_enabled,
+            exam_reminders_channel_id=self.exam_reminders_channel_id,
+            exam_reminder_lead_hours=tuple(self.exam_reminder_lead_hours or (24, 2)),
         )
 
     @property
@@ -837,6 +846,9 @@ class Settings:
             academic_course_aliases=list(a.academic_course_aliases),
             academic_allowed_hosts=list(a.academic_allowed_hosts),
             academic_enabled_providers=list(a.academic_enabled_providers),
+            exam_reminders_enabled=a.exam_reminders_enabled,
+            exam_reminders_channel_id=a.exam_reminders_channel_id,
+            exam_reminder_lead_hours=list(a.exam_reminder_lead_hours),
             llm_enabled=g.llm_enabled,
             llm_cooldown_seconds=g.llm_cooldown_seconds,
             llm_max_messages=g.llm_max_messages,
@@ -1072,10 +1084,18 @@ class Settings:
             ("market_watch_channel_id", self.market_watch_channel_id),
             ("market_daily_report_channel_id", self.market_daily_report_channel_id),
             ("btc_watch_channel_id", self.btc_watch_channel_id),
+            ("exam_reminders_channel_id", self.exam_reminders_channel_id),
         )
         for fname, val in snowflake_fields:
             if not _is_valid_snowflake(val, allow_zero=True):
                 _err(fname, f"{fname} must be an integer between 0 and {MAX_SNOWFLAKE}.")
+
+        for lead_h in self.exam_reminder_lead_hours or ():
+            if isinstance(lead_h, bool) or not isinstance(lead_h, int) or lead_h < 1 or lead_h > 336:
+                _err(
+                    "exam_reminder_lead_hours",
+                    "exam_reminder_lead_hours must contain integers between 1 and 336.",
+                )
 
         for rid in self.allowed_role_ids or ():
             if not _is_valid_snowflake(rid, allow_zero=False):
@@ -1641,6 +1661,28 @@ class Settings:
         academic_course_aliases = _to_str_list(_env("ACADEMIC_COURSE_ALIASES", ""))
         academic_allowed_hosts = _to_str_list(_env("ACADEMIC_ALLOWED_HOSTS", ""))
         academic_enabled_providers = _to_str_list(_env("ACADEMIC_ENABLED_PROVIDERS", ""))
+        exam_reminders_enabled = _parse_bool_field("EXAM_REMINDERS_ENABLED", "exam_reminders_enabled", False)
+        exam_reminders_channel_id = _parse_int_field(
+            "EXAM_REMINDERS_CHANNEL_ID", "exam_reminders_channel_id", 0, snowflake=True
+        )
+        raw_lead_hours = _to_str_list(_env("EXAM_REMINDER_LEAD_HOURS", ""))
+        exam_reminder_lead_hours: list[int] | None = None
+        if raw_lead_hours:
+            parsed_leads: list[int] = []
+            for item in raw_lead_hours:
+                try:
+                    h = int(item)
+                except ValueError:
+                    raw_issues.append(
+                        ValidationIssue(
+                            "exam_reminder_lead_hours",
+                            "EXAM_REMINDER_LEAD_HOURS must contain integer hours.",
+                            "error",
+                        )
+                    )
+                    continue
+                parsed_leads.append(h)
+            exam_reminder_lead_hours = parsed_leads
         feature_profile = _env("FEATURE_PROFILE", "default").strip() or "default"
         enabled_features = _to_str_list(_env("ENABLED_FEATURES", ""))
         disabled_features = _to_str_list(_env("DISABLED_FEATURES", ""))
@@ -1763,6 +1805,9 @@ class Settings:
             academic_course_aliases=academic_course_aliases,
             academic_allowed_hosts=academic_allowed_hosts,
             academic_enabled_providers=academic_enabled_providers,
+            exam_reminders_enabled=exam_reminders_enabled,
+            exam_reminders_channel_id=exam_reminders_channel_id,
+            exam_reminder_lead_hours=exam_reminder_lead_hours,
             feature_profile=feature_profile,
             enabled_features=enabled_features,
             disabled_features=disabled_features,

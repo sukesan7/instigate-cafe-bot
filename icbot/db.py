@@ -670,6 +670,28 @@ async def _migrate_0006_academic_catalog_and_exam_fields(tx: Transaction) -> Non
             await tx.execute("ALTER TABLE exams ADD COLUMN visibility TEXT NOT NULL DEFAULT 'guild'")
 
 
+async def _migrate_0007_exam_scheduling_and_reminders(tx: Transaction) -> None:
+    """Add term, all-day flag, source/channel attribution, and external UID dedupe to exams."""
+    cur = await tx.execute("PRAGMA table_info(exams)")
+    exam_cols = [str(r[1]) for r in (await cur.fetchall() or [])]
+    if exam_cols:
+        if "term" not in exam_cols:
+            await tx.execute("ALTER TABLE exams ADD COLUMN term TEXT NOT NULL DEFAULT ''")
+        if "is_all_day" not in exam_cols:
+            await tx.execute("ALTER TABLE exams ADD COLUMN is_all_day INTEGER NOT NULL DEFAULT 0")
+        if "source" not in exam_cols:
+            await tx.execute("ALTER TABLE exams ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+        if "channel_id" not in exam_cols:
+            await tx.execute("ALTER TABLE exams ADD COLUMN channel_id INTEGER NOT NULL DEFAULT 0")
+        if "external_uid" not in exam_cols:
+            await tx.execute("ALTER TABLE exams ADD COLUMN external_uid TEXT NOT NULL DEFAULT ''")
+
+    await tx.execute(
+        "CREATE INDEX IF NOT EXISTS idx_exams_guild_course_term ON exams(guild_id, course_key, term)"
+    )
+    await tx.execute("CREATE INDEX IF NOT EXISTS idx_exams_guild_uid ON exams(guild_id, external_uid)")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(version=1, name="0001_baseline_schema", up=_migrate_0001_baseline),
     Migration(version=2, name="0002_grades_cache", up=_migrate_0002_grades_cache),
@@ -688,6 +710,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=6,
         name="0006_academic_catalog_and_exam_fields",
         up=_migrate_0006_academic_catalog_and_exam_fields,
+    ),
+    Migration(
+        version=7,
+        name="0007_exam_scheduling_and_reminders",
+        up=_migrate_0007_exam_scheduling_and_reminders,
     ),
 )
 

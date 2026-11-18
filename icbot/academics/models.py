@@ -26,6 +26,7 @@ ProviderStatus = Literal[
 ]
 
 ExamVisibility = Literal["guild", "public", "private"]
+ExamSource = Literal["manual", "csv_import", "ics_import"]
 
 _NON_ALNUM_RE = re.compile(r"[^A-Z0-9]+")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -298,6 +299,11 @@ class Exam:
     visibility: ExamVisibility = "guild"
     created_by: int = 0
     created_at: int = 0
+    term: str = ""
+    is_all_day: bool = False
+    source: ExamSource = "manual"
+    channel_id: int = 0
+    external_uid: str = ""
 
     def __post_init__(self) -> None:
         if not self.course_key and self.course_code:

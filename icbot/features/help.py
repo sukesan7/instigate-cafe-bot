@@ -114,9 +114,11 @@ def build_dynamic_help_categories(
                 "commands": [
                     ("/ic notes", "Search through available course notes repositories"),
                     ("/ic prof", "Search RateMyProfessors ratings for a professor"),
-                    ("/ic exam list", "List your scheduled exams"),
-                    ("/ic exam add", "Add a new exam to your schedule"),
+                    ("/ic exam list", "List scheduled exams (supports course/term filters)"),
+                    ("/ic exam add", "Add a new exam to the schedule"),
                     ("/ic exam remove", "Remove an exam by ID"),
+                    ("/ic exam export", "Export scheduled exams to CSV or ICS"),
+                    ("/ic exam import", "Import exams from a CSV or ICS file"),
                     ("/ic grades", "View grade distributions for a course (e.g., ele888)"),
                 ],
             }

@@ -487,7 +487,14 @@ async def test_exams_clear_rbac_and_execution(make_interaction, make_member, tmp
 
     auth_clear = make_interaction(user=admin, command_name="ic exam clear")
     await exams_clear_cmd.callback(auth_clear)
-    assert "Cleared all exams" in (auth_clear.last_reply.content or "")
+    # Confirmation barrier must hold exams intact until confirmed
+    confirm_view = auth_clear.last_reply.view
+    assert confirm_view is not None
+    assert len(await tmp_db.fetchall("SELECT id FROM exams")) == 1
+
+    confirm_inter = make_interaction(user=admin, client=auth_clear.client)
+    await confirm_view.confirm_button.callback(confirm_inter)
+    assert "Cleared all exams" in (confirm_inter.last_reply.content or "")
     assert await tmp_db.fetchall("SELECT id FROM exams") == []
 
 

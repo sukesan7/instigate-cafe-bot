@@ -94,6 +94,9 @@ GUILD_OVERRIDABLE_KEYS: frozenset[str] = frozenset(
         "academic_course_aliases",
         "academic_allowed_hosts",
         "academic_enabled_providers",
+        "exam_reminders_enabled",
+        "exam_reminders_channel_id",
+        "exam_reminder_lead_hours",
         # Sports feeds (non-secret RSS overrides only)
         "sports_rss_nba",
         "sports_rss_nfl",
@@ -151,6 +154,7 @@ _INT_KEYS = frozenset(
         "market_watch_channel_id",
         "market_daily_report_channel_id",
         "btc_watch_channel_id",
+        "exam_reminders_channel_id",
         "llm_cooldown_seconds",
         "llm_max_messages",
         "llm_max_chars",
@@ -171,6 +175,7 @@ _BOOL_KEYS = frozenset(
         "llm_enabled",
         "bj_dealer_hits_soft_17",
         "jobs_require_early_career",
+        "exam_reminders_enabled",
     }
 )
 
@@ -247,6 +252,18 @@ def _coerce_guild_value(key: str, value: Any) -> Any:
                 raise ConfigValidationError(f"allowed_role_ids contains out-of-range ID: {item}")
             roles.append(int(item))
         return roles
+
+    if key == "exam_reminder_lead_hours":
+        if not isinstance(value, (list, tuple)):
+            raise ConfigValidationError("exam_reminder_lead_hours must be a list of positive integer hours.")
+        hours: list[int] = []
+        for item in value:
+            if isinstance(item, bool) or not isinstance(item, int) or item < 1 or item > 336:
+                raise ConfigValidationError(
+                    "exam_reminder_lead_hours must contain integers between 1 and 336."
+                )
+            hours.append(int(item))
+        return hours
 
     if key == "theme_preset":
         if value is None:

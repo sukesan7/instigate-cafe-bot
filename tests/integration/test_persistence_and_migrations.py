@@ -249,21 +249,22 @@ async def test_migrations_applied_sequentially_and_recorded(tmp_path: Path) -> N
     applied = await db.migrate()
     try:
         assert len(applied) == len(MIGRATIONS)
-        assert [m.version for m in applied] == [1, 2, 3, 4, 5, 6]
+        assert [m.version for m in applied] == [1, 2, 3, 4, 5, 6, 7]
 
         # Verify ledger table
         rows = await db.fetchall("SELECT version, name FROM schema_migrations ORDER BY version ASC")
-        assert len(rows) == 6
+        assert len(rows) == 7
         assert rows[0] == (1, "0001_baseline_schema")
         assert rows[1] == (2, "0002_grades_cache")
         assert rows[2] == (3, "0003_indexes_and_integrity")
         assert rows[3] == (4, "0004_guild_scoped_economy_and_ledger")
         assert rows[4] == (5, "0005_guild_settings_audit")
         assert rows[5] == (6, "0006_academic_catalog_and_exam_fields")
+        assert rows[6] == (7, "0007_exam_scheduling_and_reminders")
 
         # Verify user_version pragma matches latest migration
         uv = await db.fetchone("PRAGMA user_version")
-        assert uv is not None and uv[0] == 6
+        assert uv is not None and uv[0] == 7
     finally:
         await db.close()
 
@@ -362,7 +363,7 @@ async def test_forward_upgrade_from_synthetic_legacy_database(tmp_path: Path) ->
 
         # Verify ledger contains all migrations
         ledger = await db.fetchall("SELECT version FROM schema_migrations ORDER BY version")
-        assert [r[0] for r in ledger] == [1, 2, 3, 4, 5, 6]
+        assert [r[0] for r in ledger] == [1, 2, 3, 4, 5, 6, 7]
     finally:
         await db.close()
 

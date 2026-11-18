@@ -174,6 +174,8 @@ FEATURE_MANIFESTS: dict[str, FeatureManifest] = {
         commands_supplied=(
             "ic exam add",
             "ic exam clear",
+            "ic exam export",
+            "ic exam import",
             "ic exam list",
             "ic exam remove",
             "ic grades",
@@ -195,6 +197,9 @@ FEATURE_MANIFESTS: dict[str, FeatureManifest] = {
             "academic_course_aliases",
             "academic_allowed_hosts",
             "academic_enabled_providers",
+            "exam_reminders_enabled",
+            "exam_reminders_channel_id",
+            "exam_reminder_lead_hours",
         ),
         default_enabled=True,
     ),

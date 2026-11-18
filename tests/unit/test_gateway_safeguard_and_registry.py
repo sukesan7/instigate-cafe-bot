@@ -46,6 +46,8 @@ EXPECTED_LEAF_COMMAND_NAMES = {
     "ic casino slots",
     "ic exam add",
     "ic exam clear",
+    "ic exam export",
+    "ic exam import",
     "ic exam list",
     "ic exam remove",
     "ic icse buy",
@@ -131,7 +133,7 @@ def test_registry_covers_all_feature_modules_and_preserves_ic_routes():
     registry.load_feature_modules()
     names = set(registry.registered_qualified_names())
     assert names == EXPECTED_LEAF_COMMAND_NAMES
-    assert len(list(registry.get_root_group().walk_commands())) == 52
+    assert len(list(registry.get_root_group().walk_commands())) == 54
 
 
 async def test_register_ic_commands_is_idempotent_with_override():
