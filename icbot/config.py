@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from icbot.errors import ConfigValidationError, redact_secrets
+from icbot.theme import DEFAULT_THEME_NAME, KNOWN_THEME_NAMES, get_theme_preset, is_accessible_accent
 
 # Discord "snowflake" IDs fit in signed int64 for most libs
 MAX_SNOWFLAKE = 9223372036854775807
@@ -180,6 +181,14 @@ class DiscordConfig:
     embed_logo_url: str = ""
     embed_accent_color: int = 0xA64DFF
     embed_footer_text: str = "Instigate Cafe"
+    bot_display_name: str = "InstigateAI"
+    stock_exchange_name: str = "Instigate Cafe Stock Exchange"
+    currency_name: str = "IC Cash"
+    currency_symbol: str = "$"
+    primary_stock_symbol: str = "IC"
+    primary_stock_name: str = "Instigate Cafe"
+    source_attribution: str = "Internal Instigate Cafe Repository"
+    theme_preset: str = "instigate_cafe"
     force_guild_resync: bool = False
     allow_gateway: bool = False
 
@@ -427,10 +436,18 @@ class Settings:
     # Roles
     allowed_role_ids: list[int] | None = None
 
-    # Embeds
+    # Embeds & Branding
     embed_logo_url: str = ""
     embed_accent_color: int = 0xA64DFF
     embed_footer_text: str = "Instigate Cafe"
+    bot_display_name: str = "InstigateAI"
+    stock_exchange_name: str = "Instigate Cafe Stock Exchange"
+    currency_name: str = "IC Cash"
+    currency_symbol: str = "$"
+    primary_stock_symbol: str = "IC"
+    primary_stock_name: str = "Instigate Cafe"
+    source_attribution: str = "Internal Instigate Cafe Repository"
+    theme_preset: str = "instigate_cafe"
 
     # Sports / Odds API
     odds_api_key: str = ""
@@ -574,6 +591,14 @@ class Settings:
             embed_logo_url=self.embed_logo_url,
             embed_accent_color=self.embed_accent_color,
             embed_footer_text=self.embed_footer_text,
+            bot_display_name=self.bot_display_name,
+            stock_exchange_name=self.stock_exchange_name,
+            currency_name=self.currency_name,
+            currency_symbol=self.currency_symbol,
+            primary_stock_symbol=self.primary_stock_symbol,
+            primary_stock_name=self.primary_stock_name,
+            source_attribution=self.source_attribution,
+            theme_preset=self.theme_preset,
             force_guild_resync=self.force_guild_resync,
             allow_gateway=self.allow_gateway,
         )
@@ -751,6 +776,14 @@ class Settings:
             embed_logo_url=d.embed_logo_url,
             embed_accent_color=d.embed_accent_color,
             embed_footer_text=d.embed_footer_text,
+            bot_display_name=d.bot_display_name,
+            stock_exchange_name=d.stock_exchange_name,
+            currency_name=d.currency_name,
+            currency_symbol=d.currency_symbol,
+            primary_stock_symbol=d.primary_stock_symbol,
+            primary_stock_name=d.primary_stock_name,
+            source_attribution=d.source_attribution,
+            theme_preset=d.theme_preset,
             force_guild_resync=d.force_guild_resync,
             allow_gateway=d.allow_gateway,
             task_startup_jitter_seconds=sc.task_startup_jitter_seconds,
@@ -1037,6 +1070,11 @@ class Settings:
             _err(
                 "embed_accent_color", "embed_accent_color must be a 24-bit RGB integer (0x000000..0xFFFFFF)."
             )
+        elif not is_accessible_accent(self.embed_accent_color):
+            _warn(
+                "embed_accent_color",
+                f"Accent color 0x{self.embed_accent_color:06X} has extreme relative luminance; may have poor readability on Discord dark/light themes.",
+            )
 
         # URLs
         if self.embed_logo_url and not _is_valid_http_url(self.embed_logo_url):
@@ -1174,6 +1212,11 @@ class Settings:
             _err("btc_watch_cooldown_minutes", "btc_watch_cooldown_minutes must be >= 0.")
 
         # Feature profile & module validations
+        if self.theme_preset and self.theme_preset.strip().lower() not in KNOWN_THEME_NAMES:
+            _warn(
+                "theme_preset",
+                f"Unknown theme_preset {self.theme_preset!r}; known presets are {', '.join(sorted(KNOWN_THEME_NAMES))}.",
+            )
         if self.feature_profile and self.feature_profile.strip().lower() not in KNOWN_FEATURE_PROFILES:
             _warn(
                 "feature_profile",
@@ -1367,7 +1410,10 @@ class Settings:
                 continue
             allowed_role_ids.append(n)
 
-        embed_logo_url = _env("EMBED_LOGO_URL", "").strip()
+        theme_preset = _env("THEME_PRESET", DEFAULT_THEME_NAME).strip().lower() or DEFAULT_THEME_NAME
+        theme_defaults = get_theme_preset(theme_preset)
+
+        embed_logo_url = _env("EMBED_LOGO_URL", theme_defaults.logo_url).strip()
         raw_color = _env("EMBED_ACCENT_COLOR", "").strip()
         if raw_color and _to_color(raw_color, -1) == -1:
             raw_issues.append(
@@ -1377,8 +1423,36 @@ class Settings:
                     "error",
                 )
             )
-        embed_accent_color = _to_color(raw_color, 0xA64DFF)
-        embed_footer_text = _env("EMBED_FOOTER_TEXT", "Instigate Cafe").strip() or "Instigate Cafe"
+        embed_accent_color = _to_color(raw_color, theme_defaults.accent_color)
+        embed_footer_text = (
+            _env("EMBED_FOOTER_TEXT", theme_defaults.footer_text).strip() or theme_defaults.footer_text
+        )
+
+        bot_display_name = (
+            _env("BOT_DISPLAY_NAME", theme_defaults.display_name).strip() or theme_defaults.display_name
+        )
+        stock_exchange_name = (
+            _env("STOCK_EXCHANGE_NAME", theme_defaults.stock_exchange_name).strip()
+            or theme_defaults.stock_exchange_name
+        )
+        currency_name = (
+            _env("CURRENCY_NAME", theme_defaults.currency_name).strip() or theme_defaults.currency_name
+        )
+        currency_symbol = (
+            _env("CURRENCY_SYMBOL", theme_defaults.currency_symbol).strip() or theme_defaults.currency_symbol
+        )
+        primary_stock_symbol = (
+            _env("PRIMARY_STOCK_SYMBOL", theme_defaults.primary_stock_symbol).strip()
+            or theme_defaults.primary_stock_symbol
+        )
+        primary_stock_name = (
+            _env("PRIMARY_STOCK_NAME", theme_defaults.primary_stock_name).strip()
+            or theme_defaults.primary_stock_name
+        )
+        source_attribution = (
+            _env("SOURCE_ATTRIBUTION", theme_defaults.source_attribution).strip()
+            or theme_defaults.source_attribution
+        )
 
         odds_api_key = _env("ODDS_API_KEY", "").strip()
         sports_rss_nba = _env("SPORTS_RSS_NBA", "").strip()
@@ -1561,6 +1635,14 @@ class Settings:
             embed_logo_url=embed_logo_url,
             embed_accent_color=embed_accent_color,
             embed_footer_text=embed_footer_text,
+            bot_display_name=bot_display_name,
+            stock_exchange_name=stock_exchange_name,
+            currency_name=currency_name,
+            currency_symbol=currency_symbol,
+            primary_stock_symbol=primary_stock_symbol,
+            primary_stock_name=primary_stock_name,
+            source_attribution=source_attribution,
+            theme_preset=theme_preset,
             odds_api_key=odds_api_key,
             sports_rss_nba=sports_rss_nba,
             sports_rss_nfl=sports_rss_nfl,

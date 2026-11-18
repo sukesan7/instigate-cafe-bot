@@ -13,6 +13,7 @@ from icbot.embeds import system as system_embed
 from icbot.errors import ConfigValidationError
 from icbot.guild_config import GuildSettingsStore
 from icbot.permissions import can_manage_guild, is_admin_or_allowed
+from icbot.theme import KNOWN_THEME_NAMES
 
 
 def _get_store(container: ServiceContainer) -> GuildSettingsStore:
@@ -361,6 +362,7 @@ async def setup_cmd(interaction: discord.Interaction):
     action="Operation to perform: view configuration, update settings, or reset overrides",
     campus="Campus or university name for RMP and campus lookup",
     timezone="IANA timezone for exams and schedules (e.g. America/Toronto)",
+    theme="Visual branding theme preset (e.g. instigate_cafe, campus_generic, student_clean, toronto_tmu, emerald_academic)",
     command_channel="Channel dedicated to bot user commands (optional)",
     job_alerts_channel="Channel for job feed alert broadcasts (optional)",
     transit_alerts_channel="Channel for TTC and GO transit alert broadcasts (optional)",
@@ -377,6 +379,7 @@ async def config_cmd(
     action: app_commands.Choice[str] | None = None,
     campus: str | None = None,
     timezone: str | None = None,
+    theme: str | None = None,
     command_channel: discord.TextChannel | None = None,
     job_alerts_channel: discord.TextChannel | None = None,
     transit_alerts_channel: discord.TextChannel | None = None,
@@ -425,6 +428,15 @@ async def config_cmd(
             )
             return
         updates["exams_tz"] = tz_clean
+    if theme is not None and theme.strip():
+        theme_clean = theme.strip().lower()
+        if theme_clean not in KNOWN_THEME_NAMES:
+            await interaction.response.send_message(
+                f"❌ Unknown theme: `{theme}`. Known presets are: {', '.join(sorted(KNOWN_THEME_NAMES))}.",
+                ephemeral=True,
+            )
+            return
+        updates["theme_preset"] = theme_clean
     if command_channel is not None:
         updates["user_command_channel_id"] = command_channel.id
     if job_alerts_channel is not None:
@@ -435,7 +447,7 @@ async def config_cmd(
     if updates or act == "update":
         if not updates:
             await interaction.response.send_message(
-                "ℹ️ No settings provided to update. Specify options like campus, timezone, or channels.",
+                "ℹ️ No settings provided to update. Specify options like campus, timezone, theme, or channels.",
                 ephemeral=True,
             )
             return
@@ -467,6 +479,7 @@ async def config_cmd(
     fields = [
         ("Deployment Track", track_str, False),
         ("Active Feature Profile", f"`{settings.feature_profile}`", True),
+        ("Theme Preset", f"`{settings.theme_preset}` ({settings.bot_display_name})", True),
         (
             "Campus & Timezone",
             f"**Campus:** {settings.rmp_university}\n**Timezone:** `{settings.exams_tz}`",
@@ -487,7 +500,7 @@ async def config_cmd(
         title=f"📋 Configuration Preview — {interaction.guild.name}",
         summary="Read-only preview of active server settings and database overrides.",
         fields=fields,
-        footer_hint="Instigate Cafe Bot Config",
+        footer_hint=f"{settings.embed_footer_text} Bot Config",
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
 

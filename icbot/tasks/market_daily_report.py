@@ -392,7 +392,7 @@ async def build_market_report_embed(
         settings, db, services=services if isinstance(services, ServiceContainer) else None
     )
     if fun_lines:
-        fields.append(("🏛️ Instigate Cafe Stock Exchange", "\n".join(fun_lines), False))
+        fields.append((f"🏛️ {settings.stock_exchange_name}", "\n".join(fun_lines), False))
 
     footer_hint = "Daily Report"
 

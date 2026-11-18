@@ -76,8 +76,8 @@ class LeaderboardView(discord.ui.View):
             lines = []
             for i, snap in enumerate(page_snaps):
                 lines.append(
-                    f"**{start_rank + i}.** <@{snap.user_id}> — **${snap.net_worth:,}** "
-                    f"(cash: ${snap.cash:,}, investments: ${snap.long_value + snap.short_equity:,})"
+                    f"**{start_rank + i}.** <@{snap.user_id}> — **{self.settings.currency_symbol}{snap.net_worth:,}** "
+                    f"(cash: {self.settings.currency_symbol}{snap.cash:,}, investments: {self.settings.currency_symbol}{snap.long_value + snap.short_equity:,})"
                 )
         else:
             lines = ["No users tracked yet."]
@@ -85,7 +85,7 @@ class LeaderboardView(discord.ui.View):
         summary = "Most active users by total assets."
         embed = system_embed(
             self.settings,
-            title="🏦 Instigate Cafe Net-Worth Leaderboard",
+            title=f"🏦 {self.settings.embed_footer_text} Net-Worth Leaderboard",
             summary=summary,
             subtitle="Total Assets (Cash + Investments)",
             fields=(("Leaderboard", "\n".join(lines)), ("Page", f"**{self.state.page + 1} / {pages}**")),

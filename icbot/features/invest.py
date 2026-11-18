@@ -66,7 +66,7 @@ async def market(interaction: discord.Interaction):
     rows = await st.list_stocks(active_only=True)
     if not rows:
         await interaction.response.send_message(
-            "No Instigate Cafe Stock Exchange stocks configured yet. Edit `icbot/services/fun_market_catalog.py`."
+            f"No {settings.stock_exchange_name} stocks configured yet. Edit `icbot/services/fun_market_catalog.py`."
         )
         return
 
@@ -84,10 +84,10 @@ async def market(interaction: discord.Interaction):
     wk = rows[0].week_key if rows else "current week"
     embed = system_embed(
         settings,
-        title="🧪 Instigate Cafe Stock Exchange",
+        title=f"🧪 {settings.stock_exchange_name}",
         summary=f"Weekly change baseline: **{wk}** • Use `/ic icse quote`, `/ic icse buy`, `/ic icse sell`, `/ic icse short`, `/ic icse cover`",
         fields=fields[:20],
-        footer_hint="ICSE",
+        footer_hint="ICSE" if settings.primary_stock_symbol == "IC" else f"{settings.primary_stock_symbol}SE",
     )
     await interaction.response.send_message(embed=embed)
 
@@ -453,27 +453,32 @@ async def weekroll_cmd(interaction: discord.Interaction, note: str | None = None
     )
 
 
-@icse.command(name="stock", description="Show the current Instigate Cafe ($IC) stock price and history.")
+@icse.command(name="stock", description="Show the current primary stock price and history.")
 async def stock(interaction: discord.Interaction):
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
 
+    sym = (settings.primary_stock_symbol or "IC").strip().upper()
     try:
-        s = await st.get_stock("IC")
-    except FunMarketError as e:
-        await interaction.response.send_message(
-            f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
-        )
-        return
+        s = await st.get_stock(sym)
+    except FunMarketError:
+        try:
+            s = await st.get_stock("IC")
+        except FunMarketError as e:
+            await interaction.response.send_message(
+                f"❌ {safe_error_summary(e, settings.secret_values())}", ephemeral=True
+            )
+            return
 
+    curr_sym = settings.currency_symbol or "$"
     headline = (
-        f"**${s.price}**\n"
+        f"**{curr_sym}{s.price}**\n"
         f"{s.name}\n"
-        f"Week open: **${s.week_open}** • Change: **{s.weekly_change_abs:+d}** ({_fmt_pct(s.weekly_change_pct)})"
+        f"Week open: **{curr_sym}{s.week_open}** • Change: **{s.weekly_change_abs:+d}** ({_fmt_pct(s.weekly_change_pct)})"
     )
 
     try:
-        rows = await st.history(symbol="IC", limit=5)
+        rows = await st.history(symbol=s.symbol, limit=5)
     except FunMarketError:
         rows = []
 
@@ -484,7 +489,7 @@ async def stock(interaction: discord.Interaction):
             sign = "+" if int(delta) >= 0 else ""
             reason_s = f" — {reason}" if reason else ""
             lines.append(
-                f"<t:{int(ts)}:R> <@{int(uid)}>: **{sign}{int(delta)}** → **${int(new_value)}**{reason_s}"
+                f"<t:{int(ts)}:R> <@{int(uid)}>: **{sign}{int(delta)}** → **{curr_sym}{int(new_value)}**{reason_s}"
             )
         reason_str = "\n".join(lines)
     else:
@@ -492,9 +497,9 @@ async def stock(interaction: discord.Interaction):
 
     embed = stock_embed(
         settings,
-        title="📈 Instigate Cafe Stock ($IC)",
+        title=f"📈 {s.name} Stock ({curr_sym}{s.symbol})",
         headline=headline,
         reason=reason_str,
-        footer_hint="ICSE",
+        footer_hint="ICSE" if s.symbol == "IC" else f"{s.symbol}SE",
     )
     await interaction.response.send_message(embed=embed)

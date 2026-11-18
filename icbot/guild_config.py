@@ -18,6 +18,7 @@ from typing import Any
 from icbot.config import MAX_SNOWFLAKE, Settings, _is_valid_snowflake, _to_color, _to_str_list
 from icbot.db import Database
 from icbot.errors import ConfigValidationError
+from icbot.theme import KNOWN_THEME_NAMES, get_theme_preset
 
 SECRET_SETTING_KEYS: frozenset[str] = frozenset(
     {
@@ -72,7 +73,15 @@ GUILD_OVERRIDABLE_KEYS: frozenset[str] = frozenset(
         "market_daily_report_channel_id",
         "btc_watch_channel_id",
         "allowed_role_ids",
-        # Embed branding
+        # Embed branding & Themes
+        "theme_preset",
+        "bot_display_name",
+        "stock_exchange_name",
+        "currency_name",
+        "currency_symbol",
+        "primary_stock_symbol",
+        "primary_stock_name",
+        "source_attribution",
         "embed_logo_url",
         "embed_accent_color",
         "embed_footer_text",
@@ -171,6 +180,14 @@ _FLOAT_KEYS = frozenset(
 _STR_KEYS = frozenset(
     {
         "feature_profile",
+        "theme_preset",
+        "bot_display_name",
+        "stock_exchange_name",
+        "currency_name",
+        "currency_symbol",
+        "primary_stock_symbol",
+        "primary_stock_name",
+        "source_attribution",
         "embed_logo_url",
         "embed_footer_text",
         "exams_tz",
@@ -220,6 +237,16 @@ def _coerce_guild_value(key: str, value: Any) -> Any:
                 raise ConfigValidationError(f"allowed_role_ids contains out-of-range ID: {item}")
             roles.append(int(item))
         return roles
+
+    if key == "theme_preset":
+        if value is None:
+            raise ConfigValidationError("theme_preset must be a string.")
+        preset_name = str(value).strip().lower()
+        if preset_name not in KNOWN_THEME_NAMES:
+            raise ConfigValidationError(
+                f"Unknown theme_preset {preset_name!r}; known presets are {', '.join(sorted(KNOWN_THEME_NAMES))}."
+            )
+        return preset_name
 
     if key == "embed_accent_color":
         if isinstance(value, bool):
@@ -328,7 +355,25 @@ def resolve_effective_settings(base: Settings, guild_cfg: GuildSettings | None) 
     validated = validate_guild_overrides(guild_cfg.overrides)
     if not validated:
         return base
-    return dataclasses.replace(base, **validated)
+
+    if "theme_preset" in validated:
+        preset = get_theme_preset(validated["theme_preset"])
+        preset_defaults: dict[str, Any] = {
+            "embed_accent_color": preset.accent_color,
+            "embed_footer_text": preset.footer_text,
+            "bot_display_name": preset.display_name,
+            "stock_exchange_name": preset.stock_exchange_name,
+            "currency_name": preset.currency_name,
+            "currency_symbol": preset.currency_symbol,
+            "primary_stock_symbol": preset.primary_stock_symbol,
+            "primary_stock_name": preset.primary_stock_name,
+            "source_attribution": preset.source_attribution,
+        }
+        merged_overrides = {**preset_defaults, **validated}
+    else:
+        merged_overrides = validated
+
+    return dataclasses.replace(base, **merged_overrides)
 
 
 @dataclass(frozen=True)

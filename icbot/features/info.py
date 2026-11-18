@@ -93,16 +93,17 @@ async def botinfo(interaction: discord.Interaction):
         cap_lines.append(f"• **{label}:** {badge}")
 
     summary = (
-        "**Instigate Cafe Bot** is a multi-purpose utility, game, and infrastructure engine custom-built for the Instigate Cafe server.\n\n"
-        "**Developer:** unkown\n"
+        f"**{settings.bot_display_name}** is a multi-purpose campus utility, economy simulation, and alert engine.\n\n"
+        f"**Community:** {settings.embed_footer_text}\n"
+        f"**Source:** {settings.source_attribution}\n"
         "**Tech Stack:** Python 3, discord.py, aiosqlite, Google Gemini API, GraphQL\n\n"
         "**Capabilities & Features:**\n"
-        "• **ICSE (Instigate Cafe Stock Exchange):** A real-time virtual market tracking $IC and user positions.\n"
+        f"• **{settings.stock_exchange_name}:** Virtual market tracking {settings.currency_symbol}{settings.primary_stock_symbol} and user portfolios.\n"
         "• **Job Board:** Scrapes and filters technical New Grad/Intern roles from ATS endpoints (Lever, Greenhouse, Workday).\n"
-        "• **Intelligent LLM:** Mentions are powered dynamically by Google's Gemini LLM model.\n"
-        "• **Casino & Games:** Economy system fully integrated with Casino table games (Blackjack, Roulette, Slots).\n"
-        "• **University Toolkit:** Pulls dynamic Notion links via `/ic notes` and fetches latest RateMyProfessors data via `/ic prof`.\n"
-        "• **System Watchdogs:** Runs routine alerts for TTC service notices, crypto watches, and daily ICSE summaries."
+        "• **Intelligent LLM:** Mentions and resume reviews powered dynamically by Google Gemini.\n"
+        f"• **Casino & Games:** Economy system fully integrated with Casino table games ({settings.currency_name}).\n"
+        f"• **University Toolkit:** Notes and RateMyProfessors data for {settings.rmp_university}.\n"
+        "• **System Watchdogs:** Routine alerts for transit service notices, crypto watches, and daily market summaries."
     )
 
     fields = [
@@ -127,10 +128,14 @@ async def botinfo(interaction: discord.Interaction):
             if len(rendered_tasks) > 1020:
                 rendered_tasks = rendered_tasks[:1019].rstrip() + "…"
             fields.append(("Background Tasks", rendered_tasks, False))
-    fields.append(("Source", "Internal Instigate Cafe Repository", False))
+    fields.append(("Source", settings.source_attribution or "Internal Instigate Cafe Repository", False))
 
     embed = system_embed(
-        settings, title="Bot Information", summary=summary, fields=fields, footer_hint="Bot Information"
+        settings,
+        title=f"🤖 {settings.bot_display_name} Information",
+        summary=summary,
+        fields=fields,
+        footer_hint=settings.embed_footer_text,
     )
 
     # Try attaching local logo if possible (using standard static URL fallback for simplicity if host differs)

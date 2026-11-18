@@ -44,7 +44,11 @@ async def report_cmd(interaction: discord.Interaction):
         db=db,
         tz_name=tz_name,
         tickers=tickers,
-        title="📊 Instigate Cafe's Stock Watcher Report",
+        title=(
+            f"📊 {settings.embed_footer_text} Stock Watcher Report"
+            if settings.embed_footer_text != "Instigate Cafe"
+            else "📊 Instigate Cafe's Stock Watcher Report"
+        ),
         subtitle=f"{_now_stamp(tz_name, now_unix=container.clock())} ({tz_name})",
         debug=bool(getattr(settings, "market_daily_report_debug", False)),
         services=container,

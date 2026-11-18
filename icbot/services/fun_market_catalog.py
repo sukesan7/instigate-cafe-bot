@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -36,15 +37,29 @@ def normalize_symbol(symbol: str) -> str:
     return s
 
 
-def catalog_map() -> dict[str, FunStockDef]:
+def catalog_map(settings: Any | None = None) -> dict[str, FunStockDef]:
+    """Return catalog map, adapting flagship stock name and symbol to settings when configured."""
     out: dict[str, FunStockDef] = {}
+    primary_sym = str(getattr(settings, "primary_stock_symbol", "IC") or "IC").strip().upper()
+    primary_name = str(getattr(settings, "primary_stock_name", "Instigate Cafe") or "Instigate Cafe").strip()
+
     for item in FUN_STOCK_CATALOG:
         sym = normalize_symbol(item.symbol)
         if not sym:
             continue
+        if sym == "IC" and primary_sym != "IC":
+            out[primary_sym] = FunStockDef(
+                symbol=primary_sym,
+                name=primary_name or primary_sym,
+                start_price=max(1, int(item.start_price)),
+                category="core",
+                active=bool(item.active),
+                description=f"Server flagship stock ({primary_name}).",
+            )
+            continue
         out[sym] = FunStockDef(
             symbol=sym,
-            name=item.name.strip() or sym,
+            name=primary_name if sym == "IC" else (item.name.strip() or sym),
             start_price=max(1, int(item.start_price)),
             category=(item.category or "misc").strip().lower() or "misc",
             active=bool(item.active),

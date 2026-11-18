@@ -156,9 +156,9 @@ class ResumeReviewer:
 
         embed = system_embed(
             settings,
-            title=f"📄 InstigateAI {discipline} Resume Review",
+            title=f"📄 {settings.bot_display_name} {discipline} Resume Review",
             summary=raw_text,
-            footer_hint="Powered by InstigateAI",
+            footer_hint=f"Powered by {settings.bot_display_name}",
         )
         if attachment.url and mime.startswith("image/"):
             embed.set_thumbnail(url=attachment.url)
@@ -166,7 +166,7 @@ class ResumeReviewer:
         await interaction.followup.send(embed=embed)
 
 
-@ic.command(name="resume", description="Submit your resume for a InstigateAI review.")
+@ic.command(name="resume", description="Submit your resume for an AI review.")
 @app_commands.describe(
     discipline="The discipline of the resume (SWE, HW, ELE)", file="Your resume (PDF, PNG, JPG)"
 )

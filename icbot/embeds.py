@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 import discord
@@ -21,7 +22,29 @@ _MAX_FIELD_VALUE = 1024
 _MAX_FIELDS = 25
 _MAX_TOTAL = 6000
 
+_MENTION_RE = re.compile(r"@(everyone|here)")
+_USER_ROLE_PING_RE = re.compile(r"<@&?(\d+)>")
+
 Field = tuple[str, str] | tuple[str, str, bool]
+
+
+def sanitize_text(s: str | None, limit: int | None = None) -> str | None:
+    """Sanitize untrusted text by neutralizing mass pings, mention injections, and truncating."""
+    if s is None:
+        return None
+    text = str(s)
+    # Neutralize mass pings (@everyone, @here) with zero-width space
+    text = _MENTION_RE.sub("@\u200b\\1", text)
+    # Neutralize raw user / role mentions
+    text = _USER_ROLE_PING_RE.sub("<@\u200b\\1>", text)
+    if limit is not None:
+        return _truncate(text, limit)
+    return text
+
+
+def safe_allowed_mentions() -> discord.AllowedMentions:
+    """Return an AllowedMentions instance that prevents all outbound pings."""
+    return discord.AllowedMentions.none()
 
 
 def _truncate(s: str | None, limit: int) -> str | None:
@@ -59,31 +82,33 @@ def _base_embed(
     subtitle: str | None = None,
     footer_hint: str | None = None,
 ) -> discord.Embed:
-    title = _truncate(title, _MAX_TITLE) or " "
-    subtitle = (subtitle or "").strip()
+    clean_title = sanitize_text(title, _MAX_TITLE) or " "
+    clean_subtitle = sanitize_text((subtitle or "").strip()) or ""
+    clean_desc: str | None = None
 
-    if subtitle:
-        prefix = f"*{subtitle}*"
+    if clean_subtitle:
+        prefix = f"*{clean_subtitle}*"
         if description:
             body_budget = _MAX_DESC - len(prefix) - 2
             if body_budget > 0:
-                description = f"{prefix}\n\n{_truncate(description, body_budget)}"
+                clean_desc = f"{prefix}\n\n{sanitize_text(description, body_budget) or ''}"
             else:
-                description = _truncate(prefix, _MAX_DESC)
+                clean_desc = sanitize_text(prefix, _MAX_DESC)
         else:
-            description = _truncate(prefix, _MAX_DESC)
+            clean_desc = sanitize_text(prefix, _MAX_DESC)
     else:
-        description = _truncate(description, _MAX_DESC)
+        clean_desc = sanitize_text(description, _MAX_DESC)
 
     e = discord.Embed(
-        title=title,
-        description=description,
+        title=clean_title,
+        description=clean_desc,
         color=settings.embed_accent_color,
     )
 
     # Brand header with logo
+    author_name = getattr(settings, "bot_display_name", "") or settings.embed_footer_text or "Instigate Cafe"
     author_kwargs: dict[str, str] = {
-        "name": _truncate(settings.embed_footer_text, _MAX_TITLE) or "Instigate Cafe",
+        "name": sanitize_text(author_name, _MAX_TITLE) or "Instigate Cafe",
     }
     logo = getattr(settings, "embed_logo_url", "")
     if logo:
@@ -95,7 +120,8 @@ def _base_embed(
         e.set_thumbnail(url=logo)
 
     # Footer + timestamp
-    e.set_footer(text=_truncate(_footer_text(settings, kind, footer_hint), _MAX_TITLE) or " ")
+    footer_val = _footer_text(settings, kind, footer_hint)
+    e.set_footer(text=sanitize_text(footer_val, _MAX_TITLE) or " ")
     e.timestamp = discord.utils.utcnow()
     return e
 
@@ -120,15 +146,39 @@ def _add_fields(e: discord.Embed, fields: Iterable[Field]) -> None:
         if remaining <= 1:
             break
 
-        name_s = _truncate(str(name), min(_MAX_FIELD_NAME, remaining)) or " "
+        name_s = sanitize_text(str(name), min(_MAX_FIELD_NAME, remaining)) or " "
         value_budget = min(_MAX_FIELD_VALUE, remaining - len(name_s))
         if value_budget <= 0:
             break
 
-        value_s = _truncate(str(value), value_budget) or " "
+        value_s = sanitize_text(str(value), value_budget) or " "
         if len(name_s) + len(value_s) > remaining:
             break
         e.add_field(name=name_s, value=value_s, inline=bool(inline))
+
+
+def embed_to_text_snapshot(embed: discord.Embed) -> str:
+    """Render a deterministic plain-text snapshot of a Discord embed for visual verification."""
+    lines: list[str] = ["[EMBED]"]
+    if embed.author and embed.author.name:
+        icon_part = f" (icon: {embed.author.icon_url})" if embed.author.icon_url else ""
+        lines.append(f"Author: {embed.author.name}{icon_part}")
+    if embed.title:
+        url_part = f" (url: {embed.url})" if embed.url else ""
+        lines.append(f"Title: {embed.title}{url_part}")
+    if embed.description:
+        lines.append(f"Description: {embed.description}")
+    if embed.color:
+        lines.append(f"Color: 0x{embed.color.value:06X}")
+    if embed.fields:
+        lines.append(f"Fields ({len(embed.fields)}):")
+        for f in embed.fields:
+            inline_tag = " [inline]" if f.inline else ""
+            lines.append(f"  - {f.name}: {f.value}{inline_tag}")
+    if embed.footer and embed.footer.text:
+        icon_part = f" (icon: {embed.footer.icon_url})" if embed.footer.icon_url else ""
+        lines.append(f"Footer: {embed.footer.text}{icon_part}")
+    return "\n".join(lines)
 
 
 def stock(
