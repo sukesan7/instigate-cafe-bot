@@ -25,7 +25,7 @@ from icbot.config import Settings
 from icbot.db import Database
 from icbot.guild_config import GuildSettingsStore
 from icbot.services.fun_market import FunMarketStore
-from icbot.services.gemini_client import gemini_generate_text
+from icbot.services.gemini_client import GeminiClient, gemini_generate_text
 from icbot.services.sports_client import OddsAPIClient
 from icbot.services.user_service import UserStore
 from icbot.services.yahoo_quotes import YahooCrumbCache
@@ -199,6 +199,7 @@ class ServiceContainer:
         self._academic_cache: Any = None
         self._academic_catalog: Any = None
         self._academic_registry: Any = None
+        self._gemini_client: GeminiClient | None = None
 
         self.gemini_generate_fn = gemini_generate_fn
         self.fetch_quotes_fn = fetch_quotes_fn
@@ -431,11 +432,34 @@ class ServiceContainer:
             clock=self.clock,
         )
 
+    @property
+    def gemini_client(self) -> GeminiClient:
+        """Isolated GeminiClient instance bound to container clock, sleep_fn, and settings."""
+        if self._gemini_client is None:
+            self._gemini_client = GeminiClient(
+                api_key=(getattr(self.settings, "gemini_api_key", "") or "").strip(),
+                default_model=getattr(self.settings, "gemini_model", "gemini-2.5-flash"),
+                resume_model=getattr(self.settings, "gemini_resume_model", "gemini-2.5-pro"),
+                clock=self.clock,
+                sleep_fn=self.sleep_fn,
+            )
+        return self._gemini_client
+
+    def get_ai_diagnostics(self) -> dict[str, Any]:
+        """Admin diagnostics for AI provider and budget status (never leaks secrets/prompts)."""
+        return self.gemini_client.get_diagnostics()
+
     async def gemini_generate(self, **kwargs: Any) -> str:
-        fn = self.gemini_generate_fn if self.gemini_generate_fn is not None else gemini_generate_text
+        if self.gemini_generate_fn is not None:
+            if "session" not in kwargs and self.http_session is not None and not self.http_session.closed:
+                kwargs["session"] = self.http_session
+            return await self.gemini_generate_fn(**kwargs)
+
         if "session" not in kwargs and self.http_session is not None and not self.http_session.closed:
             kwargs["session"] = self.http_session
-        return await fn(**kwargs)
+        if "client" not in kwargs:
+            kwargs["client"] = self.gemini_client
+        return await gemini_generate_text(**kwargs)
 
     async def resolve_settings_for_guild(self, guild_id: int | None) -> Settings:
         """Resolve effective non-secret settings for ``guild_id`` merged over process defaults."""
