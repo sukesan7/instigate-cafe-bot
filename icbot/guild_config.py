@@ -110,6 +110,12 @@ GUILD_OVERRIDABLE_KEYS: frozenset[str] = frozenset(
         "llm_max_chars",
         "llm_max_image_bytes",
         "llm_max_output_tokens",
+        "llm_channel_history_enabled",
+        "llm_lore_enabled",
+        "llm_images_enabled",
+        "llm_allow_dm",
+        "llm_allowed_channel_ids",
+        "llm_allowed_role_ids",
         "gemini_model",
         "gemini_resume_model",
         "gemini_resume_prompt",
@@ -173,6 +179,10 @@ _INT_KEYS = frozenset(
 _BOOL_KEYS = frozenset(
     {
         "llm_enabled",
+        "llm_channel_history_enabled",
+        "llm_lore_enabled",
+        "llm_images_enabled",
+        "llm_allow_dm",
         "bj_dealer_hits_soft_17",
         "jobs_require_early_career",
         "exam_reminders_enabled",
@@ -241,17 +251,17 @@ _STR_LIST_KEYS = frozenset(
 
 
 def _coerce_guild_value(key: str, value: Any) -> Any:
-    if key == "allowed_role_ids":
+    if key in ("allowed_role_ids", "llm_allowed_role_ids", "llm_allowed_channel_ids"):
         if not isinstance(value, (list, tuple)):
-            raise ConfigValidationError("allowed_role_ids must be a list of integer role IDs.")
-        roles: list[int] = []
+            raise ConfigValidationError(f"{key} must be a list of integer IDs.")
+        ids: list[int] = []
         for item in value:
             if isinstance(item, bool) or not isinstance(item, int):
-                raise ConfigValidationError("allowed_role_ids must contain integer role IDs.")
+                raise ConfigValidationError(f"{key} must contain integer IDs.")
             if not _is_valid_snowflake(item, allow_zero=False):
-                raise ConfigValidationError(f"allowed_role_ids contains out-of-range ID: {item}")
-            roles.append(int(item))
-        return roles
+                raise ConfigValidationError(f"{key} contains out-of-range ID: {item}")
+            ids.append(int(item))
+        return ids
 
     if key == "exam_reminder_lead_hours":
         if not isinstance(value, (list, tuple)):

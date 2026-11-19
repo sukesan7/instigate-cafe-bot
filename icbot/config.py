@@ -246,6 +246,12 @@ class GeminiConfig:
     gemini_resume_prompt: str = ""
     gemini_resume_prompt_hw: str = ""
     gemini_resume_prompt_ele: str = ""
+    llm_channel_history_enabled: bool = False
+    llm_lore_enabled: bool = False
+    llm_images_enabled: bool = True
+    llm_allow_dm: bool = False
+    llm_allowed_channel_ids: list[int] | None = None
+    llm_allowed_role_ids: list[int] | None = None
 
 
 @dataclass(frozen=True)
@@ -505,6 +511,12 @@ class Settings:
     gemini_resume_prompt: str = ""
     gemini_resume_prompt_hw: str = ""
     gemini_resume_prompt_ele: str = ""
+    llm_channel_history_enabled: bool = False
+    llm_lore_enabled: bool = False
+    llm_images_enabled: bool = True
+    llm_allow_dm: bool = False
+    llm_allowed_channel_ids: list[int] | None = None
+    llm_allowed_role_ids: list[int] | None = None
 
     # Jobs alerts (Greenhouse/Lever)
     jobs_poll_seconds: int = 600
@@ -676,6 +688,12 @@ class Settings:
             gemini_resume_prompt=self.gemini_resume_prompt,
             gemini_resume_prompt_hw=self.gemini_resume_prompt_hw,
             gemini_resume_prompt_ele=self.gemini_resume_prompt_ele,
+            llm_channel_history_enabled=self.llm_channel_history_enabled,
+            llm_lore_enabled=self.llm_lore_enabled,
+            llm_images_enabled=self.llm_images_enabled,
+            llm_allow_dm=self.llm_allow_dm,
+            llm_allowed_channel_ids=self.llm_allowed_channel_ids,
+            llm_allowed_role_ids=self.llm_allowed_role_ids,
         )
 
     @property
@@ -862,6 +880,14 @@ class Settings:
             gemini_resume_prompt=g.gemini_resume_prompt,
             gemini_resume_prompt_hw=g.gemini_resume_prompt_hw,
             gemini_resume_prompt_ele=g.gemini_resume_prompt_ele,
+            llm_channel_history_enabled=g.llm_channel_history_enabled,
+            llm_lore_enabled=g.llm_lore_enabled,
+            llm_images_enabled=g.llm_images_enabled,
+            llm_allow_dm=g.llm_allow_dm,
+            llm_allowed_channel_ids=list(g.llm_allowed_channel_ids)
+            if g.llm_allowed_channel_ids is not None
+            else None,
+            llm_allowed_role_ids=list(g.llm_allowed_role_ids) if g.llm_allowed_role_ids is not None else None,
             job_alerts_channel_id=c.job_alerts_channel_id,
             jobs_poll_seconds=c.jobs_poll_seconds,
             greenhouse_boards=list(c.greenhouse_boards),
@@ -1561,6 +1587,36 @@ class Settings:
         gemini_resume_prompt = _env("GEMINI_RESUME_PROMPT", "").strip()
         gemini_resume_prompt_hw = _env("GEMINI_RESUME_PROMPT_HW", "").strip()
         gemini_resume_prompt_ele = _env("GEMINI_RESUME_PROMPT_ELE", "").strip()
+        llm_channel_history_enabled = _parse_bool_field(
+            "LLM_CHANNEL_HISTORY_ENABLED", "llm_channel_history_enabled", False
+        )
+        llm_lore_enabled = _parse_bool_field("LLM_LORE_ENABLED", "llm_lore_enabled", False)
+        llm_images_enabled = _parse_bool_field("LLM_IMAGES_ENABLED", "llm_images_enabled", True)
+        llm_allow_dm = _parse_bool_field("LLM_ALLOW_DM", "llm_allow_dm", False)
+
+        llm_allowed_channels_raw = _to_str_list(_env("LLM_ALLOWED_CHANNEL_IDS", ""))
+        llm_allowed_channel_ids: list[int] | None = None
+        if llm_allowed_channels_raw:
+            llm_allowed_channel_ids = []
+            for ch in llm_allowed_channels_raw:
+                try:
+                    c_id = int(ch)
+                    if 0 < c_id <= MAX_SNOWFLAKE:
+                        llm_allowed_channel_ids.append(c_id)
+                except ValueError:
+                    continue
+
+        llm_allowed_roles_raw = _to_str_list(_env("LLM_ALLOWED_ROLE_IDS", ""))
+        llm_allowed_role_ids: list[int] | None = None
+        if llm_allowed_roles_raw:
+            llm_allowed_role_ids = []
+            for r in llm_allowed_roles_raw:
+                try:
+                    r_id = int(r)
+                    if 0 < r_id <= MAX_SNOWFLAKE:
+                        llm_allowed_role_ids.append(r_id)
+                except ValueError:
+                    continue
 
         jobs_poll_seconds = _parse_int_field("JOBS_POLL_SECONDS", "jobs_poll_seconds", 600)
         greenhouse_boards = _to_str_list(_env("GREENHOUSE_BOARDS", ""))
@@ -1751,6 +1807,12 @@ class Settings:
             gemini_resume_prompt=gemini_resume_prompt,
             gemini_resume_prompt_hw=gemini_resume_prompt_hw,
             gemini_resume_prompt_ele=gemini_resume_prompt_ele,
+            llm_channel_history_enabled=llm_channel_history_enabled,
+            llm_lore_enabled=llm_lore_enabled,
+            llm_images_enabled=llm_images_enabled,
+            llm_allow_dm=llm_allow_dm,
+            llm_allowed_channel_ids=llm_allowed_channel_ids,
+            llm_allowed_role_ids=llm_allowed_role_ids,
             jobs_poll_seconds=jobs_poll_seconds,
             greenhouse_boards=greenhouse_boards,
             lever_sites=lever_sites,
