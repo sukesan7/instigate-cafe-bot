@@ -40,6 +40,9 @@ _EARLY_CAREER_RX = re.compile(
     re.IGNORECASE,
 )
 
+_STAFF_ACCT_RX = re.compile(r"\bstaff\s+accountant\b", re.IGNORECASE)
+_SENIOR_RX = re.compile(r"\bsenior\b", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class DisciplinePreset:
@@ -183,9 +186,7 @@ class DeterministicRuleEngine:
         title_lower = job.title.lower()
 
         # 1. Seniority Check
-        is_staff_acct = bool(re.search(r"\bstaff\s+accountant\b", title_lower)) and not bool(
-            re.search(r"\bsenior\b", title_lower)
-        )
+        is_staff_acct = bool(_STAFF_ACCT_RX.search(title_lower)) and not bool(_SENIOR_RX.search(title_lower))
 
         senior_match = _SENIOR_ASSOCIATE_RX.search(title_lower)
         if not senior_match:
@@ -446,3 +447,67 @@ class DeterministicRuleEngine:
             trace=tuple(trace),
             explanation=explanation,
         )
+
+    def matches(self, job: JobPosting, criteria: JobFilterCriteria) -> bool:
+        """
+        Fast short-circuiting boolean evaluation without allocating MatchTraceItem strings.
+        Used for high-throughput batch filtering.
+        """
+        title_lower = job.title.lower()
+        is_staff_acct = bool(_STAFF_ACCT_RX.search(title_lower)) and not bool(_SENIOR_RX.search(title_lower))
+        if _SENIOR_ASSOCIATE_RX.search(title_lower):
+            return False
+        m = _SENIORITY_RX.search(title_lower)
+        if m and not (m.group(0).lower() == "staff" and is_staff_acct):
+            return False
+
+        preset = self.get_preset(criteria.preset)
+        blob = (job.text_blob or f"{job.title} {job.employer} {job.location}").strip()
+        blob_lower = blob.lower()
+
+        if preset.enforce_legacy_non_tech_rejection and _LEGACY_NON_TECH_RX.search(blob_lower):
+            return False
+
+        if criteria.employer_allowlist:
+            emp = job.employer.lower()
+            if not any(a.lower() in emp for a in criteria.employer_allowlist if a):
+                return False
+
+        career_lvl: CareerLevel = (
+            job.career_level if job.career_level != "unknown" else classify_career_level(blob)
+        )
+        early_career_required = criteria.require_early_career or preset.require_early_career
+        if criteria.career_levels:
+            if career_lvl not in criteria.career_levels:
+                return False
+        elif early_career_required:
+            has_early_hint = bool(_EARLY_CAREER_RX.search(blob_lower)) or career_lvl in (
+                "intern",
+                "new_grad",
+                "entry",
+            )
+            if not has_early_hint:
+                return False
+
+        allowed_disciplines = (
+            set(criteria.disciplines) if criteria.disciplines else set(preset.included_disciplines)
+        )
+        if allowed_disciplines:
+            extracted_tags = job.discipline_tags if job.discipline_tags else classify_discipline_tags(blob)
+            if not set(extracted_tags).intersection(allowed_disciplines):
+                return False
+
+        if criteria.keywords_denylist:
+            for d in criteria.keywords_denylist:
+                if d and re.search(rf"\b{re.escape(d)}\b", blob_lower, re.IGNORECASE):
+                    return False
+
+        if criteria.keywords_allowlist and not any(
+            a.lower() in blob_lower for a in criteria.keywords_allowlist if a
+        ):
+            return False
+
+        if not location_matches(job.location, blob, criteria.location_allowlist):
+            return False
+
+        return not (criteria.remote_only and not job.is_remote and not detect_is_remote(job.location, blob))

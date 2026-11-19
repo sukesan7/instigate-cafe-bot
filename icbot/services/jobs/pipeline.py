@@ -45,7 +45,7 @@ def location_passes_smart(location: str, text_blob: str, allowlist: Sequence[str
 
 def matches_filter_criteria(job: JobPosting, criteria: JobFilterCriteria) -> bool:
     """Evaluate whether a JobPosting matches the filtering rules via DeterministicRuleEngine."""
-    return _DEFAULT_RULE_ENGINE.evaluate(job, criteria).matched
+    return _DEFAULT_RULE_ENGINE.matches(job, criteria)
 
 
 class JobsIngestionPipeline:
@@ -345,6 +345,9 @@ class JobsIngestionPipeline:
                     db, gid, cid, job.source_key, job.external_id, job.updated_unix
                 ):
                     self.metrics.record_suppressed_duplicates(1)
+                    continue
+
+                if not self.rule_engine.matches(job, criteria):
                     continue
 
                 decision = self.rule_engine.evaluate(job, criteria)
