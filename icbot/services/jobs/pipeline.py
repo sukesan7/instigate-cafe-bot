@@ -9,13 +9,17 @@ from typing import Any, Protocol, cast
 
 import aiohttp
 import aiosqlite
+import discord
 
+from icbot.config import Settings
+from icbot.embeds import job_alert as job_alert_embed
 from icbot.errors import ProviderError
 from icbot.services.jobs.adapters import (
     GreenhouseAdapter,
     LeverAdapter,
     WorkdayAdapter,
 )
+from icbot.services.jobs.metrics import JobIngestionMetrics
 from icbot.services.jobs.models import (
     JobFilterCriteria,
     JobPosting,
@@ -66,6 +70,7 @@ class JobsIngestionPipeline:
         self.lever_adapter = LeverAdapter()
         self.workday_adapter = WorkdayAdapter()
         self.rule_engine = DeterministicRuleEngine()
+        self.metrics = JobIngestionMetrics()
 
     def evaluate_posting(self, job: JobPosting, criteria: JobFilterCriteria) -> MatchDecision:
         """Evaluate a JobPosting against JobFilterCriteria and return an explainable MatchDecision."""
@@ -239,18 +244,21 @@ class JobsIngestionPipeline:
             return [], None
 
         async with self._semaphore:
+            start_t = self._clock()
             try:
                 if provider == "greenhouse":
                     jobs = await self.greenhouse_adapter.fetch_postings(
                         session, target, timeout_seconds=timeout_seconds, clock=self._clock
                     )
                     health.mark_success(now)
+                    self.metrics.record_source_success(source_key, self._clock() - start_t)
                     return jobs, None
                 elif provider == "lever":
                     jobs = await self.lever_adapter.fetch_postings(
                         session, target, timeout_seconds=timeout_seconds, clock=self._clock
                     )
                     health.mark_success(now)
+                    self.metrics.record_source_success(source_key, self._clock() - start_t)
                     return jobs, None
                 elif provider == "workday":
                     jobs, api_url, _tenant, _site_slug = await self.workday_adapter.fetch_postings(
@@ -262,10 +270,12 @@ class JobsIngestionPipeline:
                         clock=self._clock,
                     )
                     health.mark_success(now)
+                    self.metrics.record_source_success(source_key, self._clock() - start_t)
                     return jobs, api_url
                 else:
                     raise ValueError(f"Unknown ATS provider: {provider}")
             except ProviderError as pe:
+                self.metrics.record_http_failure(source_key, str(pe))
                 st = pe.status
                 if st == 429:
                     cooldown = pe.retry_after if pe.retry_after is not None else 30.0
@@ -278,5 +288,208 @@ class JobsIngestionPipeline:
                     health.mark_cooldown(15.0, status_code=st, error=str(pe), now=now)
                 raise
             except Exception as exc:
+                self.metrics.record_http_failure(source_key, repr(exc))
                 health.mark_cooldown(10.0, error=repr(exc), now=now)
                 raise
+
+    async def ingest_and_enqueue_postings(
+        self,
+        db: Any,
+        jobs: Sequence[JobPosting],
+        *,
+        subscriptions: Sequence[dict[str, Any]] | None = None,
+        bootstrap_mode: bool = False,
+    ) -> list[JobPosting]:
+        """
+        Ingest newly discovered postings into job_seen and queue them into job_alert_outbox
+        for each matching active subscription across all guilds.
+        """
+        if not jobs:
+            return []
+
+        # 1. Resolve active subscriptions
+        active_subs = (
+            list(subscriptions) if subscriptions is not None else await db.get_all_active_job_subscriptions()
+        )
+
+        # 2. Identify new postings vs seen
+        new_jobs: list[JobPosting] = []
+        for j in jobs:
+            seen_meta = await self.get_seen_job_meta(db, j.source_key, j.external_id)
+            if seen_meta is None or (
+                self.reannounce_on_update
+                and j.updated_unix is not None
+                and j.updated_unix > (seen_meta[1] or seen_meta[0])
+            ):
+                new_jobs.append(j)
+
+        # Checkpoint seen state
+        await self.checkpoint_seen(db, jobs)
+
+        if not new_jobs or not active_subs or bootstrap_mode:
+            return new_jobs
+
+        # 3. Match against each subscription and create outbox items
+        now_ts = int(self._clock())
+        outbox_batch: list[dict[str, Any]] = []
+
+        for sub in active_subs:
+            gid = int(sub.get("guild_id", 0))
+            cid = int(sub["channel_id"])
+            preset_name = str(sub.get("preset", "tech_swe"))
+            criteria = JobFilterCriteria(preset=preset_name)
+
+            for job in new_jobs:
+                # Check channel delivery dedupe
+                if await self.is_already_delivered(
+                    db, gid, cid, job.source_key, job.external_id, job.updated_unix
+                ):
+                    self.metrics.record_suppressed_duplicates(1)
+                    continue
+
+                decision = self.rule_engine.evaluate(job, criteria)
+                if not decision.matched:
+                    continue
+
+                self.metrics.record_matching_jobs(1)
+                outbox_batch.append(
+                    {
+                        "guild_id": gid,
+                        "channel_id": cid,
+                        "source_key": job.source_key,
+                        "external_id": job.external_id,
+                        "job_title": job.title,
+                        "job_company": job.employer,
+                        "job_url": job.url,
+                        "job_location": job.location,
+                        "career_level": decision.career_level,
+                        "discipline_tags": list(decision.disciplines),
+                        "preset": preset_name,
+                        "posted_unix": job.posted_unix,
+                        "enqueued_at": now_ts,
+                        "reannounce": bool(job.updated_unix and seen_meta),
+                    }
+                )
+
+        if outbox_batch and hasattr(db, "enqueue_job_outbox"):
+            await db.enqueue_job_outbox(outbox_batch)
+
+        return new_jobs
+
+    async def dispatch_outbox(
+        self,
+        bot: discord.Client,
+        db: Any,
+        *,
+        max_posts_per_channel: int = 12,
+        settings: Any | None = None,
+    ) -> int:
+        """
+        Process pending items from job_alert_outbox and send embeds to subscribed channels.
+        Handles missing channels, permissions, rate limits (Discord 429), and delivery recording.
+        """
+        if not hasattr(db, "fetch_pending_job_outbox"):
+            return 0
+
+        pending_items = await db.fetch_pending_job_outbox(limit=100)
+        if not pending_items:
+            return 0
+
+        # Group by channel
+        by_channel: dict[int, list[dict[str, Any]]] = {}
+        for item in pending_items:
+            by_channel.setdefault(item["channel_id"], []).append(item)
+
+        delivered_total = 0
+        now_ts = int(self._clock())
+
+        for channel_id, items in by_channel.items():
+            # Resolve channel
+            channel: Any = bot.get_channel(channel_id)
+            if channel is None and hasattr(bot, "fetch_channel"):
+                try:
+                    channel = await bot.fetch_channel(channel_id)
+                except (discord.DiscordException, LookupError, ValueError) as exc:
+                    log.warning("[JOBS] Channel %d lookup failed: %s", channel_id, exc)
+                    channel = None
+
+            if channel is None or not callable(getattr(channel, "send", None)):
+                # Channel deleted or inaccessible
+                for itm in items:
+                    await db.mark_job_outbox_failed(
+                        itm["id"], itm["attempts"] + 1, "ChannelNotFound", is_terminal=True
+                    )
+                self.metrics.record_discord_delivery_failure("channel_not_found", len(items))
+                continue
+
+            # Permission check if channel is in a guild
+            guild = getattr(channel, "guild", None)
+            me = getattr(guild, "me", None) if guild else None
+            if me and hasattr(channel, "permissions_for"):
+                perms = channel.permissions_for(me)
+                if not (getattr(perms, "send_messages", True) and getattr(perms, "embed_links", True)):
+                    for itm in items:
+                        await db.mark_job_outbox_failed(
+                            itm["id"], itm["attempts"] + 1, "MissingPermissions", is_terminal=True
+                        )
+                    self.metrics.record_discord_delivery_failure("missing_permissions", len(items))
+                    continue
+
+            # Send batch capped by volume limit
+            posts_sent = 0
+            for item in items:
+                if posts_sent >= max_posts_per_channel:
+                    break
+
+                # Mark sending
+                await db.mark_job_outbox_sending([item["id"]])
+
+                eff_settings = cast(Settings, settings or getattr(bot, "settings", None) or Settings())
+                embed = job_alert_embed(
+                    eff_settings,
+                    title=item["job_title"],
+                    company=item["job_company"],
+                    location=item["job_location"],
+                    url=item["job_url"],
+                    career_level=item["career_level"],
+                    tags=item["discipline_tags"],
+                    preset=item["preset"],
+                    source=item["source_key"],
+                    posted_unix=item["posted_unix"],
+                )
+
+                try:
+                    await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                    await db.mark_job_outbox_delivered(item["id"], now_ts)
+                    await self.record_delivery(db, item["guild_id"], channel_id, item)
+                    self.metrics.record_discord_delivery_success(1)
+                    posts_sent += 1
+                    delivered_total += 1
+                except discord.RateLimited as rl:
+                    log.warning("[JOBS] Discord 429 rate limit hit on channel %d: %s", channel_id, rl)
+                    self.metrics.record_discord_delivery_failure("rate_limited_429", 1)
+                    await db.mark_job_outbox_failed(
+                        item["id"], item["attempts"] + 1, "DiscordHTTP429", is_terminal=False
+                    )
+                    break  # Pause channel dispatch on 429
+                except discord.Forbidden as fb:
+                    log.warning("[JOBS] Forbidden posting to channel %d: %s", channel_id, fb)
+                    self.metrics.record_discord_delivery_failure("missing_permissions", 1)
+                    await db.mark_job_outbox_failed(
+                        item["id"], item["attempts"] + 1, "Forbidden", is_terminal=True
+                    )
+                    break
+                except (discord.DiscordException, OSError, RuntimeError, ValueError) as exc:
+                    log.warning("[JOBS] Failed to send job alert to channel %d: %s", channel_id, exc)
+                    self.metrics.record_discord_delivery_failure("transient", 1)
+                    await db.mark_job_outbox_failed(
+                        item["id"], item["attempts"] + 1, repr(exc), is_terminal=False
+                    )
+
+        return delivered_total
+
+    async def recover_stale_outbox(self, db: Any, *, lease_seconds: int = 300) -> int:
+        """Recover any items left in 'sending' state due to mid-cycle process restart."""
+        if hasattr(db, "recover_stale_job_outbox"):
+            return int(await db.recover_stale_job_outbox(lease_seconds, now=int(self._clock())))
+        return 0

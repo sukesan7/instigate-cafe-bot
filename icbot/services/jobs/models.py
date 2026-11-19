@@ -134,3 +134,38 @@ class JobFilterCriteria:
     remote_only: bool = False
     preset: str = "tech_swe"
     employer_allowlist: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class JobSubscription:
+    """Channel-scoped subscription to a job discipline preset."""
+
+    guild_id: int
+    channel_id: int
+    preset: str = "tech_swe"
+    role_id: int | None = None
+    created_at: int = 0
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class JobOutboxItem:
+    """An enqueued job notification ready for dispatch to a Discord channel."""
+
+    id: int
+    guild_id: int
+    channel_id: int
+    source_key: str
+    external_id: str
+    job_title: str
+    job_company: str
+    job_url: str
+    job_location: str
+    career_level: CareerLevel = "unknown"
+    discipline_tags: tuple[str, ...] = ()
+    preset: str = "tech_swe"
+    posted_unix: int | None = None
+    status: Literal["pending", "sending", "delivered", "failed", "dead_letter"] = "pending"
+    attempts: int = 0
+    enqueued_at: int = 0
+    reannounce: bool = False

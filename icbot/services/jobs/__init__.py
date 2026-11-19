@@ -14,10 +14,13 @@ from icbot.services.jobs.classification import (
     classify_taxonomy_categories,
     detect_is_remote,
 )
+from icbot.services.jobs.metrics import JobIngestionMetrics
 from icbot.services.jobs.models import (
     CareerLevel,
     JobFilterCriteria,
+    JobOutboxItem,
     JobPosting,
+    JobSubscription,
     MatchDecision,
     MatchTraceItem,
     ProviderType,
@@ -43,7 +46,10 @@ __all__ = [
     "DisciplinePreset",
     "GreenhouseAdapter",
     "JobFilterCriteria",
+    "JobIngestionMetrics",
+    "JobOutboxItem",
     "JobPosting",
+    "JobSubscription",
     "JobsIngestionPipeline",
     "LeverAdapter",
     "MatchDecision",

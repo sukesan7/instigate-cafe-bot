@@ -621,6 +621,54 @@ async def _migrate_0004_guild_scoped_economy_and_ledger(tx: Transaction) -> None
         """
     )
 
+    # 13. guild_job_subscriptions table
+    await tx.execute(
+        """
+        CREATE TABLE IF NOT EXISTS guild_job_subscriptions (
+            guild_id     INTEGER NOT NULL,
+            channel_id   INTEGER NOT NULL,
+            preset       TEXT    NOT NULL DEFAULT 'tech_swe',
+            role_id      INTEGER,
+            created_at   INTEGER NOT NULL,
+            enabled      INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (guild_id, channel_id)
+        )
+        """
+    )
+
+    # 14. job_alert_outbox table
+    await tx.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_alert_outbox (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id        INTEGER NOT NULL DEFAULT 0,
+            channel_id      INTEGER NOT NULL,
+            source_key      TEXT    NOT NULL,
+            external_id     TEXT    NOT NULL,
+            job_title       TEXT    NOT NULL,
+            job_company     TEXT    NOT NULL,
+            job_url         TEXT    NOT NULL,
+            job_location    TEXT    NOT NULL,
+            career_level    TEXT    NOT NULL DEFAULT 'unknown',
+            discipline_tags TEXT    NOT NULL DEFAULT '[]',
+            preset          TEXT    NOT NULL DEFAULT 'tech_swe',
+            posted_unix     INTEGER,
+            status          TEXT    NOT NULL DEFAULT 'pending',
+            attempts        INTEGER NOT NULL DEFAULT 0,
+            last_error      TEXT,
+            enqueued_at     INTEGER NOT NULL,
+            delivered_at    INTEGER,
+            reannounce      INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    await tx.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_outbox_pending ON job_alert_outbox(status, enqueued_at)"
+    )
+    await tx.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_outbox_dedupe ON job_alert_outbox(guild_id, channel_id, source_key, external_id, reannounce)"
+    )
+
 
 async def _migrate_0005_guild_settings_audit(tx: Transaction) -> None:
     """Introduce audit log table for per-guild configuration changes."""
@@ -1078,6 +1126,14 @@ class Database:
             cur_gr = await tx.execute("DELETE FROM grades_course_cache WHERE last_updated < ?", (gr_cutoff,))
             pruned["grades_course_cache"] = cur_gr.rowcount if cur_gr.rowcount >= 0 else 0
 
+            # 5. job_alert_outbox
+            outbox_cutoff = now - max(1, int(alert_dedupe_days)) * 86400
+            cur_outbox = await tx.execute(
+                "DELETE FROM job_alert_outbox WHERE status IN ('delivered', 'failed', 'dead_letter') AND (delivered_at < ? OR enqueued_at < ?)",
+                (outbox_cutoff, outbox_cutoff),
+            )
+            pruned["job_alert_outbox"] = cur_outbox.rowcount if cur_outbox.rowcount >= 0 else 0
+
         return pruned
 
     async def migrate_legacy_guild_data(
@@ -1326,6 +1382,256 @@ class Database:
     async def delete_user_job_preferences(self, user_id: int) -> bool:
         await self.execute("DELETE FROM user_job_preferences WHERE user_id = ?", (int(user_id),))
         return True
+
+    # -----------------------------------------------------------------------
+    # Guild Job Subscriptions & Transactional Outbox
+    # -----------------------------------------------------------------------
+
+    async def get_guild_job_subscriptions(self, guild_id: int) -> list[dict[str, Any]]:
+        """Fetch all configured job channel subscriptions for a guild."""
+        rows = await self.fetchall(
+            """
+            SELECT guild_id, channel_id, preset, role_id, created_at, enabled
+            FROM guild_job_subscriptions
+            WHERE guild_id = ?
+            ORDER BY channel_id ASC
+            """,
+            (int(guild_id),),
+        )
+        return [
+            {
+                "guild_id": int(r[0]),
+                "channel_id": int(r[1]),
+                "preset": str(r[2]),
+                "role_id": int(r[3]) if r[3] is not None else None,
+                "created_at": int(r[4]),
+                "enabled": bool(r[5]),
+            }
+            for r in rows
+        ]
+
+    async def get_all_active_job_subscriptions(self) -> list[dict[str, Any]]:
+        """Fetch all enabled subscriptions across all guilds."""
+        rows = await self.fetchall(
+            """
+            SELECT guild_id, channel_id, preset, role_id, created_at, enabled
+            FROM guild_job_subscriptions
+            WHERE enabled = 1
+            ORDER BY guild_id ASC, channel_id ASC
+            """
+        )
+        return [
+            {
+                "guild_id": int(r[0]),
+                "channel_id": int(r[1]),
+                "preset": str(r[2]),
+                "role_id": int(r[3]) if r[3] is not None else None,
+                "created_at": int(r[4]),
+                "enabled": bool(r[5]),
+            }
+            for r in rows
+        ]
+
+    async def set_guild_job_subscription(
+        self,
+        guild_id: int,
+        channel_id: int,
+        preset: str = "tech_swe",
+        role_id: int | None = None,
+        enabled: bool = True,
+        *,
+        now: int | None = None,
+    ) -> None:
+        """Upsert a guild job subscription for a channel."""
+        cur_time = now if now is not None else int(time.time())
+        await self.execute(
+            """
+            INSERT INTO guild_job_subscriptions(guild_id, channel_id, preset, role_id, created_at, enabled)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, channel_id) DO UPDATE SET
+                preset = excluded.preset,
+                role_id = excluded.role_id,
+                enabled = excluded.enabled
+            """,
+            (
+                int(guild_id),
+                int(channel_id),
+                str(preset or "tech_swe"),
+                int(role_id) if role_id is not None else None,
+                cur_time,
+                1 if enabled else 0,
+            ),
+        )
+
+    async def delete_guild_job_subscription(self, guild_id: int, channel_id: int) -> bool:
+        """Remove a guild channel job subscription."""
+        await self.execute(
+            "DELETE FROM guild_job_subscriptions WHERE guild_id = ? AND channel_id = ?",
+            (int(guild_id), int(channel_id)),
+        )
+        return True
+
+    async def enqueue_job_outbox(self, items: list[dict[str, Any]]) -> int:
+        """Enqueue postings into job_alert_outbox with deduplication against concurrent cycles."""
+        if not items:
+            return 0
+        stmts = [
+            (
+                """
+                INSERT OR IGNORE INTO job_alert_outbox(
+                    guild_id, channel_id, source_key, external_id,
+                    job_title, job_company, job_url, job_location,
+                    career_level, discipline_tags, preset, posted_unix,
+                    status, attempts, enqueued_at, reannounce
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
+                """,
+                (
+                    int(item.get("guild_id", 0)),
+                    int(item["channel_id"]),
+                    str(item["source_key"]),
+                    str(item["external_id"]),
+                    str(item["job_title"]),
+                    str(item["job_company"]),
+                    str(item["job_url"]),
+                    str(item.get("job_location", "")),
+                    str(item.get("career_level", "unknown")),
+                    json.dumps(item.get("discipline_tags", [])),
+                    str(item.get("preset", "tech_swe")),
+                    item.get("posted_unix"),
+                    int(item.get("enqueued_at", int(time.time()))),
+                    1 if item.get("reannounce") else 0,
+                ),
+            )
+            for item in items
+        ]
+        async with self.write_transaction() as tx:
+            await tx.execute_many(stmts)
+        return len(items)
+
+    async def fetch_pending_job_outbox(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Fetch pending outbox items ordered by enqueue timestamp."""
+        rows = await self.fetchall(
+            """
+            SELECT id, guild_id, channel_id, source_key, external_id,
+                   job_title, job_company, job_url, job_location,
+                   career_level, discipline_tags, preset, posted_unix,
+                   status, attempts, enqueued_at, reannounce
+            FROM job_alert_outbox
+            WHERE status = 'pending'
+            ORDER BY enqueued_at ASC, id ASC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        )
+        results: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                tags = json.loads(r[10]) if r[10] else []
+            except (json.JSONDecodeError, TypeError):
+                tags = []
+            results.append(
+                {
+                    "id": int(r[0]),
+                    "guild_id": int(r[1]),
+                    "channel_id": int(r[2]),
+                    "source_key": str(r[3]),
+                    "external_id": str(r[4]),
+                    "job_title": str(r[5]),
+                    "job_company": str(r[6]),
+                    "job_url": str(r[7]),
+                    "job_location": str(r[8]),
+                    "career_level": str(r[9]),
+                    "discipline_tags": tags,
+                    "preset": str(r[11]),
+                    "posted_unix": int(r[12]) if r[12] is not None else None,
+                    "status": str(r[13]),
+                    "attempts": int(r[14]),
+                    "enqueued_at": int(r[15]),
+                    "reannounce": bool(r[16]),
+                }
+            )
+        return results
+
+    async def mark_job_outbox_sending(self, item_ids: list[int]) -> None:
+        """Mark outbox items as currently sending to prevent duplicate pickup."""
+        if not item_ids:
+            return
+        placeholders = ",".join("?" for _ in item_ids)
+        await self.execute(
+            f"UPDATE job_alert_outbox SET status = 'sending' WHERE id IN ({placeholders})",
+            tuple(item_ids),
+        )
+
+    async def mark_job_outbox_delivered(self, item_id: int, delivered_at: int) -> None:
+        """Mark outbox item as delivered."""
+        await self.execute(
+            "UPDATE job_alert_outbox SET status = 'delivered', delivered_at = ? WHERE id = ?",
+            (int(delivered_at), int(item_id)),
+        )
+
+    async def mark_job_outbox_failed(
+        self,
+        item_id: int,
+        attempts: int,
+        last_error: str,
+        *,
+        is_terminal: bool = False,
+    ) -> None:
+        """Mark outbox item as failed (retriable or dead-letter)."""
+        status = "dead_letter" if is_terminal or attempts >= 3 else "pending"
+        await self.execute(
+            """
+            UPDATE job_alert_outbox
+            SET status = ?, attempts = ?, last_error = ?
+            WHERE id = ?
+            """,
+            (status, int(attempts), str(last_error)[:500], int(item_id)),
+        )
+
+    async def recover_stale_job_outbox(
+        self,
+        lease_seconds: int = 300,
+        *,
+        now: int | None = None,
+    ) -> int:
+        """Recover any items left in 'sending' state due to an unhandled crash or restart.
+
+        Reconciles with alert_delivery_dedupes: if delivery was actually recorded before crash,
+        marks 'delivered' to bound duplicate sends; otherwise resets to 'pending' with attempts incremented.
+        """
+        cur_now = now if now is not None else int(time.time())
+        cutoff = cur_now - max(30, int(lease_seconds))
+        rows = await self.fetchall(
+            """
+            SELECT id, guild_id, channel_id, source_key, external_id
+            FROM job_alert_outbox
+            WHERE status = 'sending' AND enqueued_at < ?
+            """,
+            (cutoff,),
+        )
+        if not rows:
+            return 0
+
+        recovered = 0
+        for r in rows:
+            outbox_id, guild_id, channel_id, source_key, external_id = r
+            dedupe_key = f"{channel_id}:{source_key}:{external_id}"
+            delivered_row = await self.fetchone(
+                "SELECT delivered_at FROM alert_delivery_dedupes WHERE guild_id=? AND alert_type='job_alert' AND dedupe_key=?",
+                (guild_id, dedupe_key),
+            )
+            if delivered_row:
+                await self.execute(
+                    "UPDATE job_alert_outbox SET status='delivered', delivered_at=? WHERE id=?",
+                    (delivered_row[0], outbox_id),
+                )
+            else:
+                await self.execute(
+                    "UPDATE job_alert_outbox SET status='pending', attempts = attempts + 1 WHERE id=?",
+                    (outbox_id,),
+                )
+            recovered += 1
+        return recovered
 
     async def close(self) -> None:
         """Drain pending locks, close the managed connection, and mark database closed."""

@@ -302,6 +302,18 @@ def go_alert(
     return e
 
 
+def _safe_http_url(url: str | None) -> str | None:
+    """Validate that a URL strictly uses http or https without whitespace or control chars."""
+    if not url:
+        return None
+    cleaned = url.strip()
+    if cleaned.lower().startswith(("http://", "https://")):
+        if any(c in cleaned for c in ("\r", "\n", "\t", " ", '"', "<", ">", "\\")):
+            return None
+        return cleaned
+    return None
+
+
 def job_alert(
     settings: Settings,
     *,
@@ -314,15 +326,20 @@ def job_alert(
     url: str | None = None,
     tags: list[str] | None = None,  # preferred name
     categories: list[str] | None = None,  # alias for tags (some callers use categories=)
+    career_level: str | None = None,
+    posted_date: str | None = None,
+    posted_unix: int | None = None,
+    preset: str | None = None,
+    provider: str | None = None,
     footer_hint: str | None = None,
 ) -> discord.Embed:
     """
-    Jobs-format embed for auto-posted ATS alerts.
+    Consistent, safe jobs-format embed for auto-posted ATS alerts and search listings.
 
     Clean format:
       Title: 💼 <Job Title>
-      Company, Location, Tags as fields
-      Apply: clean markdown link
+      Company, Location, Level, Source, Posted Date, Tags
+      Apply: Safe markdown link
     """
 
     def _display_label(raw: str) -> str:
@@ -341,6 +358,8 @@ def job_alert(
     headline = (title_text or title or "").strip() or "New Job Posting"
     company_label = _display_label(company or "") or _display_label(source or "")
 
+    safe_url = _safe_http_url(url)
+
     e = _base_embed(
         settings,
         title=f"💼 {_truncate(headline, 240)}",
@@ -348,9 +367,9 @@ def job_alert(
         footer_hint=footer_hint or "Tracking System",
     )
 
-    # Make the embed title clickable to the posting
-    if url:
-        e.url = url
+    # Make the embed title clickable if URL is verified safe
+    if safe_url:
+        e.url = safe_url
 
     # Normalize tags/categories
     label_list = tags if tags is not None else categories
@@ -359,12 +378,34 @@ def job_alert(
     if company_label:
         fields.append(("🏢 Company", f"**{company_label}**", True))
     if location:
-        fields.append(("📍 Location", location, True))
+        fields.append(("📍 Location", sanitize_text(location, 120) or "Not Listed", True))
+    if career_level and career_level != "unknown":
+        lvl_display = career_level.replace("_", " ").title()
+        fields.append(("🎓 Level", lvl_display, True))
+
+    # Source / ATS provider
+    src_display = provider or source
+    if src_display:
+        clean_src = (
+            src_display.split(":", 1)[0].capitalize() if ":" in src_display else src_display.capitalize()
+        )
+        fields.append(("📡 Source", clean_src, True))
+
+    # Posted date / timestamp
+    if posted_date:
+        fields.append(("📅 Posted", sanitize_text(posted_date, 60) or "", True))
+    elif posted_unix and posted_unix > 0:
+        fields.append(("📅 Posted", f"<t:{posted_unix}:R>", True))
+
+    if preset and preset != "all":
+        fields.append(("🎯 Preset", f"`{preset}`", True))
+
     if label_list:
         tag_str = " • ".join(label_list[:8])
-        fields.append(("🏷️ Tags", tag_str, False))
-    if url:
-        fields.append(("🔗 Apply", f"[Apply Here]({url})", False))
+        fields.append(("🏷️ Tags", sanitize_text(tag_str, 200) or "", False))
+
+    if safe_url:
+        fields.append(("🔗 Apply", f"[Apply Here]({safe_url})", False))
 
     _add_fields(e, fields)
     return e

@@ -228,4 +228,45 @@ Automated unit tests benchmark the matching engine against ground-truth labels:
 - **User Job Preferences**: Stored locally in SQLite table `user_job_preferences` (user ID, preset, career levels, disciplines, keywords, excluded words, locations, remote preference). Zero external profiling or third-party telemetry calls.
 - **`/ic job_preview` Command**: Allows users and server admins to test job filters against recent listings or arbitrary job titles before configuring alerts, providing an ephemeral embed with full trace inspection (`PASS`/`FAIL` per rule) and explanation.
 
+---
+
+## 9. Multi-Guild Subscriptions, Transactional Outbox, and Reliability
+
+### 9.1 Multi-Guild Subscription Decoupling
+To prevent cross-guild leakage while avoiding duplicate external API polling:
+- **Single Ingestion Cycle**: Greenhouse, Lever, and Workday sources are fetched exactly once per poller cycle regardless of how many servers or channels are subscribed.
+- **Subscription Fan-out**: Each discovered posting is evaluated against the discipline preset configured for each channel subscription in `guild_job_subscriptions (guild_id, channel_id, preset, role_id, enabled)`.
+- **Channel Isolation**: Matching postings are queued into channel-scoped outbox records. Failures or permission issues in Guild A never block or impede alert dispatch to Guild B.
+
+### 9.2 Transactional Outbox & Delivery State
+Announcements use a transactional outbox queue (`job_alert_outbox`):
+- **States**: `pending` -> `sending` -> `delivered` | `failed` | `dead_letter`.
+- **Unique Constraint**: `(guild_id, channel_id, source_key, external_id, reannounce)` prevents duplicate queue insertions across task iterations.
+- **Transactional Order**:
+  1. Postings fetched and inserted into `job_seen`.
+  2. Matching postings queued into `job_alert_outbox` (`pending`).
+  3. Dispatcher leases batch and transitions state to `sending`.
+  4. Message sent via Discord API (`channel.send`).
+  5. State updated to `delivered` and delivery recorded in `alert_delivery_dedupes`.
+
+### 9.3 At-Least-Once Delivery Semantics and Crash Recovery
+- **Trade-off Analysis**: Because Discord external network side-effects cannot participate in SQLite atomic commits, a process crash immediately following `channel.send` but before database state update could result in a redelivery on restart. Delivery is therefore **at-least-once**.
+- **Bounding Duplicate Noise**:
+  - `recover_stale_outbox(lease_seconds=300)` checks in-flight items against `alert_delivery_dedupes`. If delivery was recorded, the outbox row is marked `delivered` without resending.
+  - Per-channel cycle limit (10–12 posts) strictly caps the maximum potential duplicate announcements in any recovery scenario.
+  - Retries increment an `attempts` counter; items failing 3 times transition to `dead_letter`.
+
+### 9.4 Structured Error Handling & Metrics
+- **Discord 429 Rate Limiting**: Captures `Retry-After` if available, leaves items in `pending`, records `rate_limited_429` failure metric, and gracefully pauses channel dispatch.
+- **Missing Permissions (`Forbidden`)**: Detects missing `Send Messages` or `Embed Links` permissions, moves items to `dead_letter` without endless retry loops, and logs `missing_permissions`.
+- **Channel Deletion (`NotFound`)**: Flags items as terminal `failed` with `ChannelNotFound`.
+- **Structured Metrics (`JobIngestionMetrics`)**: Tracks source success, per-source latency, matching counts, duplicate suppression, HTTP failures, and Discord delivery outcomes.
+
+### 9.5 Paginated `/ic jobs` & Offline Resiliency
+- **Interactive UI**: `JobPaginationView` provides `◀ Previous` and `Next ▶` buttons with a 180-second timeout, page indicator (`Page X of Y`), and total match count.
+- **Offline Resiliency**: Queries stored listings directly from `job_seen`, allowing instantaneous search responses when external ATS portals or network providers are offline.
+- **Status Warnings**: Displays clear cache timestamp badges and notices when external sources are cooling down or unreachable.
+- **Personal Preferences Integration**: Users can filter search results using their private saved preferences (`/ic jobs use_my_preferences:True`) without revealing private criteria to the public server.
+
+
 

@@ -496,6 +496,12 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
     container = get_container(bot)
     secrets = settings.secret_values() if hasattr(settings, "secret_values") else ()
 
+    if hasattr(db, "recover_stale_job_outbox"):
+        try:
+            await container.jobs_pipeline.recover_stale_outbox(db)
+        except (aiosqlite.Error, sqlite3.Error, AttributeError, ValueError, RuntimeError) as exc:
+            log.debug("Outbox recovery skipped: %s", exc)
+
     channel_id = _jobs_channel_id(settings)
     if not channel_id:
         return
@@ -684,6 +690,16 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
 
             posts_left -= 1
             posted_total += 1
+
+    # Multi-guild subscription outbox dispatch
+    if hasattr(db, "get_all_active_job_subscriptions"):
+        try:
+            subs = await db.get_all_active_job_subscriptions()
+            if subs:
+                await container.jobs_pipeline.ingest_and_enqueue_postings(db, all_jobs, subscriptions=subs)
+                posted_total += await container.jobs_pipeline.dispatch_outbox(bot, db, settings=settings)
+        except (aiosqlite.Error, sqlite3.Error, AttributeError, ValueError, RuntimeError) as exc:
+            log.debug("Multi-guild outbox dispatch skipped: %s", exc)
 
     print(
         f"[JOBS] cycle complete: fetched={len(all_jobs)} posted={posted_total} bad_sources={len(bad_sources)}"
