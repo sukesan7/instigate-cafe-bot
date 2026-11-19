@@ -165,6 +165,17 @@ async def _migrate_0001_baseline(tx: Transaction) -> None:
         """
     )
     await tx.execute("CREATE INDEX IF NOT EXISTS idx_job_seen_first_seen ON job_seen(first_seen_unix)")
+    cur = await tx.execute("PRAGMA table_info(job_seen)")
+    js_cols = [str(r[1]) for r in (await cur.fetchall() or [])]
+    if js_cols:
+        if "posted_unix" not in js_cols:
+            await tx.execute("ALTER TABLE job_seen ADD COLUMN posted_unix INTEGER")
+        if "company" not in js_cols:
+            await tx.execute("ALTER TABLE job_seen ADD COLUMN company TEXT")
+        if "location" not in js_cols:
+            await tx.execute("ALTER TABLE job_seen ADD COLUMN location TEXT")
+        if "text_blob" not in js_cols:
+            await tx.execute("ALTER TABLE job_seen ADD COLUMN text_blob TEXT")
 
     await tx.execute(
         """

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -185,18 +186,55 @@ async def poll_and_post_workday_jobs(bot: discord.Client, *, raise_on_error: boo
                 ValueError,
                 TypeError,
             ) as e:
-                # Only blacklist permanent misconfiguration / 404 sources, never transient timeouts or 429/5xx.
-                is_permanent = (
-                    _looks_like_not_found(e)
-                    or "heuristic failed" in str(e).lower()
-                    or (isinstance(e, ValueError) and not isinstance(e, json.JSONDecodeError))
-                )
-                if is_permanent:
-                    bad_sources.add(src)
-                else:
-                    last_transient_err = e
-                print(f"[JOBS] workday fetch failed ({site.label}): {format_exception_safe(e, secrets)}")
-                continue
+                # If cached API URL failed with 404/401/403, invalidate cache and retry once
+                fetch_err: Exception | None = e
+                if cached_api_url and (
+                    _looks_like_not_found(e) or getattr(e, "status", None) in (401, 403, 404)
+                ):
+                    log.info(
+                        "Cached Workday CXS URL failed for %s; invalidating cache and retrying", site.label
+                    )
+                    with contextlib.suppress(Exception):
+                        await db.execute(
+                            "DELETE FROM workday_cxs_cache WHERE careers_url=?", (site.careers_url,)
+                        )
+                    try:
+                        jobs, cxs_used = await fetch_workday_jobs(
+                            session,
+                            site,
+                            api_url_override=None,
+                            timeout_seconds=timeout_seconds,
+                            max_results=240,
+                        )
+                        fetch_err = None
+                    except (
+                        aiohttp.ClientError,
+                        TimeoutError,
+                        RuntimeError,
+                        json.JSONDecodeError,
+                        ValueError,
+                        TypeError,
+                    ) as retry_err:
+                        fetch_err = retry_err
+
+                if fetch_err is not None:
+                    # Only blacklist permanent misconfiguration / 404 sources, never transient timeouts or 429/5xx.
+                    is_permanent = (
+                        _looks_like_not_found(fetch_err)
+                        or "heuristic failed" in str(fetch_err).lower()
+                        or (
+                            isinstance(fetch_err, ValueError)
+                            and not isinstance(fetch_err, json.JSONDecodeError)
+                        )
+                    )
+                    if is_permanent:
+                        bad_sources.add(src)
+                    else:
+                        last_transient_err = fetch_err
+                    print(
+                        f"[JOBS] workday fetch failed ({site.label}): {format_exception_safe(fetch_err, secrets)}"
+                    )
+                    continue
 
             succeeded_sites += 1
 
@@ -243,6 +281,8 @@ async def poll_and_post_workday_jobs(bot: discord.Client, *, raise_on_error: boo
                     )
                     await channel.send(embed=emb)
                     posted += 1
+                    guild_id = int(getattr(settings, "guild_id", 0) or 0)
+                    await container.jobs_pipeline.record_delivery(db, guild_id, channel_id, j)
 
                 await _mark_seen(db, jobs, clock=container.clock, container=container)
 
@@ -294,6 +334,8 @@ async def poll_and_post_workday_jobs(bot: discord.Client, *, raise_on_error: boo
                 posted += 1
                 posts_left -= 1
                 await _mark_seen(db, [j], clock=container.clock, container=container)
+                guild_id = int(getattr(settings, "guild_id", 0) or 0)
+                await container.jobs_pipeline.record_delivery(db, guild_id, channel_id, j)
 
     if raise_on_error and succeeded_sites == 0 and last_transient_err is not None:
         raise last_transient_err

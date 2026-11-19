@@ -40,7 +40,7 @@ class _JobRecord(Protocol):
     @property
     def text_blob(self) -> str: ...
     @property
-    def posted_unix(self) -> int: ...
+    def posted_unix(self) -> int | None: ...
 
 
 _JobT = TypeVar("_JobT", bound=_JobRecord)
@@ -598,7 +598,7 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
     posted_total = 0
 
     for source, jobs in by_source.items():
-        jobs.sort(key=lambda x: x.posted_unix, reverse=True)
+        jobs.sort(key=lambda x: int(x.posted_unix or 0), reverse=True)
 
         has_any = await _source_has_any(db, source)
 
@@ -635,6 +635,8 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
                 )
                 posts_left -= 1
                 posted_total += 1
+                guild_id = int(getattr(settings, "guild_id", 0) or 0)
+                await container.jobs_pipeline.record_delivery(db, guild_id, channel_id, j)
 
             await _mark_seen(db, jobs, clock=container.clock, container=container)
             if sample:
@@ -677,6 +679,8 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
                 )
             )
             await _mark_seen(db, [j], clock=container.clock, container=container)
+            guild_id = int(getattr(settings, "guild_id", 0) or 0)
+            await container.jobs_pipeline.record_delivery(db, guild_id, channel_id, j)
 
             posts_left -= 1
             posted_total += 1
@@ -684,3 +688,11 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
     print(
         f"[JOBS] cycle complete: fetched={len(all_jobs)} posted={posted_total} bad_sources={len(bad_sources)}"
     )
+
+
+async def poll_and_post_all_jobs(bot: discord.Client, *, raise_on_error: bool = False) -> None:
+    """Unified entrypoint that polls all configured ATS sources (Greenhouse, Lever, Workday)."""
+    from icbot.tasks.jobs_workday_alerts import poll_and_post_workday_jobs
+
+    await poll_and_post_jobs(bot, raise_on_error=raise_on_error)
+    await poll_and_post_workday_jobs(bot, raise_on_error=raise_on_error)

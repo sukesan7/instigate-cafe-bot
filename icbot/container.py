@@ -149,6 +149,7 @@ class ServiceContainer:
         llm_killed: bool = False,
         jobs_bad_sources: set[str] | None = None,
         workday_bad_sources: set[str] | None = None,
+        jobs_pipeline: Any = None,
         bj_sessions: SessionManager | None = None,
         use_module_bj_fallback: bool = False,
         gemini_generate_fn: Callable[..., Awaitable[str]] | None = None,
@@ -190,6 +191,7 @@ class ServiceContainer:
         self.jobs_bad_sources: set[str] = jobs_bad_sources if jobs_bad_sources is not None else set()
         self.workday_bad_sources: set[str] = workday_bad_sources if workday_bad_sources is not None else set()
         self.jobs_mark_seen_mode: str | None = None
+        self._jobs_pipeline: Any = jobs_pipeline
 
         self._bj_sessions: SessionManager | None = bj_sessions
         self._use_module_bj_fallback = bool(use_module_bj_fallback)
@@ -297,6 +299,19 @@ class ServiceContainer:
                 grades_db_path=self.settings.grades_db_path,
             )
         return self._academic_registry
+
+    @property
+    def jobs_pipeline(self) -> Any:
+        """Lazy jobs ingestion pipeline across Greenhouse, Lever, and Workday."""
+        if self._jobs_pipeline is None:
+            from icbot.services.jobs.pipeline import JobsIngestionPipeline
+
+            self._jobs_pipeline = JobsIngestionPipeline(
+                concurrency_limit=5,
+                reannounce_on_update=False,
+                clock=self.clock,
+            )
+        return self._jobs_pipeline
 
     async def ensure_http_session(self) -> aiohttp.ClientSession:
         """Return an open shared ``aiohttp.ClientSession``, creating it when owned by container."""
