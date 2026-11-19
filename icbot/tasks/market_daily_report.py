@@ -15,6 +15,13 @@ import discord
 from icbot.container import ServiceContainer, get_container
 from icbot.embeds import system as system_embed
 from icbot.errors import format_exception_safe
+from icbot.services.alert_dedupe import (
+    FINANCIAL_DISCLAIMER,
+    AlertDedupeManager,
+    AlertLifecycleStatus,
+    format_financial_embed_footer,
+    safe_send_alert,
+)
 from icbot.services.crypto_fng import fetch_fear_greed
 from icbot.services.fun_market import FunMarketError, FunMarketStore
 from icbot.services.yahoo_quotes import Quote, fetch_quotes
@@ -394,7 +401,14 @@ async def build_market_report_embed(
     if fun_lines:
         fields.append((f"🏛️ {settings.stock_exchange_name}", "\n".join(fun_lines), False))
 
-    footer_hint = "Daily Report"
+    fields.append(("Notice", FINANCIAL_DISCLAIMER, False))
+
+    clock_now = services.clock() if services is not None and services.clock is not None else None
+    footer_hint = format_financial_embed_footer(
+        "Yahoo Finance & alternative.me",
+        _local_date_str(tz_name, now_unix=clock_now),
+        extra="Daily Market Report",
+    )
 
     return system_embed(
         settings,
@@ -473,8 +487,13 @@ async def post_daily_market_report(bot: discord.Client, *, raise_on_error: bool 
     tz_name = str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto")
     today = _local_date_str(tz_name, now_unix=container.clock())
 
+    guild = getattr(ch, "guild", None)
+    guild_id = int(getattr(guild, "id", 0) or 0)
+    dedupe_mgr = AlertDedupeManager(clock=container.clock)
+
     last = await _get_meta(db, "daily_report_last_date")
-    if last == today:
+    lifecycle = await dedupe_mgr.check_alert(db, guild_id, "market_daily_report", channel_id, today, today)
+    if last == today or lifecycle == AlertLifecycleStatus.IDENTICAL_DUPLICATE:
         if debug:
             print(f"[DAILY] already posted for {today}")
         return
@@ -507,80 +526,29 @@ async def post_daily_market_report(bot: discord.Client, *, raise_on_error: bool 
             raise
         return
 
-    try:
-        await ch.send(embed=embed)
+    subtitle = f"End-of-day snapshot • {today} ({tz_name})"
+    plain_lines: list[str] = [f"📊 Daily Market Report ({today})", subtitle]
+    for f in getattr(embed, "fields", []):
+        plain_lines.append(f"\n{getattr(f, 'name', '')}\n{getattr(f, 'value', '')}")
+    plain_text = "\n".join(plain_lines).strip()
+
+    ok, send_status = await safe_send_alert(bot, channel_id, embed=embed, fallback_text=plain_text)
+    if not ok:
         if debug:
-            print(f"[DAILY] posted ok for {today}")
-        await _finalize_daily_report_post(
-            bot,
-            settings,
-            db,
-            today=today,
-            debug=debug,
-            container=container,
-            secrets=secrets,
-        )
+            print(f"[DAILY] send failed: {send_status}")
+        if raise_on_error:
+            raise RuntimeError(f"Daily report send failed: {send_status}")
         return
 
-    except discord.Forbidden:
-        # Plain-text fallback (embed perms blocked)
-        lines: list[str] = []
-        title = embed.title or "📊 Daily Market Report"
-        lines.append(f"{title} ({today})")
-
-        if getattr(embed, "description", None):
-            lines.append(str(embed.description))
-
-        for f in getattr(embed, "fields", []):
-            name = getattr(f, "name", "").strip()
-            value = getattr(f, "value", "").strip()
-            if name and value:
-                lines.append(f"\n{name}\n{value}")
-
-        text = "\n".join(lines).strip()
-
-        # Chunk to avoid Discord 2000-char limit
-        chunks: list[str] = []
-        while text:
-            chunks.append(text[:1800])
-            text = text[1800:]
-
-        try:
-            for chunk in chunks:
-                await ch.send(chunk)
-            if debug:
-                print(f"[DAILY] posted text ok for {today}")
-            await _finalize_daily_report_post(
-                bot,
-                settings,
-                db,
-                today=today,
-                debug=debug,
-                container=container,
-                secrets=secrets,
-            )
-        except (
-            discord.DiscordException,
-            aiosqlite.Error,
-            sqlite3.Error,
-            RuntimeError,
-            OSError,
-            ValueError,
-        ) as e:
-            if debug:
-                print(f"[DAILY] send failed (forbidden fallback): {format_exception_safe(e, secrets)}")
-            if raise_on_error:
-                raise
-
-    except (
-        discord.DiscordException,
-        aiosqlite.Error,
-        sqlite3.Error,
-        RuntimeError,
-        OSError,
-        ValueError,
-    ) as e:
-        if debug:
-            print(f"[DAILY] send failed: {format_exception_safe(e, secrets)}")
-        if raise_on_error:
-            raise
+    if debug:
+        print(f"[DAILY] posted ok for {today}")
+    await dedupe_mgr.record_delivery(db, guild_id, "market_daily_report", channel_id, today, today)
+    await _finalize_daily_report_post(
+        bot,
+        settings,
+        db,
+        today=today,
+        debug=debug,
+        container=container,
+        secrets=secrets,
+    )

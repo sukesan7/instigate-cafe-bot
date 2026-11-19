@@ -12,6 +12,12 @@ import discord
 from icbot.container import get_container
 from icbot.embeds import ttc_alert as ttc_alert_embed
 from icbot.errors import format_exception_safe
+from icbot.services.alert_dedupe import (
+    AlertDedupeManager,
+    AlertLifecycleStatus,
+    compute_content_hash,
+    safe_send_alert,
+)
 from icbot.services.ttc_client import TTCFetchError, TTCItem, fetch_account_status_items, resolve_account_id
 
 
@@ -208,12 +214,14 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
 
         # Mastodon returns newest-first. We'll process oldest-first for clean chronological posting.
         items_oldest_first = list(reversed(items))
+        guild = getattr(channel, "guild", None)
+        guild_id = int(getattr(guild, "id", 0) or 0)
+        dedupe_mgr = AlertDedupeManager(clock=container.clock)
 
         # If first run (no checkpoint) -> optionally post ONE latest matching status, then checkpoint
-        if not last_id:
+        if not last_id or not await dedupe_mgr.is_bootstrapped(db, guild_id, "ttc_alert", channel_id):
             if bootstrap_post_latest:
                 # Post the newest item that matches filter (prefer newest-first)
-                posted = False
                 for it in items:
                     major = _is_major(it)
                     if poll_level == "major" and not major:
@@ -226,18 +234,21 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
                         url=it.link or None,
                         level=level,
                     )
-                    try:
-                        await channel.send(embed=embed)  # type: ignore[call-arg]
-                        posted = True
-                        break
-                    except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-                        print(f"[TTC] post failed: {format_exception_safe(e, secrets)}")
-                        if raise_on_error:
-                            raise
-                        break
+                    ok, send_status = await safe_send_alert(
+                        bot,
+                        channel_id,
+                        embed=embed,
+                        fallback_text=f"TTC {level}: {it.title or ''} - {it.summary or ''} {it.link or ''}".strip(),
+                    )
+                    if not ok and raise_on_error:
+                        raise RuntimeError(f"TTC post failed: {send_status}")
+                    break
 
-                # even if nothing matched, still checkpoint to prevent spam on restart
-                _ = posted
+            # Checkpoint all existing items in dedupe manager to prevent historic dumping
+            for it in items:
+                h = compute_content_hash(f"{it.title}:{it.summary}")
+                await dedupe_mgr.checkpoint_bootstrap_item(db, guild_id, "ttc_alert", channel_id, it.guid, h)
+            await dedupe_mgr.mark_bootstrapped(db, guild_id, "ttc_alert", channel_id)
 
             # Checkpoint to the newest status id we saw
             await _set_meta(db, "ttc_last_status_id", items[0].guid)
@@ -256,20 +267,36 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
                 await _set_meta(db, "ttc_last_status_id", it.guid)
                 continue
 
+            h = compute_content_hash(f"{it.title}:{it.summary}")
+            lifecycle = await dedupe_mgr.check_alert(db, guild_id, "ttc_alert", channel_id, it.guid, h)
+            if lifecycle == AlertLifecycleStatus.IDENTICAL_DUPLICATE:
+                continue
+
+            headline = (
+                f"[UPDATE] {it.title}"
+                if lifecycle == AlertLifecycleStatus.MATERIAL_UPDATE and it.title
+                else (it.title or "TTC Notice")
+            )
             level = "MAJOR" if major else "INFO"
             embed = ttc_alert_embed(
                 settings,
-                headline=it.title or "TTC Notice",
+                headline=headline,
                 details=it.summary or None,
                 url=it.link or None,
                 level=level,
             )
 
-            try:
-                await channel.send(embed=embed)  # type: ignore[call-arg]
-            except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-                print(f"[TTC] post failed: {format_exception_safe(e, secrets)}")
+            ok, send_status = await safe_send_alert(
+                bot,
+                channel_id,
+                embed=embed,
+                fallback_text=f"TTC {level}: {headline} - {it.summary or ''} {it.link or ''}".strip(),
+            )
+            if not ok:
+                print(f"[TTC] post failed: {send_status}")
                 if raise_on_error:
-                    raise
+                    raise RuntimeError(f"TTC post failed: {send_status}")
                 return
+
+            await dedupe_mgr.record_delivery(db, guild_id, "ttc_alert", channel_id, it.guid, h)
             await _set_meta(db, "ttc_last_status_id", it.guid)

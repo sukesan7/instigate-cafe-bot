@@ -12,6 +12,12 @@ import discord
 from icbot.container import get_container
 from icbot.embeds import go_alert as go_alert_embed
 from icbot.errors import format_exception_safe
+from icbot.services.alert_dedupe import (
+    AlertDedupeManager,
+    AlertLifecycleStatus,
+    compute_content_hash,
+    safe_send_alert,
+)
 from icbot.services.go_client import GOFetchError, GOMessage, fetch_service_alerts
 from icbot.services.http_transport import build_ssl_context
 
@@ -323,10 +329,13 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
                 "[GO] NOTE: items fetched but none matched MAJOR patterns; set GO_ALERT_LEVEL=all to see them."
             )
 
+    guild = getattr(channel, "guild", None)
+    guild_id = int(getattr(guild, "id", 0) or 0)
+    dedupe_mgr = AlertDedupeManager(clock=container.clock)
+
     # Bootstrap behavior: optionally post ONE latest matching item, then checkpoint
-    if not last_code:
+    if not last_code or not await dedupe_mgr.is_bootstrapped(db, guild_id, "go_alert", channel_id):
         if bootstrap_post_latest:
-            posted = False
             for m in reversed(msgs_sorted):  # newest-first
                 major = _is_major(m)
                 if poll_level == "major" and not major:
@@ -341,16 +350,21 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
                     posted_dt=m.posted_dt,
                     lines=m.lines,
                 )
-                try:
-                    await channel.send(embed=embed)  # type: ignore[call-arg]
-                    posted = True
-                    break
-                except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-                    print(f"[GO] post failed: {format_exception_safe(e, secrets)}")
-                    if raise_on_error:
-                        raise
-                    break
-            _ = posted
+                ok, send_status = await safe_send_alert(
+                    bot,
+                    channel_id,
+                    embed=embed,
+                    fallback_text=f"GO {level}: {m.subject_en or ''} - {m.body_en or ''}".strip(),
+                )
+                if not ok and raise_on_error:
+                    raise RuntimeError(f"GO post failed: {send_status}")
+                break
+
+        # Checkpoint all existing items in dedupe manager to prevent historic dumping
+        for m in msgs_sorted:
+            h = compute_content_hash(f"{m.status}:{m.subject_en}:{m.body_en}:{','.join(m.lines)}")
+            await dedupe_mgr.checkpoint_bootstrap_item(db, guild_id, "go_alert", channel_id, m.code, h)
+        await dedupe_mgr.mark_bootstrapped(db, guild_id, "go_alert", channel_id)
 
         await _set_meta(db, "go_last_servicealert_code", newest.code)
         if debug:
@@ -379,15 +393,15 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
                     posted_dt=m.posted_dt,
                     lines=m.lines,
                 )
-                try:
-                    await channel.send(embed=embed)  # type: ignore[call-arg]
-                    break
-                except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-                    print(f"[GO] post failed: {format_exception_safe(e, secrets)}")
-                    if raise_on_error:
-                        raise
-                    await _set_meta(db, "go_last_servicealert_code", newest.code)
-                    return
+                ok, send_status = await safe_send_alert(
+                    bot,
+                    channel_id,
+                    embed=embed,
+                    fallback_text=f"GO {level}: {m.subject_en or ''} - {m.body_en or ''}".strip(),
+                )
+                if not ok and raise_on_error:
+                    raise RuntimeError(f"GO post failed: {send_status}")
+                break
         await _set_meta(db, "go_last_servicealert_code", newest.code)
         return
 
@@ -405,21 +419,38 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
             await _set_meta(db, "go_last_servicealert_code", m.code)
             continue
 
+        h = compute_content_hash(f"{m.status}:{m.subject_en}:{m.body_en}:{','.join(m.lines)}")
+        lifecycle = await dedupe_mgr.check_alert(db, guild_id, "go_alert", channel_id, m.code, h)
+        if lifecycle == AlertLifecycleStatus.IDENTICAL_DUPLICATE:
+            continue
+
+        headline = (
+            f"[UPDATE] {m.subject_en}"
+            if lifecycle == AlertLifecycleStatus.MATERIAL_UPDATE and m.subject_en
+            else (m.subject_en or "GO Transit Alert")
+        )
         level = "MAJOR" if major else "INFO"
         embed = go_alert_embed(
             settings,
-            headline=m.subject_en or "GO Transit Alert",
+            headline=headline,
             details=m.body_en or None,
             level=level,
             meta=f"{m.category or ''} {m.subcategory or ''}".strip() or None,
             posted_dt=m.posted_dt,
             lines=m.lines,
         )
-        try:
-            await channel.send(embed=embed)  # type: ignore[call-arg]
-        except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-            print(f"[GO] post failed: {format_exception_safe(e, secrets)}")
+
+        ok, send_status = await safe_send_alert(
+            bot,
+            channel_id,
+            embed=embed,
+            fallback_text=f"GO {level}: {headline} - {m.body_en or ''}".strip(),
+        )
+        if not ok:
+            print(f"[GO] post failed: {send_status}")
             if raise_on_error:
-                raise
+                raise RuntimeError(f"GO post failed: {send_status}")
             return
+
+        await dedupe_mgr.record_delivery(db, guild_id, "go_alert", channel_id, m.code, h)
         await _set_meta(db, "go_last_servicealert_code", m.code)

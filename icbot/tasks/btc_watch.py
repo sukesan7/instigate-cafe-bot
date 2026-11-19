@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
 
 import aiohttp
-import aiosqlite
 import discord
 
 from icbot.container import get_container
 from icbot.embeds import system as system_embed
 from icbot.errors import format_exception_safe
+from icbot.services.alert_dedupe import (
+    AlertDedupeManager,
+    AlertLifecycleStatus,
+    compute_content_hash,
+    mask_btc_address,
+    safe_send_alert,
+    sanitize_btc_addresses,
+)
 from icbot.services.btc_esplora import DEFAULT_BASE_URL, fetch_address_txs
 
 
@@ -104,11 +110,16 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
 
     base_url = str(getattr(settings, "btc_esplora_base_url", "") or "").strip() or DEFAULT_BASE_URL
     label = str(getattr(settings, "btc_watch_label", "BTC Watch") or "BTC Watch").strip()
-    addresses = _parse_list(getattr(settings, "btc_watch_addresses", None))
+    addresses = sanitize_btc_addresses(getattr(settings, "btc_watch_addresses", None), max_addresses=50)
     if not addresses:
         if debug:
-            print("[BTC] enabled but no BTC_WATCH_ADDRESSES configured")
+            print("[BTC] enabled but no valid BTC_WATCH_ADDRESSES configured")
         return
+
+    guild = getattr(ch, "guild", None)
+    guild_id = int(getattr(guild, "id", 0) or 0)
+    dedupe_mgr = AlertDedupeManager(clock=container.clock)
+    bootstrap_post = bool(getattr(settings, "btc_bootstrap_post", True))
 
     # Optional global cooldown to prevent spam if you watch many addresses
     cooldown_min = int(getattr(settings, "btc_watch_cooldown_minutes", 30) or 30)
@@ -126,7 +137,7 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
 
     any_fetch_ok = False
     last_fetch_err: BaseException | None = None
-    for addr in addresses[:50]:  # hard cap for safety
+    for addr in addresses:
         try:
             if container.fetch_address_txs_fn is not None:
                 txs = await container.fetch_address_txs_fn(addr, base_url=base_url, limit=5)
@@ -136,77 +147,80 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
         except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError, KeyError) as e:
             last_fetch_err = e
             if debug:
-                print(f"[BTC] fetch failed addr={_short_addr(addr)} err={format_exception_safe(e, secrets)}")
+                print(
+                    f"[BTC] fetch failed addr={mask_btc_address(addr)} err={format_exception_safe(e, secrets)}"
+                )
             continue
 
         if not txs:
             continue
 
         newest = txs[0]
+        if not newest.txid:
+            continue
+
         last_txid = (await _get_meta(db, f"btc_last_tx:{addr}")).strip()
+        h = compute_content_hash(f"{newest.confirmed}:{newest.value_sats}:{newest.block_time}")
+        entity_id = f"{addr}:{newest.txid}"
 
-        if newest.txid and newest.txid != last_txid:
-            # Post alert
-            val_btc = _sats_to_btc(newest.value_sats)
-            status = "CONFIRMED" if newest.confirmed else "PENDING"
-            t = f"<t:{newest.block_time}:R>" if newest.block_time else "(time n/a)"
-            tx_url = f"https://blockstream.info/tx/{newest.txid}"
+        # Bootstrap: checkpoint without posting unless btc_bootstrap_post=True
+        if (
+            not last_txid or not await dedupe_mgr.is_bootstrapped(db, guild_id, "btc_watch", channel_id)
+        ) and not bootstrap_post:
+            await _set_meta(db, f"btc_last_tx:{addr}", newest.txid)
+            await dedupe_mgr.checkpoint_bootstrap_item(db, guild_id, "btc_watch", channel_id, entity_id, h)
+            await dedupe_mgr.mark_bootstrapped(db, guild_id, "btc_watch", channel_id)
+            if debug:
+                print(f"[BTC] bootstrap checkpoint addr={mask_btc_address(addr)} txid={newest.txid[:8]}")
+            continue
 
-            fields = [
-                ("Address", f"`{addr}`", False),
-                ("Tx", f"{tx_url}", False),
-                ("Net flow", _fmt_btc(val_btc), True),
-                ("Status", f"{status} • {t}", True),
-            ]
+        lifecycle = await dedupe_mgr.check_alert(db, guild_id, "btc_watch", channel_id, entity_id, h)
+        if lifecycle == AlertLifecycleStatus.IDENTICAL_DUPLICATE:
+            continue
 
-            embed = system_embed(
-                settings,
-                title=f"₿ {label} movement",
-                summary=f"New transaction detected for **{_short_addr(addr)}**",
-                fields=fields,
-                footer_hint=f"cooldown {cooldown_min}m",
-            )
+        # Post alert for new transaction or material confirmation update
+        val_btc = _sats_to_btc(newest.value_sats)
+        status = "CONFIRMED" if newest.confirmed else "PENDING"
+        t = f"<t:{newest.block_time}:R>" if newest.block_time else "(time n/a)"
+        tx_url = f"https://blockstream.info/tx/{newest.txid}"
 
-            try:
-                await ch.send(embed=embed)
-                await _set_meta(db, f"btc_last_tx:{addr}", newest.txid)
-                await _set_meta(db, "btc_last_alert_any", str(now))
-                if debug:
-                    print(f"[BTC] posted alert addr={_short_addr(addr)} txid={newest.txid[:10]}…")
-                # Respect global cooldown: one alert per run
-                return
-            except discord.Forbidden:
-                try:
-                    await ch.send(f"₿ {label}: {addr} moved ({status}) {tx_url}")
-                    await _set_meta(db, f"btc_last_tx:{addr}", newest.txid)
-                    await _set_meta(db, "btc_last_alert_any", str(now))
-                    return
-                except (
-                    discord.DiscordException,
-                    aiosqlite.Error,
-                    sqlite3.Error,
-                    RuntimeError,
-                    OSError,
-                    ValueError,
-                ) as e:
-                    if debug:
-                        print(f"[BTC] send failed (forbidden fallback): {format_exception_safe(e, secrets)}")
-                    if raise_on_error:
-                        raise
-                    return
-            except (
-                discord.DiscordException,
-                aiosqlite.Error,
-                sqlite3.Error,
-                RuntimeError,
-                OSError,
-                ValueError,
-            ) as e:
-                if debug:
-                    print(f"[BTC] send failed: {format_exception_safe(e, secrets)}")
-                if raise_on_error:
-                    raise
-                return
+        headline_prefix = (
+            "[CONFIRMED]"
+            if lifecycle == AlertLifecycleStatus.MATERIAL_UPDATE and newest.confirmed
+            else "New transaction"
+        )
+
+        fields = [
+            ("Address", f"`{mask_btc_address(addr)}`", False),
+            ("Tx", f"{tx_url}", False),
+            ("Net flow", _fmt_btc(val_btc), True),
+            ("Status", f"{status} • {t}", True),
+        ]
+
+        embed = system_embed(
+            settings,
+            title=f"₿ {label} movement",
+            summary=f"{headline_prefix} detected for **{mask_btc_address(addr)}**",
+            fields=fields,
+            footer_hint=f"cooldown {cooldown_min}m • Data source: blockstream.info",
+        )
+
+        fallback = f"₿ {label}: {mask_btc_address(addr)} moved ({status}) {tx_url}"
+        ok, send_status = await safe_send_alert(bot, channel_id, embed=embed, fallback_text=fallback)
+        if not ok:
+            if debug:
+                print(f"[BTC] send failed: {send_status}")
+            if raise_on_error:
+                raise RuntimeError(f"BTC send failed: {send_status}")
+            return
+
+        await dedupe_mgr.record_delivery(db, guild_id, "btc_watch", channel_id, entity_id, h)
+        await dedupe_mgr.mark_bootstrapped(db, guild_id, "btc_watch", channel_id)
+        await _set_meta(db, f"btc_last_tx:{addr}", newest.txid)
+        await _set_meta(db, "btc_last_alert_any", str(now))
+        if debug:
+            print(f"[BTC] posted alert addr={mask_btc_address(addr)} txid={newest.txid[:10]}…")
+        return
 
     if raise_on_error and not any_fetch_ok and last_fetch_err is not None:
         raise last_fetch_err

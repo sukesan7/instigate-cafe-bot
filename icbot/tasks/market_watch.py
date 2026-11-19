@@ -8,6 +8,13 @@ import discord
 from icbot.container import get_container
 from icbot.embeds import system as system_embed
 from icbot.errors import format_exception_safe
+from icbot.services.alert_dedupe import (
+    FINANCIAL_DISCLAIMER,
+    AlertDedupeManager,
+    compute_content_hash,
+    format_financial_embed_footer,
+    safe_send_alert,
+)
 from icbot.services.yahoo_quotes import Quote, fetch_quotes
 
 
@@ -317,40 +324,38 @@ async def poll_and_post_market_watch(bot: discord.Client, *, raise_on_error: boo
     if snap_lines:
         fields.append(("Snapshot", "\n".join(snap_lines), False))
     fields.append(("Triggered", "\n".join(alerts), False))
+    fields.append(("Notice", FINANCIAL_DISCLAIMER, False))
+
+    now_ts = int(container.clock())
+    footer_text = format_financial_embed_footer("Yahoo Finance", now_ts, extra="Market Volatility Tracker")
 
     embed = system_embed(
         settings,
         title=title,
         summary=subtitle,
         fields=fields,
-        footer_hint="Market Volatility Tracker",
+        footer_hint=footer_text,
     )
 
     if debug:
         print(f"[MARKET] posting alert -> channel_id={channel_id}")
 
-    try:
-        msg = await ch.send(embed=embed)
+    guild = getattr(ch, "guild", None)
+    guild_id = int(getattr(guild, "id", 0) or 0)
+    dedupe_mgr = AlertDedupeManager(clock=container.clock)
+
+    plain_text = f"⚠️ Market Volatility | {market_state}\n" + "\n".join(alerts) + f"\n\n{FINANCIAL_DISCLAIMER}"
+    ok, send_status = await safe_send_alert(bot, channel_id, embed=embed, fallback_text=plain_text)
+    if not ok:
         if debug:
-            print(f"[MARKET] posted ok: message_id={getattr(msg, 'id', 'n/a')}")
-    except discord.Forbidden:
-        # Fallback to plain text if Embed Links is blocked
-        text = f"⚠️ Market Volatility | {market_state}\n" + "\n".join(alerts)
-        try:
-            msg = await ch.send(text)
-            if debug:
-                print(f"[MARKET] posted plain-text ok: message_id={getattr(msg, 'id', 'n/a')}")
-        except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-            if debug:
-                print(
-                    f"[MARKET] ERROR: forbidden + plain-text send failed: {format_exception_safe(e, secrets)}"
-                )
-            if raise_on_error:
-                raise
-        return
-    except (discord.DiscordException, RuntimeError, OSError, ValueError) as e:
-        if debug:
-            print(f"[MARKET] ERROR: send failed: {format_exception_safe(e, secrets)}")
+            print(f"[MARKET] send failed: {send_status}")
         if raise_on_error:
-            raise
+            raise RuntimeError(f"Market watch send failed: {send_status}")
         return
+
+    content_hash = compute_content_hash("\n".join(alerts))
+    await dedupe_mgr.record_delivery(
+        db, guild_id, "market_volatility", channel_id, f"mv_{now_ts}", content_hash
+    )
+    if debug:
+        print(f"[MARKET] posted ok: status={send_status}")
