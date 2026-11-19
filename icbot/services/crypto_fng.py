@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
 
 from icbot.errors import ProviderError, parse_retry_after, redact_secrets
+from icbot.services.http_transport import ProviderProvenance, ProviderResult
 
 """Crypto Fear & Greed Index (alternative.me).
 
@@ -85,3 +88,23 @@ async def fetch_fear_greed(*, session: aiohttp.ClientSession | None = None) -> F
     if val is None:
         return None
     return FearGreed(value=val, value_classification=cls, timestamp=ts)
+
+
+async def fetch_fear_greed_provenance(
+    *,
+    session: aiohttp.ClientSession | None = None,
+    clock: Callable[[], float] | None = None,
+) -> ProviderResult[FearGreed | None]:
+    """Fetch Fear & Greed index wrapped in a ProviderResult with provenance."""
+    fng = await fetch_fear_greed(session=session)
+    now = clock() if clock is not None else time.time()
+    source_ts: float | None = float(fng.timestamp) if fng is not None and fng.timestamp is not None else None
+    prov = ProviderProvenance(
+        source="crypto_fng",
+        source_url=FNG_URL,
+        fetched_at=now,
+        source_timestamp=source_ts,
+        status_code=200,
+        content_length=1 if fng is not None else 0,
+    )
+    return ProviderResult(data=fng, provenance=prov)

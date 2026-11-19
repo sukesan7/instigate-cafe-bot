@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import html
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 import aiohttp
 
-from icbot.errors import ProviderError, parse_retry_after
+from icbot.errors import parse_retry_after
+from icbot.services.http_transport import ProviderProvenance, ProviderResult, TransportError
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -27,7 +31,7 @@ class TTCItem:
     published_iso: str | None
 
 
-class TTCFetchError(ProviderError):
+class TTCFetchError(TransportError):
     pass
 
 
@@ -186,3 +190,60 @@ async def fetch_account_status_items(
             )
 
     return out
+
+
+def _parse_published_timestamp(iso_str: str | None) -> float | None:
+    if not iso_str:
+        return None
+    try:
+        raw = iso_str.strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        return datetime.fromisoformat(raw).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+async def fetch_account_status_items_provenance(
+    session: aiohttp.ClientSession,
+    api_base: str,
+    account_id: str,
+    *,
+    since_id: str | None = None,
+    limit: int = 20,
+    timeout_seconds: int = 14,
+    include_replies: bool = True,
+    include_reblogs: bool = False,
+    clock: Callable[[], float] | None = None,
+) -> ProviderResult[list[TTCItem]]:
+    """Fetch status items and return them wrapped in a ProviderResult with provenance."""
+    api_base_norm = _norm_base(api_base)
+    url = f"{api_base_norm}/api/v1/accounts/{account_id}/statuses"
+    items = await fetch_account_status_items(
+        session,
+        api_base_norm,
+        account_id,
+        since_id=since_id,
+        limit=limit,
+        timeout_seconds=timeout_seconds,
+        include_replies=include_replies,
+        include_reblogs=include_reblogs,
+    )
+    now = clock() if clock is not None else time.time()
+    source_ts: float | None = None
+    if items:
+        for it in items:
+            ts = _parse_published_timestamp(it.published_iso)
+            if ts is not None:
+                source_ts = ts
+                break
+
+    prov = ProviderProvenance(
+        source="ttc_mastodon",
+        source_url=url,
+        fetched_at=now,
+        source_timestamp=source_ts,
+        status_code=200,
+        content_length=len(items),
+    )
+    return ProviderResult(data=items, provenance=prov)

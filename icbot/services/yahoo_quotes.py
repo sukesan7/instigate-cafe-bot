@@ -10,6 +10,7 @@ from typing import Any
 import aiohttp
 
 from icbot.errors import ProviderError, parse_retry_after, redact_secrets
+from icbot.services.http_transport import ProviderProvenance, ProviderResult
 
 """Yahoo Finance quote fetcher.
 
@@ -372,3 +373,31 @@ async def fetch_quotes(
     if not out and last_err is not None:
         raise last_err
     return out
+
+
+async def fetch_quotes_provenance(
+    symbols: list[str],
+    *,
+    debug: bool = False,
+    session: aiohttp.ClientSession | None = None,
+    crumb_cache: YahooCrumbCache | None = None,
+    clock: Callable[[], float] | None = None,
+) -> ProviderResult[dict[str, Quote]]:
+    """Fetch quotes and return them wrapped in a ProviderResult with provenance."""
+    quotes = await fetch_quotes(
+        symbols,
+        debug=debug,
+        session=session,
+        crumb_cache=crumb_cache,
+        clock=clock,
+    )
+    now = clock() if clock is not None else time.time()
+    prov = ProviderProvenance(
+        source="yahoo_finance",
+        source_url=YF_QUOTE_ENDPOINTS[0],
+        fetched_at=now,
+        source_timestamp=now,
+        status_code=200,
+        content_length=len(quotes),
+    )
+    return ProviderResult(data=quotes, provenance=prov)

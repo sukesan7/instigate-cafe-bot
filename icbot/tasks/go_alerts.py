@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import ssl
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -14,6 +13,7 @@ from icbot.container import get_container
 from icbot.embeds import go_alert as go_alert_embed
 from icbot.errors import format_exception_safe
 from icbot.services.go_client import GOFetchError, GOMessage, fetch_service_alerts
+from icbot.services.http_transport import build_ssl_context
 
 log = logging.getLogger(__name__)
 _MIN_DT = datetime.min.replace(tzinfo=UTC)
@@ -123,28 +123,15 @@ def _matches_allowlist(m: GOMessage, allow: set[str]) -> bool:
 def _make_go_connector(settings) -> aiohttp.TCPConnector:
     """Build an aiohttp connector with a CA bundle that works on Windows venvs.
 
-    If GO_SSL_VERIFY=false, verification is disabled (not recommended).
+    If GO_SSL_VERIFY=false, verification is disabled and a security warning is logged.
     If GO_CA_BUNDLE_PATH is set, that PEM file is used.
     Otherwise we try certifi (added to requirements.txt).
     """
     verify = bool(getattr(settings, "go_ssl_verify", True))
-    if not verify:
-        return aiohttp.TCPConnector(ssl=False)
-
     cafile = str(getattr(settings, "go_ca_bundle_path", "") or "").strip()
-    try:
-        if cafile:
-            ssl_ctx = ssl.create_default_context(cafile=cafile)
-        else:
-            try:
-                import certifi  # type: ignore
-
-                ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-            except (ImportError, OSError, ssl.SSLError, ValueError):
-                ssl_ctx = ssl.create_default_context()
-    except (OSError, ssl.SSLError, ValueError):
-        ssl_ctx = ssl.create_default_context()
-
+    ssl_ctx = build_ssl_context(verify=verify, ca_bundle_path=cafile if cafile else None)
+    if ssl_ctx is False:
+        return aiohttp.TCPConnector(ssl=False)
     return aiohttp.TCPConnector(ssl=ssl_ctx)
 
 

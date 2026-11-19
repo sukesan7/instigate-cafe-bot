@@ -9,7 +9,8 @@ from typing import Any
 
 import aiohttp
 
-from icbot.errors import ProviderError, parse_retry_after, redact_secrets
+from icbot.errors import parse_retry_after, redact_secrets
+from icbot.services.http_transport import ProviderProvenance, ProviderResult, TransportError
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ class SportEvent:
     away_team: str
 
 
-class OddsAPIError(ProviderError):
+class OddsAPIError(TransportError):
     pass
 
 
@@ -54,6 +55,7 @@ class OddsAPIClient:
         self._session = session
         self._clock = clock
         self._cache: dict[str, tuple[float, Any]] = {}
+        self._last_from_cache: bool = False
 
     def _now(self) -> float:
         return self._clock() if self._clock is not None else time.time()
@@ -80,7 +82,9 @@ class OddsAPIClient:
         cache_key = f"{url}?{sorted(req_params.items())}"
         cached = self._cache_get(cache_key)
         if cached is not None:
+            self._last_from_cache = True
             return cached
+        self._last_from_cache = False
 
         req_params["apiKey"] = self.api_key
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
@@ -157,6 +161,24 @@ class OddsAPIClient:
 
         events.sort(key=lambda x: x.commence_time)
         return events
+
+    async def get_events_provenance(
+        self, sport_key: str, *, days_from: int = 7
+    ) -> ProviderResult[list[SportEvent]]:
+        """Fetch upcoming events with provider provenance tracking and cache awareness."""
+        events = await self.get_events(sport_key, days_from=days_from)
+        now = self._now()
+        source_ts = events[0].commence_time.timestamp() if events else None
+        prov = ProviderProvenance(
+            source="the_odds_api",
+            source_url=f"{ODDS_BASE_URL}/sports/{sport_key}/events",
+            fetched_at=now,
+            source_timestamp=source_ts,
+            from_cache=self._last_from_cache,
+            status_code=200,
+            content_length=len(events),
+        )
+        return ProviderResult(data=events, provenance=prov)
 
     async def get_upcoming(self, sport_key: str, *, limit: int = 5, days_from: int = 7) -> list[SportEvent]:
         events = await self.get_events(sport_key, days_from=days_from)

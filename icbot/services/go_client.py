@@ -2,18 +2,25 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import aiohttp
 
-from icbot.errors import ProviderError, parse_retry_after, redact_secrets
+from icbot.errors import parse_retry_after, redact_secrets
+from icbot.services.http_transport import ProviderProvenance, ProviderResult, TransportError
 
 log = logging.getLogger(__name__)
 
+_TORONTO_TZ = ZoneInfo("America/Toronto")
 
-class GOFetchError(ProviderError):
+
+class GOFetchError(TransportError):
     pass
 
 
@@ -144,3 +151,59 @@ async def fetch_service_alerts(
 
     msgs = _parse_messages(payload)
     return msgs
+
+
+def parse_toronto_timestamp(dt_str: str | None) -> float | None:
+    """Parse a GO Transit datetime string into a UTC epoch timestamp in America/Toronto."""
+    if not dt_str:
+        return None
+    raw = dt_str.strip()
+    try:
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_TORONTO_TZ)
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(raw, fmt).replace(tzinfo=_TORONTO_TZ)
+            return dt.timestamp()
+        except ValueError:
+            pass
+    return None
+
+
+async def fetch_service_alerts_provenance(
+    session: aiohttp.ClientSession,
+    api_base: str,
+    access_key: str,
+    *,
+    timeout_seconds: int = 18,
+    clock: Callable[[], float] | None = None,
+) -> ProviderResult[list[GOMessage]]:
+    """Fetch service alerts and return them wrapped in a ProviderResult with provenance."""
+    msgs = await fetch_service_alerts(
+        session,
+        api_base,
+        access_key,
+        timeout_seconds=timeout_seconds,
+    )
+    now = clock() if clock is not None else time.time()
+    source_ts: float | None = None
+    if msgs:
+        for m in msgs:
+            ts = parse_toronto_timestamp(m.posted_dt)
+            if ts is not None and (source_ts is None or ts > source_ts):
+                source_ts = ts
+
+    clean_base = (api_base or "").rstrip("/")
+    prov = ProviderProvenance(
+        source="go_transit",
+        source_url=f"{clean_base}/ServiceUpdate/ServiceAlert/All",
+        fetched_at=now,
+        source_timestamp=source_ts,
+        status_code=200,
+        content_length=len(msgs),
+    )
+    return ProviderResult(data=msgs, provenance=prov)

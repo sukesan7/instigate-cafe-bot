@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
 
 from icbot.errors import ProviderError, parse_retry_after, redact_secrets
+from icbot.services.http_transport import ProviderProvenance, ProviderResult
 
 """Lightweight Bitcoin address watcher using an Esplora-compatible API.
 
@@ -143,3 +146,38 @@ async def fetch_address_txs(
             )
         )
     return out
+
+
+async def fetch_address_txs_provenance(
+    address: str,
+    *,
+    base_url: str = DEFAULT_BASE_URL,
+    limit: int = 10,
+    session: aiohttp.ClientSession | None = None,
+    clock: Callable[[], float] | None = None,
+) -> ProviderResult[list[AddressTx]]:
+    """Return newest txs for an address wrapped in a ProviderResult with provenance."""
+    txs = await fetch_address_txs(
+        address,
+        base_url=base_url,
+        limit=limit,
+        session=session,
+    )
+    now = clock() if clock is not None else time.time()
+    source_ts: float | None = None
+    if txs:
+        for t in txs:
+            if t.block_time is not None:
+                source_ts = float(t.block_time)
+                break
+
+    clean_base = base_url.rstrip("/")
+    prov = ProviderProvenance(
+        source="esplora_btc",
+        source_url=f"{clean_base}/address/{address}/txs",
+        fetched_at=now,
+        source_timestamp=source_ts,
+        status_code=200,
+        content_length=len(txs),
+    )
+    return ProviderResult(data=txs, provenance=prov)
