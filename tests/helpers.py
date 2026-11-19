@@ -268,6 +268,7 @@ class FakeFollowup:
         )
         self.messages.append(msg)
         self._response._interaction._sync_original_message(msg)
+        assert self._response._interaction._original_message is not None
         return self._response._interaction._original_message
 
 

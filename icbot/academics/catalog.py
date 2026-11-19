@@ -26,6 +26,7 @@ class ManualResourceCatalogStore:
     def __init__(self, db: Database, *, clock: Callable[[], float] | None = None) -> None:
         self.db = db
         self._clock = clock
+        self._cache: dict[tuple[int, str], Course | None] = {}
 
     def _now(self) -> int:
         return int(self._clock() if self._clock is not None else time.time())
@@ -72,6 +73,11 @@ class ManualResourceCatalogStore:
                 now_ts,
             ),
         )
+        # Invalidate guild course cache on write
+        to_del = [k for k in self._cache if k[0] == int(guild_id)]
+        for k in to_del:
+            self._cache.pop(k, None)
+
         return Course(
             display_code=display_code,
             normalized_key=norm_key,
@@ -94,6 +100,10 @@ class ManualResourceCatalogStore:
         if not key:
             return None
 
+        cache_key = (int(guild_id), key)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
         row = await self.db.fetchone(
             """
             SELECT display_code, normalized_key, title, campus_id, department_code, aliases_json, term
@@ -102,23 +112,29 @@ class ManualResourceCatalogStore:
             """,
             (int(guild_id), key),
         )
+        res: Course | None = None
         if row:
-            return self._row_to_course(row)
+            res = self._row_to_course(row)
+        else:
+            # Fallback: scan guild courses for stored alias match
+            rows = await self.db.fetchall(
+                """
+                SELECT display_code, normalized_key, title, campus_id, department_code, aliases_json, term
+                FROM academic_courses
+                WHERE guild_id = ?
+                """,
+                (int(guild_id),),
+            )
+            for candidate_row in rows:
+                c = self._row_to_course(candidate_row)
+                if key in c.aliases:
+                    res = c
+                    break
 
-        # Fallback: scan guild courses for stored alias match
-        rows = await self.db.fetchall(
-            """
-            SELECT display_code, normalized_key, title, campus_id, department_code, aliases_json, term
-            FROM academic_courses
-            WHERE guild_id = ?
-            """,
-            (int(guild_id),),
-        )
-        for candidate_row in rows:
-            c = self._row_to_course(candidate_row)
-            if key in c.aliases:
-                return c
-        return None
+        if len(self._cache) >= 1024:
+            self._cache.clear()
+        self._cache[cache_key] = res
+        return res
 
     async def list_courses(self, guild_id: int) -> list[Course]:
         rows = await self.db.fetchall(

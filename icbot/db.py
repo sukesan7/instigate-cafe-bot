@@ -90,9 +90,29 @@ class Transaction:
         return [tuple(r) for r in rows]
 
     async def execute_many(self, statements: Sequence[tuple[str, Sequence[Any]]]) -> None:
-        """Execute multiple SQL statements sequentially within this transaction."""
+        """Execute multiple SQL statements within this transaction, batching contiguous identical statements via executemany."""
+        if not statements:
+            return
+        current_sql: str | None = None
+        current_params: list[Sequence[Any]] = []
         for sql, params in statements:
-            await self._conn.execute(sql, params)
+            if current_sql is None:
+                current_sql = sql
+                current_params = [params]
+            elif sql == current_sql:
+                current_params.append(params)
+            else:
+                if len(current_params) == 1:
+                    await self._conn.execute(current_sql, current_params[0])
+                else:
+                    await self._conn.executemany(current_sql, current_params)
+                current_sql = sql
+                current_params = [params]
+        if current_sql is not None and current_params:
+            if len(current_params) == 1:
+                await self._conn.execute(current_sql, current_params[0])
+            else:
+                await self._conn.executemany(current_sql, current_params)
 
 
 # ---------------------------------------------------------------------------

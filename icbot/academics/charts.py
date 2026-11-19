@@ -215,7 +215,9 @@ def render_grade_distribution_chart(
         canvas.print_png(buf)
         png_bytes = buf.getvalue()
     finally:
-        fig.clear()
+        fig.clear(keep_observers=False)
+        canvas.figure = None  # type: ignore[assignment]
+        fig.canvas = None  # type: ignore[assignment]
 
     if not png_bytes.startswith(_PNG_MAGIC):
         raise ChartRenderError("Rendered chart output did not produce valid PNG bytes.")
