@@ -421,6 +421,27 @@ class ServiceContainer:
             clock=self.clock,
         )
 
+    def casino_service(
+        self,
+        settings: Settings | None = None,
+        *,
+        db: Database | None = None,
+        guild_id: int | None = None,
+    ) -> Any:
+        from icbot.services.casino_service import CasinoService
+
+        eff_settings = settings or self.settings
+        eff_db = db if db is not None else self.db
+        if eff_db is None:
+            raise RuntimeError("Database is not initialized on ServiceContainer")
+        gid = int(guild_id) if guild_id is not None else int(getattr(eff_settings, "guild_id", 0) or 0)
+        return CasinoService(
+            eff_db,
+            starting_bankroll=int(getattr(eff_settings, "bj_starting_bankroll", 1000) or 1000),
+            guild_id=gid,
+            clock=self.clock,
+        )
+
     def build_odds_client(self, settings: Settings | None = None) -> OddsAPIClient:
         eff_settings = settings or self.settings
         if self.odds_client_factory is not None:

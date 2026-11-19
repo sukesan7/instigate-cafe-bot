@@ -29,11 +29,22 @@ class SlotResult:
     match_type: str  # "three", "two", "none"
 
 
-def spin(bet: int) -> SlotResult:
-    """Spin the 3-reel slot machine."""
-    r1 = random.choice(_POOL)
-    r2 = random.choice(_POOL)
-    r3 = random.choice(_POOL)
+def spin(bet: int, rng: random.Random | None = None, seed: int | None = None) -> SlotResult:
+    """Spin the 3-reel slot machine with optional deterministic RNG or seed injection."""
+    bet = int(bet)
+    if bet <= 0:
+        raise ValueError("Bet must be >= 1.")
+
+    if rng is not None:
+        picker = rng.choice
+    elif seed is not None:
+        picker = random.Random(seed).choice
+    else:
+        picker = random.choice
+
+    r1 = picker(_POOL)
+    r2 = picker(_POOL)
+    r3 = picker(_POOL)
 
     reel1, _ = r1
     reel2, _ = r2

@@ -6,6 +6,7 @@ from discord import app_commands
 from icbot.app import casino
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import game as game_embed
+from icbot.errors import InsufficientBalanceError
 from icbot.games.roulette_engine import (
     color_emoji,
     color_square,
@@ -13,7 +14,7 @@ from icbot.games.roulette_engine import (
     spin,
 )
 from icbot.registry import guard_feature
-from icbot.services.user_service import InsufficientBalanceError
+from icbot.services.casino_service import InvalidWagerError
 
 VALID_BET_TYPES = {
     "red",
@@ -120,17 +121,25 @@ async def roulette_cmd(
                 )
                 return
 
-    # Deduct balance
-    store = get_container(interaction.client).user_store(settings)
-    await store.ensure_user(
-        interaction.user.id,
-        display_name=interaction.user.display_name,
-        avatar_url=str(interaction.user.display_avatar.url) if interaction.user.display_avatar else "",
-    )
+    # Deduct balance via consolidated transactional casino domain service
+    casino_svc = get_container(interaction.client).casino_service(settings)
     try:
-        await store.subtract_balance(interaction.user.id, bet)
+        val_bet = casino_svc.validate_wager(bet)
+    except InvalidWagerError as e:
+        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        return
+
+    try:
+        reservation = await casino_svc.reserve_wager(
+            interaction.guild_id or 0,
+            interaction.user.id,
+            val_bet,
+            "roulette",
+            display_name=interaction.user.display_name,
+            avatar_url=str(interaction.user.display_avatar.url) if interaction.user.display_avatar else "",
+        )
     except InsufficientBalanceError:
-        balance = await store.get_balance(interaction.user.id)
+        balance = await casino_svc.get_balance(interaction.user.id, guild_id=interaction.guild_id or 0)
         await interaction.response.send_message(
             f"❌ Insufficient balance. You have **${balance}**, need **${bet}**.",
             ephemeral=True,
@@ -139,13 +148,17 @@ async def roulette_cmd(
 
     # Spin and evaluate
     result = spin()
-    outcome = evaluate(bt, bet_target, bet, result)
+    outcome = evaluate(bt, bet_target, val_bet, result)
 
-    # Credit winnings (if any)
-    if outcome.payout > 0:
-        await store.add_balance(interaction.user.id, outcome.payout)
-
-    new_balance = await store.get_balance(interaction.user.id)
+    # Settle transactionally
+    settlement = await casino_svc.settle_wager(
+        reservation,
+        payout_amount=outcome.payout,
+        net_delta=outcome.net,
+        outcome="win" if outcome.won else "loss",
+        details={"spin": result.display, "color": result.color, "bet_type": bt, "target": bet_target},
+    )
+    new_balance = settlement.balance_after
 
     # Build embed
     ce = color_emoji(result.color)

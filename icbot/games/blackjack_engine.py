@@ -29,10 +29,14 @@ class Deck:
     cards: list[Card] = field(default_factory=list)
 
     @staticmethod
-    def standard(shuffle: bool = True) -> Deck:
+    def standard(shuffle: bool = True, rng: random.Random | None = None, seed: int | None = None) -> Deck:
         cards = [Card(r, s) for s in SUITS for r in RANKS]
         if shuffle:
-            random.shuffle(cards)
+            r = rng if rng is not None else (random.Random(seed) if seed is not None else None)
+            if r is not None:
+                r.shuffle(cards)
+            else:
+                random.shuffle(cards)
         return Deck(cards=cards)
 
     def draw(self) -> Card:
@@ -44,16 +48,26 @@ class Deck:
 class Shoe:
     """Multi-deck shoe (standard casino: 6 decks, reshuffle at ~75% penetration)."""
 
-    def __init__(self, num_decks: int = 6, reshuffle_pct: float = 0.75):
+    def __init__(
+        self,
+        num_decks: int = 6,
+        reshuffle_pct: float = 0.75,
+        rng: random.Random | None = None,
+        seed: int | None = None,
+    ):
         self.num_decks = num_decks
         self.reshuffle_pct = reshuffle_pct
         self._total_cards = num_decks * 52
+        self.rng = rng if rng is not None else (random.Random(seed) if seed is not None else None)
         self.cards: list[Card] = []
         self._build_and_shuffle()
 
     def _build_and_shuffle(self) -> None:
         self.cards = [Card(r, s) for _ in range(self.num_decks) for s in SUITS for r in RANKS]
-        random.shuffle(self.cards)
+        if self.rng is not None:
+            self.rng.shuffle(self.cards)
+        else:
+            random.shuffle(self.cards)
 
     def needs_reshuffle(self) -> bool:
         dealt = self._total_cards - len(self.cards)
@@ -133,6 +147,9 @@ class GameState:
     dealer_hits_soft_17: bool = True
     max_splits: int = 1
     done: bool = False
+    forfeited: bool = False
+    timed_out: bool = False
+    history: list[str] = field(default_factory=list)
 
     def active_hand(self) -> Hand:
         return self.hands[self.active_index]
@@ -144,11 +161,22 @@ class GameState:
         self.hands[idx]._stood = True  # type: ignore[attr-defined]
 
     @staticmethod
-    def start(bet: int, dealer_hits_soft_17: bool = True, max_splits: int = 1) -> GameState:
+    def start(
+        bet: int,
+        dealer_hits_soft_17: bool = True,
+        max_splits: int = 1,
+        shoe: Shoe | None = None,
+        rng: random.Random | None = None,
+        seed: int | None = None,
+    ) -> GameState:
         bet = int(bet)
         if bet <= 0:
             raise ValueError("Bet must be >= 1.")
-        shoe = _get_shoe()
+        if shoe is None:
+            if rng is not None or seed is not None:
+                shoe = Shoe(num_decks=6, reshuffle_pct=0.75, rng=rng, seed=seed)
+            else:
+                shoe = _get_shoe()
         dealer = Hand()
         player = Hand()
         player.add(shoe.draw())
@@ -162,36 +190,53 @@ class GameState:
             bets=[bet],
             dealer_hits_soft_17=dealer_hits_soft_17,
             max_splits=max_splits,
+            history=["deal"],
         )
 
+    def can_hit(self) -> bool:
+        if self.done:
+            return False
+        h = self.active_hand()
+        return not self._hand_standing(self.active_index) and not h.is_bust()
+
+    def can_stand(self) -> bool:
+        if self.done:
+            return False
+        return not self._hand_standing(self.active_index) and not self.active_hand().is_bust()
+
     def can_double(self) -> bool:
+        if self.done:
+            return False
         h = self.active_hand()
         return len(h.cards) == 2 and not self._hand_standing(self.active_index) and not h.is_bust()
 
     def can_split(self) -> bool:
+        if self.done:
+            return False
         h = self.active_hand()
         return h.can_split() and self.splits_used < self.max_splits
 
     def hit(self) -> None:
-        if self.done:
+        if self.done or not self.can_hit():
             return
         h = self.active_hand()
-        if self._hand_standing(self.active_index):
-            return
         h.add(self.shoe.draw())
+        self.history.append(f"hit:hand_{self.active_index}")
         if h.is_bust():
             self._set_stand(self.active_index)
             self._advance_if_needed()
 
     def stand(self) -> None:
-        if self.done:
+        if self.done or not self.can_stand():
             return
+        self.history.append(f"stand:hand_{self.active_index}")
         self._set_stand(self.active_index)
         self._advance_if_needed()
 
     def double(self) -> None:
         if self.done or not self.can_double():
             return
+        self.history.append(f"double:hand_{self.active_index}")
         self.bets[self.active_index] *= 2
         h = self.active_hand()
         h.doubled = True
@@ -202,6 +247,7 @@ class GameState:
     def split(self) -> bool:
         if self.done or not self.can_split():
             return False
+        self.history.append(f"split:hand_{self.active_index}")
         h = self.active_hand()
         c1, c2 = h.cards
         h.cards = [c1]
@@ -224,6 +270,22 @@ class GameState:
             self._advance_if_needed()
 
         return True
+
+    def forfeit(self) -> list[tuple[str, int]]:
+        """Abandon the active hand, forfeiting active wagers."""
+        if not self.done:
+            self.forfeited = True
+            self.done = True
+            self.history.append("forfeit")
+        return [("forfeit", -b) for b in self.bets]
+
+    def timeout(self) -> list[tuple[str, int]]:
+        """Mark hand as timed out without further action, forfeiting wagers."""
+        if not self.done:
+            self.timed_out = True
+            self.done = True
+            self.history.append("timeout")
+        return [("timeout", -b) for b in self.bets]
 
     def _advance_if_needed(self) -> None:
         while self.active_index < len(self.hands) and (
@@ -249,6 +311,11 @@ class GameState:
         self.done = True
 
     def settle(self) -> list[tuple[str, int]]:
+        if self.forfeited:
+            return [("forfeit", -b) for b in self.bets]
+        if self.timed_out:
+            return [("timeout", -b) for b in self.bets]
+
         if not self.done:
             self._finish_round()
 

@@ -27,6 +27,23 @@ BetType = Literal[
 ]
 
 
+ROULETTE_PAYOUT_RATIOS: dict[str, int] = {
+    "straight": 35,
+    "red": 1,
+    "black": 1,
+    "even": 1,
+    "odd": 1,
+    "high": 1,
+    "low": 1,
+    "dozen1": 2,
+    "dozen2": 2,
+    "dozen3": 2,
+    "col1": 2,
+    "col2": 2,
+    "col3": 2,
+}
+
+
 @dataclass(frozen=True)
 class SpinResult:
     number: int  # 0-36, or -1 for 00
@@ -59,9 +76,14 @@ def _display_number(n: int) -> str:
     return str(n)
 
 
-def spin() -> SpinResult:
-    """Spin the wheel and return the result."""
-    n = random.choice(NUMBERS)
+def spin(rng: random.Random | None = None, seed: int | None = None) -> SpinResult:
+    """Spin the wheel and return the result with optional deterministic RNG or seed injection."""
+    if rng is not None:
+        n = rng.choice(NUMBERS)
+    elif seed is not None:
+        n = random.Random(seed).choice(NUMBERS)
+    else:
+        n = random.choice(NUMBERS)
     return SpinResult(number=n, color=_number_color(n), display=_display_number(n))
 
 

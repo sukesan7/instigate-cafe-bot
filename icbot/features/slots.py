@@ -6,9 +6,10 @@ from discord import app_commands
 from icbot.app import casino
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import game as game_embed
+from icbot.errors import InsufficientBalanceError
 from icbot.games.slots_engine import payout_table, reel_display, spin
 from icbot.registry import guard_feature
-from icbot.services.user_service import InsufficientBalanceError
+from icbot.services.casino_service import InvalidWagerError
 
 
 @casino.command(name="slots", description="Spin the slot machine!")
@@ -18,21 +19,25 @@ async def slots_cmd(interaction: discord.Interaction, bet: int = 10):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
 
-    if bet <= 0:
-        await interaction.response.send_message("❌ Bet must be at least $1.", ephemeral=True)
+    # Validate and deduct balance via consolidated transactional casino domain service
+    casino_svc = get_container(interaction.client).casino_service(settings)
+    try:
+        val_bet = casino_svc.validate_wager(bet)
+    except InvalidWagerError as e:
+        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
         return
 
-    # Deduct balance
-    store = get_container(interaction.client).user_store(settings)
-    await store.ensure_user(
-        interaction.user.id,
-        display_name=interaction.user.display_name,
-        avatar_url=str(interaction.user.display_avatar.url) if interaction.user.display_avatar else "",
-    )
     try:
-        await store.subtract_balance(interaction.user.id, bet)
+        reservation = await casino_svc.reserve_wager(
+            interaction.guild_id or 0,
+            interaction.user.id,
+            val_bet,
+            "slots",
+            display_name=interaction.user.display_name,
+            avatar_url=str(interaction.user.display_avatar.url) if interaction.user.display_avatar else "",
+        )
     except InsufficientBalanceError:
-        balance = await store.get_balance(interaction.user.id)
+        balance = await casino_svc.get_balance(interaction.user.id, guild_id=interaction.guild_id or 0)
         await interaction.response.send_message(
             f"❌ Insufficient balance. You have **${balance}**, need **${bet}**.",
             ephemeral=True,
@@ -40,13 +45,17 @@ async def slots_cmd(interaction: discord.Interaction, bet: int = 10):
         return
 
     # Spin
-    result = spin(bet)
+    result = spin(val_bet)
 
-    # Credit winnings (if any)
-    if result.payout > 0:
-        await store.add_balance(interaction.user.id, result.payout)
-
-    new_balance = await store.get_balance(interaction.user.id)
+    # Settle transactionally
+    settlement = await casino_svc.settle_wager(
+        reservation,
+        payout_amount=result.payout,
+        net_delta=result.net,
+        outcome=result.match_type,
+        details={"reels": list(result.reels), "multiplier": result.multiplier},
+    )
+    new_balance = settlement.balance_after
 
     # Build embed
     reels_str = reel_display(result.reels)
