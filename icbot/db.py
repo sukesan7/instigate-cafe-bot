@@ -301,6 +301,25 @@ async def _migrate_0001_baseline(tx: Transaction) -> None:
         """
     )
 
+    # Guild-defined fun stock catalog overrides
+    await tx.execute(
+        """
+        CREATE TABLE IF NOT EXISTS guild_stock_catalog (
+            guild_id    INTEGER NOT NULL,
+            symbol      TEXT    NOT NULL,
+            name        TEXT    NOT NULL,
+            start_price INTEGER NOT NULL DEFAULT 10,
+            category    TEXT    NOT NULL DEFAULT 'misc',
+            is_active   INTEGER NOT NULL DEFAULT 1,
+            description TEXT    NOT NULL DEFAULT '',
+            PRIMARY KEY (guild_id, symbol)
+        )
+        """
+    )
+    await tx.execute(
+        "CREATE INDEX IF NOT EXISTS idx_guild_stock_catalog_gid ON guild_stock_catalog(guild_id)"
+    )
+
     # Legacy $IC stock value baseline in meta
     row = await tx.fetchone("SELECT value FROM meta WHERE key='stock_value'")
     if row is None:

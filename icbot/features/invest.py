@@ -17,6 +17,68 @@ from icbot.registry import guard_feature
 from icbot.services.fun_market import FunMarketError, FunMarketStore, format_signed_money
 from icbot.utils import parse_signed_int
 
+SIMULATED_MARKET_DISCLAIMER = (
+    "Simulated Market Points • Strictly virtual entertainment points with zero monetary value."
+)
+
+
+class AdminMarketConfirmView(discord.ui.View):
+    """Two-button confirmation view for high-impact admin market actions."""
+
+    def __init__(
+        self,
+        *,
+        admin_user_id: int,
+        settings: Settings,
+        timeout: float = 60.0,
+    ) -> None:
+        super().__init__(timeout=timeout)
+        self.admin_user_id = admin_user_id
+        self.settings = settings
+        self.confirmed: bool | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.admin_user_id:
+            await interaction.response.send_message(
+                "❌ Only the admin who initiated this action can confirm or cancel it.",
+                ephemeral=True,
+            )
+            return False
+        if not is_admin_or_allowed(interaction, self.settings):
+            await interaction.response.send_message(
+                "❌ You don’t have permission to confirm this action.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm Reset", style=discord.ButtonStyle.danger, emoji="⚠️")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = True
+        self.stop()
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = False
+        self.stop()
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.response.edit_message(
+            content="❌ Action cancelled. Catalog and stock prices remain unchanged.",
+            view=self,
+        )
+
+    async def on_timeout(self) -> None:
+        self.confirmed = False
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+
 
 async def _post_optional_announcement(
     interaction: discord.Interaction,
@@ -85,15 +147,19 @@ async def market(interaction: discord.Interaction):
     embed = system_embed(
         settings,
         title=f"🧪 {settings.stock_exchange_name}",
-        summary=f"Weekly change baseline: **{wk}** • Use `/ic icse quote`, `/ic icse buy`, `/ic icse sell`, `/ic icse short`, `/ic icse cover`",
+        summary=(
+            f"Weekly change baseline: **{wk}**\n"
+            f"*{SIMULATED_MARKET_DISCLAIMER}*\n"
+            "Use `/ic icse quote`, `/ic icse buy`, `/ic icse sell`, `/ic icse short`, `/ic icse cover`"
+        ),
         fields=fields[:20],
-        footer_hint="ICSE" if settings.primary_stock_symbol == "IC" else f"{settings.primary_stock_symbol}SE",
+        footer_hint=f"{'ICSE' if settings.primary_stock_symbol == 'IC' else f'{settings.primary_stock_symbol}SE'} • Simulated Points",
     )
     await interaction.response.send_message(embed=embed)
 
 
 @icse.command(name="quote", description="Show a single stock quote.")
-@app_commands.describe(symbol="Example: IC, DISD, AGIS")
+@app_commands.describe(symbol="Example: IC, CAFE, ROBO")
 async def quote(interaction: discord.Interaction, symbol: str):
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
@@ -108,9 +174,15 @@ async def quote(interaction: discord.Interaction, symbol: str):
     headline = (
         f"**${s.price}**\n"
         f"{s.name}\n"
-        f"Week open: **${s.week_open}** • Change: **{s.weekly_change_abs:+d}** ({_fmt_pct(s.weekly_change_pct)})"
+        f"Week open: **${s.week_open}** • Change: **{s.weekly_change_abs:+d}** ({_fmt_pct(s.weekly_change_pct)})\n"
+        f"*{SIMULATED_MARKET_DISCLAIMER}*"
     )
-    embed = stock_embed(settings, title=f"📈 ${s.symbol} Quote", headline=headline)
+    embed = stock_embed(
+        settings,
+        title=f"📈 ${s.symbol} Quote",
+        headline=headline,
+        footer_hint="Simulated Points (No Cash Value)",
+    )
     await interaction.response.send_message(embed=embed)
 
 
@@ -150,9 +222,9 @@ async def portfolio(interaction: discord.Interaction, user: discord.User | None 
     embed = system_embed(
         settings,
         title="📂 Portfolio",
-        summary=f"{target.mention}",
+        summary=f"{target.mention} • *{SIMULATED_MARKET_DISCLAIMER}*",
         fields=fields,
-        footer_hint="ICSE",
+        footer_hint="ICSE • Simulated Points",
     )
     await interaction.response.send_message(embed=embed, ephemeral=(target.id == interaction.user.id))
 
@@ -176,8 +248,12 @@ async def buy(interaction: discord.Interaction, symbol: str, qty: int):
         settings,
         title=f"🟢 Bought ${s.symbol}",
         headline=f"**{qty} shares @ ${s.price}**",
-        reason=(f"Position: LONG x{pos.qty} @ ${pos.avg_price:.2f}\nCash: **${bankroll}**"),
-        footer_hint=interaction.user.display_name,
+        reason=(
+            f"Position: LONG x{pos.qty} @ ${pos.avg_price:.2f}\n"
+            f"Cash: **${bankroll}**\n"
+            f"*{SIMULATED_MARKET_DISCLAIMER}*"
+        ),
+        footer_hint=f"{interaction.user.display_name} • Simulated Points",
     )
     await interaction.response.send_message(embed=embed)
 
@@ -202,8 +278,13 @@ async def sell(interaction: discord.Interaction, symbol: str, qty: int):
         settings,
         title=f"🔵 Sold ${s.symbol}",
         headline=f"**{qty} shares @ ${s.price}**",
-        reason=(f"Realized P/L: **{format_signed_money(realized)}**\n{pos_line}\nCash: **${bankroll}**"),
-        footer_hint=interaction.user.display_name,
+        reason=(
+            f"Realized P/L: **{format_signed_money(realized)}**\n"
+            f"{pos_line}\n"
+            f"Cash: **${bankroll}**\n"
+            f"*{SIMULATED_MARKET_DISCLAIMER}*"
+        ),
+        footer_hint=f"{interaction.user.display_name} • Simulated Points",
     )
     await interaction.response.send_message(embed=embed)
 
@@ -232,9 +313,10 @@ async def short(interaction: discord.Interaction, symbol: str, qty: int):
         reason=(
             f"Collateral locked: **${collateral}**\n"
             f"Position: SHORT x{pos.qty} @ ${pos.avg_price:.2f}\n"
-            f"Cash: **${bankroll}**"
+            f"Cash: **${bankroll}**\n"
+            f"*{SIMULATED_MARKET_DISCLAIMER}*"
         ),
-        footer_hint=interaction.user.display_name,
+        footer_hint=f"{interaction.user.display_name} • Simulated Points",
     )
     await interaction.response.send_message(embed=embed)
 
@@ -265,9 +347,10 @@ async def cover(interaction: discord.Interaction, symbol: str, qty: int):
             f"Collateral released: **${release}**\n"
             f"Realized P/L: **{format_signed_money(realized)}**\n"
             f"{pos_line}\n"
-            f"Cash: **${bankroll}**"
+            f"Cash: **${bankroll}**\n"
+            f"*{SIMULATED_MARKET_DISCLAIMER}*"
         ),
-        footer_hint=interaction.user.display_name,
+        footer_hint=f"{interaction.user.display_name} • Simulated Points",
     )
     await interaction.response.send_message(embed=embed)
 
@@ -416,8 +499,13 @@ async def admin_set(interaction: discord.Interaction, symbol: str, value: int, r
     await _post_optional_announcement(interaction, settings, embed)
 
 
-@admin.command(name="sync_catalog", description="Admin: sync the code-defined stock catalog into the DB.")
-async def sync_catalog_cmd(interaction: discord.Interaction):
+@admin.command(
+    name="sync_catalog", description="Admin: sync stock catalog or reset to default synthetic securities."
+)
+@app_commands.describe(
+    reset_to_default="Reset guild catalog overrides back to synthetic defaults (requires confirmation)"
+)
+async def sync_catalog_cmd(interaction: discord.Interaction, reset_to_default: bool = False):
     if not await guard_feature(interaction, "market"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
@@ -426,13 +514,35 @@ async def sync_catalog_cmd(interaction: discord.Interaction):
         return
 
     st = _store(interaction, settings)
+    if reset_to_default:
+        view = AdminMarketConfirmView(admin_user_id=interaction.user.id, settings=settings)
+        await interaction.response.send_message(
+            "⚠️ **Warning:** Resetting the catalog will restore all stock definitions to canonical synthetic defaults. "
+            "Existing positions are preserved, but inactive custom stocks will no longer be tradable.\n"
+            "Do you want to proceed?",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if not view.confirmed:
+            return
+        await st.reset_guild_catalog()
+        rows = await st.list_stocks(active_only=False, include_inactive=True)
+        active = [r for r in rows if r.is_active]
+        inactive = [r for r in rows if not r.is_active]
+        await interaction.followup.send(
+            f"✅ Guild stock catalog reset to default synthetic securities. "
+            f"Active: **{len(active)}**, inactive: **{len(inactive)}**.",
+            ephemeral=True,
+        )
+        return
+
     await st.sync_catalog()
     rows = await st.list_stocks(active_only=False, include_inactive=True)
     active = [r for r in rows if r.is_active]
     inactive = [r for r in rows if not r.is_active]
     await interaction.response.send_message(
-        f"✅ Catalog synced from code (`icbot/services/fun_market_catalog.py`). "
-        f"Active: **{len(active)}**, inactive: **{len(inactive)}**."
+        f"✅ Catalog synced. Active: **{len(active)}**, inactive: **{len(inactive)}**."
     )
 
 
@@ -474,7 +584,8 @@ async def stock(interaction: discord.Interaction):
     headline = (
         f"**{curr_sym}{s.price}**\n"
         f"{s.name}\n"
-        f"Week open: **{curr_sym}{s.week_open}** • Change: **{s.weekly_change_abs:+d}** ({_fmt_pct(s.weekly_change_pct)})"
+        f"Week open: **{curr_sym}{s.week_open}** • Change: **{s.weekly_change_abs:+d}** ({_fmt_pct(s.weekly_change_pct)})\n"
+        f"*{SIMULATED_MARKET_DISCLAIMER}*"
     )
 
     try:
@@ -500,6 +611,6 @@ async def stock(interaction: discord.Interaction):
         title=f"📈 {s.name} Stock ({curr_sym}{s.symbol})",
         headline=headline,
         reason=reason_str,
-        footer_hint="ICSE" if s.symbol == "IC" else f"{s.symbol}SE",
+        footer_hint="Simulated Points (No Cash Value)",
     )
     await interaction.response.send_message(embed=embed)

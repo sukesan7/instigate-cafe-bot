@@ -165,15 +165,15 @@ async def test_fun_market_weighted_average_net_worth_conservation_and_debt(
     assert cash_s2 == 1100  # original 1000 + (25 + 75) realized
 
     # 2. Short collateral ceiling, partial release, and intentional negative debt on extreme spike
-    await fun_market_store.admin_set(symbol="AGIS", new_value=3, user_id=alice_id, reason="Test odd notional")
+    await fun_market_store.admin_set(symbol="ROBO", new_value=3, user_id=alice_id, reason="Test odd notional")
     _sa, short_odd, _cash_odd, coll_odd = await fun_market_store.open_short(
-        user_id=bob_id, symbol="AGIS", qty=1
+        user_id=bob_id, symbol="ROBO", qty=1
     )
     assert coll_odd == math.ceil(3 * SHORT_COLLATERAL_RATIO)  # ceil(4.5) == 5
     assert short_odd.collateral_locked == 5
     snap_bob = await fun_market_store.portfolio(user_id=bob_id)
     assert snap_bob.net_worth == 1000  # net worth conserved on short entry
-    await fun_market_store.cover_short(user_id=bob_id, symbol="AGIS", qty=1)
+    await fun_market_store.cover_short(user_id=bob_id, symbol="ROBO", qty=1)
 
     # Extreme short squeeze: short 6 IC @ $150 -> notional 900 -> collateral 1350? No, reset IC to 100 first
     await fun_market_store.admin_set(symbol="IC", new_value=100, user_id=alice_id, reason="Reset for short")
@@ -221,7 +221,7 @@ async def test_fun_market_rejects_non_positive_quantities_without_mutation(
     with pytest.raises(FunMarketError):
         await fun_market_store.cover_short(user_id=uid, symbol="IC", qty=bad_qty)
     with pytest.raises(FunMarketError):
-        await fun_market_store.buy_long(user_id=uid, symbol="CONT", qty=1)  # inactive catalog symbol
+        await fun_market_store.buy_long(user_id=uid, symbol="VOID", qty=1)  # inactive catalog symbol
     with pytest.raises(FunMarketError):
         await fun_market_store.buy_long(user_id=uid, symbol="NOSUCH", qty=1)
 

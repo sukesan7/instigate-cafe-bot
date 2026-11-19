@@ -93,8 +93,8 @@ async def test_fun_market_long_short_admin_and_leaderboard(
     active = await fun_market_store.list_stocks(active_only=True)
     symbols = {s.symbol for s in active}
     assert "IC" in symbols
-    assert "DISD" in symbols
-    assert "CONT" not in symbols  # inactive in catalog
+    assert "CAFE" in symbols
+    assert "VOID" not in symbols  # inactive in catalog
 
     # Buy long on IC (start price = 100)
     stock, pos, cash_after_buy = await fun_market_store.buy_long(user_id=alice_id, symbol="$IC", qty=4)
@@ -126,21 +126,21 @@ async def test_fun_market_long_short_admin_and_leaderboard(
     assert cash_after_sell == 850
     assert pos_after_sell is not None and pos_after_sell.qty == 2
 
-    # Bob opens short on DISD (price = 10), 20 shares -> notional 200, 150% collateral = 300
+    # Bob opens short on CAFE (price = 10), 20 shares -> notional 200, 150% collateral = 300
     _s, short_pos, bob_cash, collateral = await fun_market_store.open_short(
-        user_id=bob_id, symbol="DISD", qty=20
+        user_id=bob_id, symbol="CAFE", qty=20
     )
     assert collateral == int(20 * 10 * SHORT_COLLATERAL_RATIO)
     assert bob_cash == 700
     assert short_pos.collateral_locked == 300
 
-    # Admin drops DISD by -100 -> clamps at PRICE_FLOOR (1)
-    floored = await fun_market_store.admin_move(symbol="DISD", delta=-100, user_id=alice_id, reason="Crash")
+    # Admin drops CAFE by -100 -> clamps at PRICE_FLOOR (1)
+    floored = await fun_market_store.admin_move(symbol="CAFE", delta=-100, user_id=alice_id, reason="Crash")
     assert floored.price == PRICE_FLOOR
 
     # Bob covers all 20 shares at 1 -> releases 300 collateral + realized (10 - 1) * 20 = +180
     _s2, covered_pos, bob_cash_end, short_realized, released = await fun_market_store.cover_short(
-        user_id=bob_id, symbol="DISD", qty=20
+        user_id=bob_id, symbol="CAFE", qty=20
     )
     assert covered_pos is None
     assert released == 300

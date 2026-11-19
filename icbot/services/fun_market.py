@@ -13,7 +13,13 @@ import aiosqlite
 
 from icbot.db import Database, Transaction
 from icbot.errors import BotError
-from icbot.services.fun_market_catalog import catalog_map, normalize_symbol
+from icbot.services.fun_market_catalog import (
+    FUN_STOCK_CATALOG,
+    FunStockDef,
+    catalog_map,
+    normalize_symbol,
+    resolve_symbol,
+)
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +162,15 @@ class FunMarketStore:
             (gid, symbol),
         )
         row = await cur.fetchone()
+        if row is None:
+            resolved = resolve_symbol(symbol)
+            if resolved != symbol:
+                cur = await conn.execute(
+                    "SELECT symbol, name, price, category, is_active, updated_ts, week_key, week_open "
+                    "FROM fun_stocks WHERE guild_id=? AND symbol=?",
+                    (gid, resolved),
+                )
+                row = await cur.fetchone()
         return tuple(row) if row is not None else None
 
     async def _maybe_rollover_week_conn(
@@ -185,19 +200,41 @@ class FunMarketStore:
         guild_id: int | None = None,
     ) -> None:
         gid = self._resolve_gid(guild_id)
-        cat = catalog_map()
+        # Check if this guild has customized catalog entries
+        cur_guild = await conn.execute(
+            "SELECT symbol, name, start_price, category, is_active, description FROM guild_stock_catalog WHERE guild_id=?",
+            (gid,),
+        )
+        guild_rows = await cur_guild.fetchall()
+        if guild_rows:
+            custom_defs = [
+                FunStockDef(
+                    symbol=str(r[0]),
+                    name=str(r[1]),
+                    start_price=max(PRICE_FLOOR, int(r[2])),
+                    category=str(r[3]),
+                    active=bool(r[4]),
+                    description=str(r[5] or ""),
+                )
+                for r in guild_rows
+            ]
+            cat = catalog_map(custom_catalog=custom_defs)
+        else:
+            cat = catalog_map()
+
         now = self._now()
         wk = self._week_key()
 
-        # Legacy bridge: if $IC existed before fun-market rollout, seed initial IC from meta.stock_value
+        # Legacy bridge: if $IC existed before fun-market rollout, seed initial IC from meta.stock_value (primary guild 0 only)
         legacy_ic_value: int | None = None
-        try:
-            cur = await conn.execute("SELECT value FROM meta WHERE key='stock_value'")
-            row = await cur.fetchone()
-            if row and row[0] is not None:
-                legacy_ic_value = int(str(row[0]))
-        except (aiosqlite.Error, TypeError, ValueError):
-            legacy_ic_value = None
+        if gid == 0:
+            try:
+                cur = await conn.execute("SELECT value FROM meta WHERE key='stock_value'")
+                row = await cur.fetchone()
+                if row and row[0] is not None:
+                    legacy_ic_value = int(str(row[0]))
+            except (aiosqlite.Error, TypeError, ValueError):
+                legacy_ic_value = None
 
         for sym, item in cat.items():
             seed_price = (
@@ -246,17 +283,20 @@ class FunMarketStore:
         else:
             await conn.execute("UPDATE fun_stocks SET is_active=0, updated_ts=? WHERE guild_id=?", (now, gid))
 
-        # Keep legacy meta.stock_value aligned with IC quote
-        try:
-            cur = await conn.execute("SELECT price FROM fun_stocks WHERE guild_id=? AND symbol='IC'", (gid,))
-            row = await cur.fetchone()
-            if row and row[0] is not None:
-                await conn.execute(
-                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('stock_value', ?)",
-                    (str(int(row[0])),),
+        # Keep legacy meta.stock_value aligned with IC quote (primary guild 0 only)
+        if gid == 0:
+            try:
+                cur = await conn.execute(
+                    "SELECT price FROM fun_stocks WHERE guild_id=? AND symbol='IC'", (gid,)
                 )
-        except (aiosqlite.Error, TypeError, ValueError) as exc:
-            log.debug("Skipping legacy meta.stock_value sync: %s", exc)
+                row = await cur.fetchone()
+                if row and row[0] is not None:
+                    await conn.execute(
+                        "INSERT OR REPLACE INTO meta (key, value) VALUES ('stock_value', ?)",
+                        (str(int(row[0])),),
+                    )
+            except (aiosqlite.Error, TypeError, ValueError) as exc:
+                log.debug("Skipping legacy meta.stock_value sync: %s", exc)
 
         # Ensure week baselines are valid
         await conn.execute(
@@ -293,6 +333,149 @@ class FunMarketStore:
         gid = self._resolve_gid(guild_id)
         async with self.db.write_transaction() as tx:
             await self._sync_catalog_conn(tx, gid)
+
+    async def add_guild_stock(
+        self,
+        *,
+        symbol: str,
+        name: str,
+        start_price: int,
+        category: str = "misc",
+        is_active: bool = True,
+        description: str = "",
+        guild_id: int | None = None,
+    ) -> StockRow:
+        sym = normalize_symbol(symbol)
+        if not sym or len(sym) > 10:
+            raise FunMarketError("Symbol must be between 1 and 10 alphanumeric characters.")
+        name_clean = str(name or "").strip()
+        if not name_clean:
+            raise FunMarketError("Stock name cannot be empty.")
+        price_val = max(PRICE_FLOOR, int(start_price))
+        gid = self._resolve_gid(guild_id)
+
+        async with self.db.write_transaction() as tx:
+            cur = await tx.execute("SELECT COUNT(1) FROM guild_stock_catalog WHERE guild_id=?", (gid,))
+            count_row = await cur.fetchone()
+            count = int(count_row[0]) if count_row else 0
+            if count == 0:
+                for item in FUN_STOCK_CATALOG:
+                    await tx.execute(
+                        """
+                        INSERT OR REPLACE INTO guild_stock_catalog
+                        (guild_id, symbol, name, start_price, category, is_active, description)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            gid,
+                            item.symbol,
+                            item.name,
+                            item.start_price,
+                            item.category,
+                            1 if item.active else 0,
+                            item.description,
+                        ),
+                    )
+
+            await tx.execute(
+                """
+                INSERT OR REPLACE INTO guild_stock_catalog
+                (guild_id, symbol, name, start_price, category, is_active, description)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    gid,
+                    sym,
+                    name_clean,
+                    price_val,
+                    str(category or "misc").strip().lower(),
+                    1 if is_active else 0,
+                    str(description or "").strip(),
+                ),
+            )
+            await self._sync_catalog_conn(tx, gid)
+
+        return await self.get_stock(sym, guild_id=gid)
+
+    async def remove_guild_stock(
+        self,
+        *,
+        symbol: str,
+        guild_id: int | None = None,
+    ) -> StockRow | None:
+        sym = normalize_symbol(symbol)
+        if not sym:
+            raise FunMarketError("Invalid symbol.")
+        gid = self._resolve_gid(guild_id)
+
+        async with self.db.write_transaction() as tx:
+            cur = await tx.execute("SELECT COUNT(1) FROM guild_stock_catalog WHERE guild_id=?", (gid,))
+            count_row = await cur.fetchone()
+            count = int(count_row[0]) if count_row else 0
+            if count == 0:
+                for item in FUN_STOCK_CATALOG:
+                    await tx.execute(
+                        """
+                        INSERT OR REPLACE INTO guild_stock_catalog
+                        (guild_id, symbol, name, start_price, category, is_active, description)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            gid,
+                            item.symbol,
+                            item.name,
+                            item.start_price,
+                            item.category,
+                            1 if item.active else 0,
+                            item.description,
+                        ),
+                    )
+
+            await tx.execute(
+                "DELETE FROM guild_stock_catalog WHERE guild_id=? AND symbol=?",
+                (gid, sym),
+            )
+            await self._sync_catalog_conn(tx, gid)
+
+        try:
+            return await self.get_stock(sym, guild_id=gid)
+        except FunMarketError:
+            return None
+
+    async def reset_guild_catalog(
+        self,
+        *,
+        guild_id: int | None = None,
+    ) -> list[StockRow]:
+        gid = self._resolve_gid(guild_id)
+        async with self.db.write_transaction() as tx:
+            await tx.execute("DELETE FROM guild_stock_catalog WHERE guild_id=?", (gid,))
+            await self._sync_catalog_conn(tx, gid)
+        return await self.list_stocks(active_only=False, include_inactive=True, guild_id=gid)
+
+    async def list_guild_catalog(
+        self,
+        *,
+        guild_id: int | None = None,
+    ) -> list[FunStockDef]:
+        gid = self._resolve_gid(guild_id)
+        rows = await self.db.fetchall(
+            "SELECT symbol, name, start_price, category, is_active, description FROM guild_stock_catalog WHERE guild_id=? ORDER BY symbol",
+            (gid,),
+        )
+        if rows:
+            return [
+                FunStockDef(
+                    symbol=str(r[0]),
+                    name=str(r[1]),
+                    start_price=max(PRICE_FLOOR, int(r[2])),
+                    category=str(r[3]),
+                    active=bool(r[4]),
+                    description=str(r[5] or ""),
+                )
+                for r in rows
+            ]
+        return list(FUN_STOCK_CATALOG)
 
     async def list_stocks(
         self,
@@ -356,7 +539,13 @@ class FunMarketStore:
         for s in rows:
             if s.symbol == sym:
                 return s
-        raise FunMarketError(f"Unknown symbol `{sym}`. Edit fun_market_catalog.py and sync the catalog.")
+        # Check backward-compatible legacy symbol aliases
+        resolved = resolve_symbol(sym)
+        if resolved != sym:
+            for s in rows:
+                if s.symbol == resolved:
+                    return s
+        raise FunMarketError(f"Unknown symbol `{sym}`.")
 
     async def history(
         self,
@@ -412,28 +601,34 @@ class FunMarketStore:
             row = await self._get_stock_conn(tx, sym, gid)
             if row is None:
                 raise FunMarketError(f"Unknown symbol `{sym}`.")
+            canonical_sym = str(row[0])
             _, _name, old_price, _cat, is_active, _uts, _wk, _wo = row
             if not bool(is_active):
-                raise FunMarketError(f"`{sym}` is inactive in the code catalog.")
+                raise FunMarketError(f"`{canonical_sym}` is inactive in the catalog.")
             new_price = max(PRICE_FLOOR, int(old_price) + delta)
             actual_delta = new_price - int(old_price)
             now = self._now()
             await tx.execute(
                 "UPDATE fun_stocks SET price=?, updated_ts=? WHERE guild_id=? AND symbol=?",
-                (new_price, now, gid, sym),
+                (new_price, now, gid, canonical_sym),
             )
             await tx.execute(
                 "INSERT INTO fun_stock_events (guild_id, ts_unix, symbol, user_id, delta, new_value, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (gid, now, sym, int(user_id), actual_delta, new_price, reason),
+                (gid, now, canonical_sym, int(user_id), actual_delta, new_price, reason),
             )
             await tx.execute(
                 """
                 INSERT INTO admin_audit_log (guild_id, admin_user_id, action, target_user_id, details_json, created_at)
                 VALUES (?, ?, 'stock_move', NULL, ?, ?)
                 """,
-                (gid, int(user_id), f'{{"symbol":"{sym}","delta":{actual_delta},"price":{new_price}}}', now),
+                (
+                    gid,
+                    int(user_id),
+                    f'{{"symbol":"{canonical_sym}","delta":{actual_delta},"price":{new_price}}}',
+                    now,
+                ),
             )
-            if sym == "IC":
+            if canonical_sym == "IC" and gid == 0:
                 await self._mirror_legacy_ic_conn(
                     tx,
                     user_id=int(user_id),
@@ -442,7 +637,7 @@ class FunMarketStore:
                     reason=reason,
                     guild_id=gid,
                 )
-        return await self.get_stock(sym, guild_id=gid)
+        return await self.get_stock(canonical_sym, guild_id=gid)
 
     async def admin_set(
         self,
@@ -463,32 +658,38 @@ class FunMarketStore:
             row = await self._get_stock_conn(tx, sym, gid)
             if row is None:
                 raise FunMarketError(f"Unknown symbol `{sym}`.")
+            canonical_sym = str(row[0])
             _, _name, old_price, _cat, is_active, _uts, _wk, _wo = row
             if not bool(is_active):
-                raise FunMarketError(f"`{sym}` is inactive in the code catalog.")
+                raise FunMarketError(f"`{canonical_sym}` is inactive in the catalog.")
             old_price_i = int(old_price)
             delta = new_value - old_price_i
             now = self._now()
             await tx.execute(
                 "UPDATE fun_stocks SET price=?, updated_ts=? WHERE guild_id=? AND symbol=?",
-                (new_value, now, gid, sym),
+                (new_value, now, gid, canonical_sym),
             )
             await tx.execute(
                 "INSERT INTO fun_stock_events (guild_id, ts_unix, symbol, user_id, delta, new_value, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (gid, now, sym, int(user_id), delta, new_value, reason),
+                (gid, now, canonical_sym, int(user_id), delta, new_value, reason),
             )
             await tx.execute(
                 """
                 INSERT INTO admin_audit_log (guild_id, admin_user_id, action, target_user_id, details_json, created_at)
                 VALUES (?, ?, 'stock_set', NULL, ?, ?)
                 """,
-                (gid, int(user_id), f'{{"symbol":"{sym}","delta":{delta},"price":{new_value}}}', now),
+                (
+                    gid,
+                    int(user_id),
+                    f'{{"symbol":"{canonical_sym}","delta":{delta},"price":{new_value}}}',
+                    now,
+                ),
             )
-            if sym == "IC":
+            if canonical_sym == "IC" and gid == 0:
                 await self._mirror_legacy_ic_conn(
                     tx, user_id=int(user_id), delta=delta, new_value=new_value, reason=reason, guild_id=gid
                 )
-        return await self.get_stock(sym, guild_id=gid)
+        return await self.get_stock(canonical_sym, guild_id=gid)
 
     async def week_rollover(
         self,
@@ -531,77 +732,117 @@ class FunMarketStore:
         gid = self._resolve_gid(guild_id)
         uid = int(user_id)
         now = self._now()
+        is_replay = False
+        canonical_sym = sym
+        replay_bankroll = 0
 
         async with self.db.write_transaction() as tx:
-            await self._sync_catalog_conn(tx, gid)
-            row = await self._get_stock_conn(tx, sym, gid)
-            if row is None or not bool(row[4]):
-                raise FunMarketError(f"Unknown/ inactive symbol `{sym}`.")
-            price = int(row[2])
-            cost = price * qty
+            if idempotency_key:
+                cur_idem = await tx.execute(
+                    "SELECT 1 FROM economy_ledger WHERE transaction_id=?",
+                    (str(idempotency_key),),
+                )
+                if await cur_idem.fetchone() is not None:
+                    is_replay = True
+                    cur_b = await tx.execute(
+                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                    )
+                    b_row = await cur_b.fetchone()
+                    replay_bankroll = int(b_row[0]) if b_row is not None else 0
+                    row = await self._get_stock_conn(tx, sym, gid)
+                    canonical_sym = str(row[0]) if row is not None else normalize_symbol(symbol)
 
-            await self._ensure_bj_user_conn(tx, uid, gid)
+            if not is_replay:
+                await self._sync_catalog_conn(tx, gid)
+                row = await self._get_stock_conn(tx, sym, gid)
+                if row is None or not bool(row[4]):
+                    raise FunMarketError(f"Unknown/ inactive symbol `{sym}`.")
+                canonical_sym = str(row[0])
+                price = int(row[2])
+                cost = price * qty
 
-            # Atomic conditional SQL: deduct cost only if balance is sufficient
-            cur_upd = await tx.execute(
-                "UPDATE users SET balance = balance - ? WHERE guild_id=? AND user_id=? AND balance >= ?",
-                (cost, gid, uid, cost),
-            )
-            if cur_upd.rowcount == 0:
-                cur_b = await tx.execute(
+                await self._ensure_bj_user_conn(tx, uid, gid)
+
+                # Atomic conditional SQL: deduct cost only if balance is sufficient
+                cur_upd = await tx.execute(
+                    "UPDATE users SET balance = balance - ? WHERE guild_id=? AND user_id=? AND balance >= ?",
+                    (cost, gid, uid, cost),
+                )
+                if cur_upd.rowcount == 0:
+                    cur_b = await tx.execute(
+                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                    )
+                    b_row = await cur_b.fetchone()
+                    bankroll = int(b_row[0]) if b_row is not None else self.starting_bankroll
+                    raise FunMarketError(f"Insufficient bankroll. Need ${cost}, have ${bankroll}.")
+
+                cur_b2 = await tx.execute(
                     "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
                 )
-                b_row = await cur_b.fetchone()
-                bankroll = int(b_row[0]) if b_row is not None else self.starting_bankroll
-                raise FunMarketError(f"Insufficient bankroll. Need ${cost}, have ${bankroll}.")
+                b2_row = await cur_b2.fetchone()
+                new_bankroll = int(b2_row[0]) if b2_row is not None else 0
 
-            cur_b2 = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
-            b2_row = await cur_b2.fetchone()
-            new_bankroll = int(b2_row[0]) if b2_row is not None else 0
-
-            cur = await tx.execute(
-                "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='LONG'",
-                (gid, uid, sym),
-            )
-            prow = await cur.fetchone()
-            if prow is None:
-                new_qty = qty
-                new_avg = float(price)
-                await tx.execute(
-                    "INSERT INTO fun_positions (guild_id, user_id, symbol, side, qty, avg_price, collateral_locked) VALUES (?, ?, ?, 'LONG', ?, ?, 0)",
-                    (gid, uid, sym, new_qty, new_avg),
+                cur = await tx.execute(
+                    "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='LONG'",
+                    (gid, uid, canonical_sym),
                 )
-            else:
-                old_qty = int(prow[0])
-                old_avg = float(prow[1])
-                new_qty = old_qty + qty
-                new_avg = ((old_qty * old_avg) + (qty * price)) / max(1, new_qty)
+                prow = await cur.fetchone()
+                if prow is None:
+                    new_qty = qty
+                    new_avg = float(price)
+                    await tx.execute(
+                        "INSERT INTO fun_positions (guild_id, user_id, symbol, side, qty, avg_price, collateral_locked) VALUES (?, ?, ?, 'LONG', ?, ?, 0)",
+                        (gid, uid, canonical_sym, new_qty, new_avg),
+                    )
+                else:
+                    old_qty = int(prow[0])
+                    old_avg = float(prow[1])
+                    new_qty = old_qty + qty
+                    new_avg = ((old_qty * old_avg) + (qty * price)) / max(1, new_qty)
+                    await tx.execute(
+                        "UPDATE fun_positions SET qty=?, avg_price=? WHERE guild_id=? AND user_id=? AND symbol=? AND side='LONG'",
+                        (new_qty, float(new_avg), gid, uid, canonical_sym),
+                    )
+
                 await tx.execute(
-                    "UPDATE fun_positions SET qty=?, avg_price=? WHERE guild_id=? AND user_id=? AND symbol=? AND side='LONG'",
-                    (new_qty, float(new_avg), gid, uid, sym),
+                    "INSERT INTO fun_trades (guild_id, ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, ?, 'BUY', ?, ?, ?, 0, NULL)",
+                    (gid, now, uid, canonical_sym, qty, price, -cost),
+                )
+                tx_id = (
+                    str(idempotency_key)
+                    if idempotency_key
+                    else f"buy:{gid}:{uid}:{canonical_sym}:{now}:{time.monotonic_ns()}"
+                )
+                await tx.execute(
+                    """
+                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'market_buy', ?, ?)
+                    """,
+                    (tx_id, gid, uid, -cost, new_bankroll, canonical_sym, now),
                 )
 
-            await tx.execute(
-                "INSERT INTO fun_trades (guild_id, ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, ?, 'BUY', ?, ?, ?, 0, NULL)",
-                (gid, now, uid, sym, qty, price, -cost),
-            )
-            tx_id = (
-                str(idempotency_key)
-                if idempotency_key
-                else f"buy:{gid}:{uid}:{sym}:{now}:{time.monotonic_ns()}"
-            )
-            await tx.execute(
-                """
-                INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
-                VALUES (?, ?, ?, ?, ?, 'market_buy', ?, ?)
-                """,
-                (tx_id, gid, uid, -cost, new_bankroll, sym, now),
-            )
+        if is_replay:
+            stock = await self.get_stock(canonical_sym, guild_id=gid)
+            pos = await self._get_position(user_id=uid, symbol=canonical_sym, side="LONG", guild_id=gid)
+            if pos is None:
+                pos = PositionRow(
+                    user_id=uid,
+                    symbol=canonical_sym,
+                    side="LONG",
+                    qty=0,
+                    avg_price=0.0,
+                    collateral_locked=0,
+                    market_price=stock.price,
+                    market_value=0,
+                    unrealized_pnl=0,
+                    equity_value=0,
+                )
+            return stock, pos, replay_bankroll
 
-        stock = await self.get_stock(sym, guild_id=gid)
-        pos = await self._get_position(user_id=uid, symbol=sym, side="LONG", guild_id=gid)
+        stock = await self.get_stock(canonical_sym, guild_id=gid)
+        pos = await self._get_position(user_id=uid, symbol=canonical_sym, side="LONG", guild_id=gid)
         if pos is None:
-            raise FunMarketError(f"Failed to load LONG position for `{sym}`.")
+            raise FunMarketError(f"Failed to load LONG position for `{canonical_sym}`.")
         return stock, pos, new_bankroll
 
     async def sell_long(
@@ -620,70 +861,97 @@ class FunMarketStore:
         gid = self._resolve_gid(guild_id)
         uid = int(user_id)
         now = self._now()
+        is_replay = False
+        canonical_sym = sym
+        replay_bankroll = 0
 
         async with self.db.write_transaction() as tx:
-            await self._sync_catalog_conn(tx, gid)
-            srow = await self._get_stock_conn(tx, sym, gid)
-            if srow is None:
-                raise FunMarketError(f"Unknown symbol `{sym}`.")
-            price = int(srow[2])
-            cur = await tx.execute(
-                "SELECT qty, avg_price FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='LONG'",
-                (gid, uid, sym),
-            )
-            prow = await cur.fetchone()
-            if prow is None:
-                raise FunMarketError(f"No long position in `{sym}`.")
-            old_qty = int(prow[0])
-            avg = float(prow[1])
-            if qty > old_qty:
-                raise FunMarketError(f"You only have {old_qty} shares long in `{sym}`.")
+            if idempotency_key:
+                cur_idem = await tx.execute(
+                    "SELECT 1 FROM economy_ledger WHERE transaction_id=?",
+                    (str(idempotency_key),),
+                )
+                if await cur_idem.fetchone() is not None:
+                    is_replay = True
+                    cur_b = await tx.execute(
+                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                    )
+                    b_row = await cur_b.fetchone()
+                    replay_bankroll = int(b_row[0]) if b_row is not None else 0
+                    row = await self._get_stock_conn(tx, sym, gid)
+                    canonical_sym = str(row[0]) if row is not None else normalize_symbol(symbol)
 
-            # Atomic conditional update of shares
-            cur_pos = await tx.execute(
-                "UPDATE fun_positions SET qty = qty - ? WHERE guild_id=? AND user_id=? AND symbol=? AND side='LONG' AND qty >= ?",
-                (qty, gid, uid, sym, qty),
-            )
-            if cur_pos.rowcount == 0:
-                raise FunMarketError(f"Insufficient long shares in `{sym}`.")
+            if not is_replay:
+                await self._sync_catalog_conn(tx, gid)
+                srow = await self._get_stock_conn(tx, sym, gid)
+                if srow is None:
+                    raise FunMarketError(f"Unknown symbol `{sym}`.")
+                canonical_sym = str(srow[0])
+                price = int(srow[2])
+                cur = await tx.execute(
+                    "SELECT qty, avg_price FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='LONG'",
+                    (gid, uid, canonical_sym),
+                )
+                prow = await cur.fetchone()
+                if prow is None:
+                    raise FunMarketError(f"No long position in `{canonical_sym}`.")
+                old_qty = int(prow[0])
+                avg = float(prow[1])
+                if qty > old_qty:
+                    raise FunMarketError(f"You only have {old_qty} shares long in `{canonical_sym}`.")
 
-            realized = round((price - avg) * qty)
-            proceeds = price * qty
+                # Atomic conditional update of shares
+                cur_pos = await tx.execute(
+                    "UPDATE fun_positions SET qty = qty - ? WHERE guild_id=? AND user_id=? AND symbol=? AND side='LONG' AND qty >= ?",
+                    (qty, gid, uid, canonical_sym, qty),
+                )
+                if cur_pos.rowcount == 0:
+                    raise FunMarketError(f"Insufficient long shares in `{canonical_sym}`.")
 
-            await tx.execute(
-                "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
-                (proceeds, gid, uid),
-            )
-            cur_b = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
-            b_row = await cur_b.fetchone()
-            new_bankroll = int(b_row[0]) if b_row is not None else 0
+                realized = round((price - avg) * qty)
+                proceeds = price * qty
 
-            new_qty = old_qty - qty
-            if new_qty <= 0:
                 await tx.execute(
-                    "DELETE FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='LONG'",
-                    (gid, uid, sym),
+                    "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
+                    (proceeds, gid, uid),
+                )
+                cur_b = await tx.execute(
+                    "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                )
+                b_row = await cur_b.fetchone()
+                new_bankroll = int(b_row[0]) if b_row is not None else 0
+
+                new_qty = old_qty - qty
+                if new_qty <= 0:
+                    await tx.execute(
+                        "DELETE FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='LONG'",
+                        (gid, uid, canonical_sym),
+                    )
+
+                await tx.execute(
+                    "INSERT INTO fun_trades (guild_id, ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, ?, 'SELL', ?, ?, ?, ?, NULL)",
+                    (gid, now, uid, canonical_sym, qty, price, proceeds, realized),
+                )
+                tx_id = (
+                    str(idempotency_key)
+                    if idempotency_key
+                    else f"sell:{gid}:{uid}:{canonical_sym}:{now}:{time.monotonic_ns()}"
+                )
+                await tx.execute(
+                    """
+                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'market_sell', ?, ?)
+                    """,
+                    (tx_id, gid, uid, proceeds, new_bankroll, canonical_sym, now),
                 )
 
-            await tx.execute(
-                "INSERT INTO fun_trades (guild_id, ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, ?, 'SELL', ?, ?, ?, ?, NULL)",
-                (gid, now, uid, sym, qty, price, proceeds, realized),
-            )
-            tx_id = (
-                str(idempotency_key)
-                if idempotency_key
-                else f"sell:{gid}:{uid}:{sym}:{now}:{time.monotonic_ns()}"
-            )
-            await tx.execute(
-                """
-                INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
-                VALUES (?, ?, ?, ?, ?, 'market_sell', ?, ?)
-                """,
-                (tx_id, gid, uid, proceeds, new_bankroll, sym, now),
-            )
+        if is_replay:
+            stock = await self.get_stock(canonical_sym, guild_id=gid)
+            pos = await self._get_position(user_id=uid, symbol=canonical_sym, side="LONG", guild_id=gid)
+            return stock, pos, replay_bankroll, 0
 
-        stock = await self.get_stock(sym, guild_id=gid)
-        pos = await self._get_position(user_id=uid, symbol=sym, side="LONG", guild_id=gid)
+        stock = await self.get_stock(canonical_sym, guild_id=gid)
+        pos = await self._get_position(user_id=uid, symbol=canonical_sym, side="LONG", guild_id=gid)
         return stock, pos, new_bankroll, realized
 
     async def open_short(
@@ -702,92 +970,132 @@ class FunMarketStore:
         gid = self._resolve_gid(guild_id)
         uid = int(user_id)
         now = self._now()
+        is_replay = False
+        canonical_sym = sym
+        replay_bankroll = 0
 
         async with self.db.write_transaction() as tx:
-            await self._sync_catalog_conn(tx, gid)
-            srow = await self._get_stock_conn(tx, sym, gid)
-            if srow is None or not bool(srow[4]):
-                raise FunMarketError(f"Unknown/ inactive symbol `{sym}`.")
-            price = int(srow[2])
-            notional = price * qty
-            collateral = math.ceil(notional * SHORT_COLLATERAL_RATIO)
+            if idempotency_key:
+                cur_idem = await tx.execute(
+                    "SELECT 1 FROM economy_ledger WHERE transaction_id=?",
+                    (str(idempotency_key),),
+                )
+                if await cur_idem.fetchone() is not None:
+                    is_replay = True
+                    cur_b = await tx.execute(
+                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                    )
+                    b_row = await cur_b.fetchone()
+                    replay_bankroll = int(b_row[0]) if b_row is not None else 0
+                    row = await self._get_stock_conn(tx, sym, gid)
+                    canonical_sym = str(row[0]) if row is not None else normalize_symbol(symbol)
 
-            await self._ensure_bj_user_conn(tx, uid, gid)
+            if not is_replay:
+                await self._sync_catalog_conn(tx, gid)
+                srow = await self._get_stock_conn(tx, sym, gid)
+                if srow is None or not bool(srow[4]):
+                    raise FunMarketError(f"Unknown/ inactive symbol `{sym}`.")
+                canonical_sym = str(srow[0])
+                price = int(srow[2])
+                notional = price * qty
+                collateral = math.ceil(notional * SHORT_COLLATERAL_RATIO)
 
-            # Atomic conditional deduction of collateral
-            cur_upd = await tx.execute(
-                "UPDATE users SET balance = balance - ? WHERE guild_id=? AND user_id=? AND balance >= ?",
-                (collateral, gid, uid, collateral),
-            )
-            if cur_upd.rowcount == 0:
-                cur_b = await tx.execute(
+                await self._ensure_bj_user_conn(tx, uid, gid)
+
+                # Atomic conditional deduction of collateral
+                cur_upd = await tx.execute(
+                    "UPDATE users SET balance = balance - ? WHERE guild_id=? AND user_id=? AND balance >= ?",
+                    (collateral, gid, uid, collateral),
+                )
+                if cur_upd.rowcount == 0:
+                    cur_b = await tx.execute(
+                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                    )
+                    b_row = await cur_b.fetchone()
+                    bankroll = int(b_row[0]) if b_row is not None else self.starting_bankroll
+                    raise FunMarketError(
+                        f"Insufficient bankroll for short collateral. Need ${collateral} ({int(SHORT_COLLATERAL_RATIO * 100)}%), have ${bankroll}."
+                    )
+
+                cur_b2 = await tx.execute(
                     "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
                 )
-                b_row = await cur_b.fetchone()
-                bankroll = int(b_row[0]) if b_row is not None else self.starting_bankroll
-                raise FunMarketError(
-                    f"Insufficient bankroll for short collateral. Need ${collateral} ({int(SHORT_COLLATERAL_RATIO * 100)}%), have ${bankroll}."
+                b2_row = await cur_b2.fetchone()
+                new_bankroll = int(b2_row[0]) if b2_row is not None else 0
+
+                cur = await tx.execute(
+                    "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='SHORT'",
+                    (gid, uid, canonical_sym),
                 )
+                prow = await cur.fetchone()
+                if prow is None:
+                    new_qty = qty
+                    new_avg = float(price)
+                    new_collateral = collateral
+                    await tx.execute(
+                        "INSERT INTO fun_positions (guild_id, user_id, symbol, side, qty, avg_price, collateral_locked) VALUES (?, ?, ?, 'SHORT', ?, ?, ?)",
+                        (gid, uid, canonical_sym, new_qty, new_avg, new_collateral),
+                    )
+                else:
+                    old_qty = int(prow[0])
+                    old_avg = float(prow[1])
+                    old_collateral = int(prow[2] or 0)
+                    new_qty = old_qty + qty
+                    new_avg = ((old_qty * old_avg) + (qty * price)) / max(1, new_qty)
+                    new_collateral = old_collateral + collateral
+                    await tx.execute(
+                        "UPDATE fun_positions SET qty=?, avg_price=?, collateral_locked=? WHERE guild_id=? AND user_id=? AND symbol=? AND side='SHORT'",
+                        (new_qty, float(new_avg), new_collateral, gid, uid, canonical_sym),
+                    )
 
-            cur_b2 = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
-            b2_row = await cur_b2.fetchone()
-            new_bankroll = int(b2_row[0]) if b2_row is not None else 0
-
-            cur = await tx.execute(
-                "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='SHORT'",
-                (gid, uid, sym),
-            )
-            prow = await cur.fetchone()
-            if prow is None:
-                new_qty = qty
-                new_avg = float(price)
-                new_collateral = collateral
                 await tx.execute(
-                    "INSERT INTO fun_positions (guild_id, user_id, symbol, side, qty, avg_price, collateral_locked) VALUES (?, ?, ?, 'SHORT', ?, ?, ?)",
-                    (gid, uid, sym, new_qty, new_avg, new_collateral),
+                    "INSERT INTO fun_trades (guild_id, ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, ?, 'SHORT', ?, ?, ?, 0, ?)",
+                    (
+                        gid,
+                        now,
+                        uid,
+                        canonical_sym,
+                        qty,
+                        price,
+                        -collateral,
+                        f"Collateral {int(SHORT_COLLATERAL_RATIO * 100)}%",
+                    ),
                 )
-            else:
-                old_qty = int(prow[0])
-                old_avg = float(prow[1])
-                old_collateral = int(prow[2] or 0)
-                new_qty = old_qty + qty
-                new_avg = ((old_qty * old_avg) + (qty * price)) / max(1, new_qty)
-                new_collateral = old_collateral + collateral
+                tx_id = (
+                    str(idempotency_key)
+                    if idempotency_key
+                    else f"short:{gid}:{uid}:{canonical_sym}:{now}:{time.monotonic_ns()}"
+                )
                 await tx.execute(
-                    "UPDATE fun_positions SET qty=?, avg_price=?, collateral_locked=? WHERE guild_id=? AND user_id=? AND symbol=? AND side='SHORT'",
-                    (new_qty, float(new_avg), new_collateral, gid, uid, sym),
+                    """
+                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'short_open', ?, ?)
+                    """,
+                    (tx_id, gid, uid, -collateral, new_bankroll, canonical_sym, now),
                 )
 
-            await tx.execute(
-                "INSERT INTO fun_trades (guild_id, ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, ?, 'SHORT', ?, ?, ?, 0, ?)",
-                (
-                    gid,
-                    now,
-                    uid,
-                    sym,
-                    qty,
-                    price,
-                    -collateral,
-                    f"Collateral {int(SHORT_COLLATERAL_RATIO * 100)}%",
-                ),
-            )
-            tx_id = (
-                str(idempotency_key)
-                if idempotency_key
-                else f"short:{gid}:{uid}:{sym}:{now}:{time.monotonic_ns()}"
-            )
-            await tx.execute(
-                """
-                INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
-                VALUES (?, ?, ?, ?, ?, 'short_open', ?, ?)
-                """,
-                (tx_id, gid, uid, -collateral, new_bankroll, sym, now),
-            )
+        if is_replay:
+            stock = await self.get_stock(canonical_sym, guild_id=gid)
+            pos = await self._get_position(user_id=uid, symbol=canonical_sym, side="SHORT", guild_id=gid)
+            if pos is None:
+                pos = PositionRow(
+                    user_id=uid,
+                    symbol=canonical_sym,
+                    side="SHORT",
+                    qty=0,
+                    avg_price=0.0,
+                    collateral_locked=0,
+                    market_price=stock.price,
+                    market_value=0,
+                    unrealized_pnl=0,
+                    equity_value=0,
+                )
+            return stock, pos, replay_bankroll, 0
 
-        stock = await self.get_stock(sym, guild_id=gid)
-        pos = await self._get_position(user_id=uid, symbol=sym, side="SHORT", guild_id=gid)
+        stock = await self.get_stock(canonical_sym, guild_id=gid)
+        pos = await self._get_position(user_id=uid, symbol=canonical_sym, side="SHORT", guild_id=gid)
         if pos is None:
-            raise FunMarketError(f"Failed to load SHORT position for `{sym}`.")
+            raise FunMarketError(f"Failed to load SHORT position for `{canonical_sym}`.")
         return stock, pos, new_bankroll, collateral
 
     async def cover_short(
@@ -806,79 +1114,106 @@ class FunMarketStore:
         gid = self._resolve_gid(guild_id)
         uid = int(user_id)
         now = self._now()
+        is_replay = False
+        canonical_sym = sym
+        replay_bankroll = 0
 
         async with self.db.write_transaction() as tx:
-            await self._sync_catalog_conn(tx, gid)
-            srow = await self._get_stock_conn(tx, sym, gid)
-            if srow is None:
-                raise FunMarketError(f"Unknown symbol `{sym}`.")
-            price = int(srow[2])
-
-            cur = await tx.execute(
-                "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='SHORT'",
-                (gid, uid, sym),
-            )
-            prow = await cur.fetchone()
-            if prow is None:
-                raise FunMarketError(f"No short position in `{sym}`.")
-
-            old_qty = int(prow[0])
-            avg = float(prow[1])
-            old_collateral = int(prow[2] or 0)
-            if qty > old_qty:
-                raise FunMarketError(f"You only have {old_qty} shares short in `{sym}`.")
-
-            # Proportional collateral release; exact close releases all remainder
-            if qty == old_qty:
-                release = old_collateral
-            else:
-                release = round(old_collateral * (qty / max(1, old_qty)))
-                release = max(0, min(release, old_collateral))
-
-            realized = round((avg - price) * qty)
-            cash_delta = int(release + realized)
-
-            # Update users balance (may go negative on extreme short losses per legacy invariant)
-            await tx.execute(
-                "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
-                (cash_delta, gid, uid),
-            )
-            cur_b = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
-            b_row = await cur_b.fetchone()
-            new_bankroll = int(b_row[0]) if b_row is not None else 0
-
-            new_qty = old_qty - qty
-            new_collateral = old_collateral - release
-            if new_qty <= 0:
-                await tx.execute(
-                    "DELETE FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='SHORT'",
-                    (gid, uid, sym),
+            if idempotency_key:
+                cur_idem = await tx.execute(
+                    "SELECT 1 FROM economy_ledger WHERE transaction_id=?",
+                    (str(idempotency_key),),
                 )
-            else:
+                if await cur_idem.fetchone() is not None:
+                    is_replay = True
+                    cur_b = await tx.execute(
+                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                    )
+                    b_row = await cur_b.fetchone()
+                    replay_bankroll = int(b_row[0]) if b_row is not None else 0
+                    row = await self._get_stock_conn(tx, sym, gid)
+                    canonical_sym = str(row[0]) if row is not None else normalize_symbol(symbol)
+
+            if not is_replay:
+                await self._sync_catalog_conn(tx, gid)
+                srow = await self._get_stock_conn(tx, sym, gid)
+                if srow is None:
+                    raise FunMarketError(f"Unknown symbol `{sym}`.")
+                canonical_sym = str(srow[0])
+                price = int(srow[2])
+
+                cur = await tx.execute(
+                    "SELECT qty, avg_price, collateral_locked FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='SHORT'",
+                    (gid, uid, canonical_sym),
+                )
+                prow = await cur.fetchone()
+                if prow is None:
+                    raise FunMarketError(f"No short position in `{canonical_sym}`.")
+
+                old_qty = int(prow[0])
+                avg = float(prow[1])
+                old_collateral = int(prow[2] or 0)
+                if qty > old_qty:
+                    raise FunMarketError(f"You only have {old_qty} shares short in `{canonical_sym}`.")
+
+                # Proportional collateral release; exact close releases all remainder
+                if qty == old_qty:
+                    release = old_collateral
+                else:
+                    release = round(old_collateral * (qty / max(1, old_qty)))
+                    release = max(0, min(release, old_collateral))
+
+                realized = round((avg - price) * qty)
+                cash_delta = int(release + realized)
+
+                # Update users balance (may go negative on extreme short losses per legacy invariant)
                 await tx.execute(
-                    "UPDATE fun_positions SET qty=?, collateral_locked=? WHERE guild_id=? AND user_id=? AND symbol=? AND side='SHORT'",
-                    (new_qty, max(0, new_collateral), gid, uid, sym),
+                    "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
+                    (cash_delta, gid, uid),
+                )
+                cur_b = await tx.execute(
+                    "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                )
+                b_row = await cur_b.fetchone()
+                new_bankroll = int(b_row[0]) if b_row is not None else 0
+
+                new_qty = old_qty - qty
+                new_collateral = old_collateral - release
+                if new_qty <= 0:
+                    await tx.execute(
+                        "DELETE FROM fun_positions WHERE guild_id=? AND user_id=? AND symbol=? AND side='SHORT'",
+                        (gid, uid, canonical_sym),
+                    )
+                else:
+                    await tx.execute(
+                        "UPDATE fun_positions SET qty=?, collateral_locked=? WHERE guild_id=? AND user_id=? AND symbol=? AND side='SHORT'",
+                        (new_qty, max(0, new_collateral), gid, uid, canonical_sym),
+                    )
+
+                await tx.execute(
+                    "INSERT INTO fun_trades (guild_id, ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, ?, 'COVER', ?, ?, ?, ?, NULL)",
+                    (gid, now, uid, canonical_sym, qty, price, cash_delta, realized),
+                )
+                tx_id = (
+                    str(idempotency_key)
+                    if idempotency_key
+                    else f"cover:{gid}:{uid}:{canonical_sym}:{now}:{time.monotonic_ns()}"
+                )
+                await tx.execute(
+                    """
+                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'short_cover', ?, ?)
+                    """,
+                    (tx_id, gid, uid, cash_delta, new_bankroll, canonical_sym, now),
                 )
 
-            await tx.execute(
-                "INSERT INTO fun_trades (guild_id, ts_unix, user_id, symbol, side, qty, price, cash_delta, realized_pnl, note) VALUES (?, ?, ?, ?, 'COVER', ?, ?, ?, ?, NULL)",
-                (gid, now, uid, sym, qty, price, cash_delta, realized),
-            )
-            tx_id = (
-                str(idempotency_key)
-                if idempotency_key
-                else f"cover:{gid}:{uid}:{sym}:{now}:{time.monotonic_ns()}"
-            )
-            await tx.execute(
-                """
-                INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
-                VALUES (?, ?, ?, ?, ?, 'short_cover', ?, ?)
-                """,
-                (tx_id, gid, uid, cash_delta, new_bankroll, sym, now),
-            )
+        if is_replay:
+            stock = await self.get_stock(canonical_sym, guild_id=gid)
+            pos = await self._get_position(user_id=uid, symbol=canonical_sym, side="SHORT", guild_id=gid)
+            return stock, pos, replay_bankroll, 0, 0
 
-        stock = await self.get_stock(sym, guild_id=gid)
-        pos = await self._get_position(user_id=uid, symbol=sym, side="SHORT", guild_id=gid)
+        stock = await self.get_stock(canonical_sym, guild_id=gid)
+        pos = await self._get_position(user_id=uid, symbol=canonical_sym, side="SHORT", guild_id=gid)
         return stock, pos, new_bankroll, realized, release
 
     async def _get_position(

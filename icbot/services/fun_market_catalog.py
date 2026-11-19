@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 
 @dataclass(frozen=True)
 class FunStockDef:
+    """Definition of a simulated fun-market stock."""
+
     symbol: str
     name: str
     start_price: int
@@ -14,36 +17,71 @@ class FunStockDef:
     description: str = ""
 
 
-# Code-defined catalog (edit this file to add/remove server stocks)
-# Missing symbols are marked inactive on sync (history/positions are preserved).
+# Canonical synthetic sample securities (strictly simulated game points):
+# Fictional campus community exchange — zero real financial entities or student private lore.
 FUN_STOCK_CATALOG: tuple[FunStockDef, ...] = (
-    FunStockDef("IC", "Instigate Cafe", 100, "core", True, "Server flagship stock."),
-    FunStockDef("DISD", "Distance Detector", 10, "capstone", True, "Capstone team stock."),
-    FunStockDef("AIBS", "AI Blind Stick", 10, "capstone", True, "Capstone team stock."),
-    FunStockDef("EMVC", "Emotional Voice Recognition", 10, "capstone", True, "Capstone team stock."),
-    FunStockDef("AGIS", "Aegis - Paramedic Dashboard", 10, "misc", True, "Hackathon Team Stock."),
-    FunStockDef("PLPT", "Plot Point", 10, "misc", True, "Private Entity stock."),
-    FunStockDef("TGP", "The Graduates Project", 10, "misc", True, "Private Entity stock."),
-    FunStockDef("CONT", "Continuity AI", 10, "misc", False, "Private Entity stock."),
-    FunStockDef("BNZI", "Bonzai Stress Relief", 0, "unlisted", False, "Unlisted stock."),
-    FunStockDef("HVAC", "AI Hvac", 10, "capstone", True, "Capstone team stock."),
+    FunStockDef("IC", "Instigate Cafe", 100, "core", True, "Simulated flagship community points."),
+    FunStockDef(
+        "CAFE", "Campus Coffee & Cafe Co.", 10, "campus", True, "Fictional campus snack & coffee exchange."
+    ),
+    FunStockDef(
+        "BOOK", "Academic Bookstore Co.", 10, "academics", True, "Fictional textbook and supply store."
+    ),
+    FunStockDef("BYTE", "Computer Science Club", 10, "tech", True, "Fictional coding student collective."),
+    FunStockDef("ROBO", "Campus Robotics Initiative", 10, "tech", True, "Fictional robotics lab project."),
+    FunStockDef(
+        "LABS", "Open Science Collective", 10, "academics", True, "Fictional student research project."
+    ),
+    FunStockDef(
+        "DORM", "Campus Housing Guild", 10, "campus", True, "Fictional residential hall association."
+    ),
+    FunStockDef("QUIZ", "Trivia & Game Society", 10, "social", True, "Fictional student social games group."),
+    FunStockDef("MEME", "Campus Meme Treasury", 10, "social", True, "Fictional community humor archive."),
+    FunStockDef(
+        "VOID", "Retired Inactive Venture", 10, "unlisted", False, "Fictional decommissioned project."
+    ),
 )
+
+# Backward-compatibility alias map for legacy private-community symbols
+LEGACY_SYMBOL_MAP: dict[str, str] = {
+    "DISD": "CAFE",
+    "AIBS": "BYTE",
+    "EMVC": "LABS",
+    "AGIS": "ROBO",
+    "PLPT": "DORM",
+    "TGP": "QUIZ",
+    "CONT": "VOID",
+    "BNZI": "VOID",
+    "HVAC": "BOOK",
+}
 
 
 def normalize_symbol(symbol: str) -> str:
+    """Strip whitespace, remove leading $, and uppercase."""
     s = str(symbol or "").strip().upper()
     if s.startswith("$"):
         s = s[1:]
     return s
 
 
-def catalog_map(settings: Any | None = None) -> dict[str, FunStockDef]:
+def resolve_symbol(symbol: str) -> str:
+    """Normalize symbol and resolve through legacy alias map if applicable."""
+    norm = normalize_symbol(symbol)
+    return LEGACY_SYMBOL_MAP.get(norm, norm)
+
+
+def catalog_map(
+    settings: Any | None = None,
+    custom_catalog: Sequence[FunStockDef] | None = None,
+) -> dict[str, FunStockDef]:
     """Return catalog map, adapting flagship stock name and symbol to settings when configured."""
     out: dict[str, FunStockDef] = {}
     primary_sym = str(getattr(settings, "primary_stock_symbol", "IC") or "IC").strip().upper()
     primary_name = str(getattr(settings, "primary_stock_name", "Instigate Cafe") or "Instigate Cafe").strip()
 
-    for item in FUN_STOCK_CATALOG:
+    source = custom_catalog if custom_catalog is not None else FUN_STOCK_CATALOG
+
+    for item in source:
         sym = normalize_symbol(item.symbol)
         if not sym:
             continue
