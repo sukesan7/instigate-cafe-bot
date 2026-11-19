@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import os
 import sqlite3
 import time
@@ -600,6 +601,24 @@ async def _migrate_0004_guild_scoped_economy_and_ledger(tx: Transaction) -> None
     )
     await tx.execute(
         "CREATE INDEX IF NOT EXISTS idx_admin_audit_guild_time ON admin_audit_log(guild_id, created_at DESC)"
+    )
+
+    # 12. user_job_preferences table
+    await tx.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_job_preferences (
+            user_id        INTEGER PRIMARY KEY,
+            preset         TEXT    NOT NULL DEFAULT 'tech_swe',
+            disciplines    TEXT    NOT NULL DEFAULT '',
+            career_levels  TEXT    NOT NULL DEFAULT '',
+            locations      TEXT    NOT NULL DEFAULT '',
+            keywords_allow TEXT    NOT NULL DEFAULT '',
+            keywords_deny  TEXT    NOT NULL DEFAULT '',
+            remote_only    INTEGER NOT NULL DEFAULT 0,
+            created_at     INTEGER NOT NULL,
+            updated_at     INTEGER NOT NULL
+        )
+        """
     )
 
 
@@ -1232,6 +1251,81 @@ class Database:
 
         async with self.write_transaction() as tx:
             await tx.execute_many(statements)
+
+    async def get_user_job_preferences(self, user_id: int) -> dict[str, Any] | None:
+        row = await self.fetchone(
+            "SELECT user_id, preset, disciplines, career_levels, locations, keywords_allow, keywords_deny, remote_only, created_at, updated_at "
+            "FROM user_job_preferences WHERE user_id = ?",
+            (int(user_id),),
+        )
+        if not row:
+            return None
+
+        def _decode_seq(val: Any) -> tuple[str, ...]:
+            if not val:
+                return ()
+            s = str(val).strip()
+            if not s:
+                return ()
+            if s.startswith("[") and s.endswith("]"):
+                try:
+                    return tuple(str(x).strip() for x in json.loads(s) if str(x).strip())
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+            return tuple(p.strip() for p in s.split(",") if p.strip())
+
+        return {
+            "user_id": int(row[0]),
+            "preset": str(row[1]),
+            "disciplines": _decode_seq(row[2]),
+            "career_levels": _decode_seq(row[3]),
+            "locations": _decode_seq(row[4]),
+            "keywords_allow": _decode_seq(row[5]),
+            "keywords_deny": _decode_seq(row[6]),
+            "remote_only": bool(row[7]),
+            "created_at": int(row[8]),
+            "updated_at": int(row[9]),
+        }
+
+    async def set_user_job_preferences(
+        self,
+        user_id: int,
+        *,
+        preset: str = "tech_swe",
+        disciplines: Sequence[str] = (),
+        career_levels: Sequence[str] = (),
+        locations: Sequence[str] = (),
+        keywords_allow: Sequence[str] = (),
+        keywords_deny: Sequence[str] = (),
+        remote_only: bool = False,
+        now: int | None = None,
+    ) -> None:
+        cur_time = now if now is not None else int(time.time())
+        existing = await self.get_user_job_preferences(user_id)
+        created_at = existing["created_at"] if existing else cur_time
+        await self.execute(
+            """
+            INSERT OR REPLACE INTO user_job_preferences(
+                user_id, preset, disciplines, career_levels, locations, keywords_allow, keywords_deny, remote_only, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                preset.strip(),
+                json.dumps([d.strip() for d in disciplines if d.strip()]),
+                json.dumps([c.strip() for c in career_levels if c.strip()]),
+                json.dumps([loc.strip() for loc in locations if loc.strip()]),
+                json.dumps([kw.strip() for kw in keywords_allow if kw.strip()]),
+                json.dumps([kw.strip() for kw in keywords_deny if kw.strip()]),
+                1 if remote_only else 0,
+                created_at,
+                cur_time,
+            ),
+        )
+
+    async def delete_user_job_preferences(self, user_id: int) -> bool:
+        await self.execute("DELETE FROM user_job_preferences WHERE user_id = ?", (int(user_id),))
+        return True
 
     async def close(self) -> None:
         """Drain pending locks, close the managed connection, and mark database closed."""

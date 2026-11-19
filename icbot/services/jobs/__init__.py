@@ -18,6 +18,8 @@ from icbot.services.jobs.models import (
     CareerLevel,
     JobFilterCriteria,
     JobPosting,
+    MatchDecision,
+    MatchTraceItem,
     ProviderType,
     SourceHealth,
 )
@@ -26,15 +28,26 @@ from icbot.services.jobs.pipeline import (
     location_passes_smart,
     matches_filter_criteria,
 )
+from icbot.services.jobs.rules import (
+    DISCIPLINE_PRESETS,
+    DeterministicRuleEngine,
+    DisciplinePreset,
+    location_matches,
+)
 
 __all__ = [
+    "DISCIPLINE_PRESETS",
     "AtsAdapter",
     "CareerLevel",
+    "DeterministicRuleEngine",
+    "DisciplinePreset",
     "GreenhouseAdapter",
     "JobFilterCriteria",
     "JobPosting",
     "JobsIngestionPipeline",
     "LeverAdapter",
+    "MatchDecision",
+    "MatchTraceItem",
     "ProviderType",
     "SourceHealth",
     "WorkdayAdapter",
@@ -44,6 +57,7 @@ __all__ = [
     "classify_discipline_tags",
     "classify_taxonomy_categories",
     "detect_is_remote",
+    "location_matches",
     "location_passes_smart",
     "matches_filter_criteria",
 ]

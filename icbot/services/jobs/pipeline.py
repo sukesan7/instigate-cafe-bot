@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import sqlite3
 import time
 from collections.abc import Callable, Sequence
@@ -20,111 +19,29 @@ from icbot.services.jobs.adapters import (
 from icbot.services.jobs.models import (
     JobFilterCriteria,
     JobPosting,
+    MatchDecision,
     SourceHealth,
 )
+from icbot.services.jobs.rules import DeterministicRuleEngine, location_matches
 
 log = logging.getLogger(__name__)
-
-_SENIORITY_RX = re.compile(
-    r"\b(senior|sr\.?|staff|principal|lead|manager|director|head|vp|architect|distinguished)\b",
-    re.IGNORECASE,
-)
-
-_NON_TECH_RX = re.compile(
-    r"\b(business|analyst|marketing|sales|finance|hr|recruiter|product\s+manager|project\s+manager)\b",
-    re.IGNORECASE,
-)
-
-_DISCIPLINE_RX = re.compile(
-    r"\b("
-    r"software|swe|computer\s+science|cs\b|"
-    r"hardware|electrical|ee\b|embedded|firmware|"
-    r"data|ai|machine\s+learning|ml\b|"
-    r"mechanical|mech\b|mechatronics|robotics|"
-    r"consultant|solutions\s+engineer"
-    r")\b",
-    re.IGNORECASE,
-)
-
-_EARLY_CAREER_HINT_RX = re.compile(
-    r"\b(intern(ship)?|co[- ]?op|new\s*grads?|graduates?|entry[- ]?level|junior|jr\.?|student|early\s+career)\b",
-    re.IGNORECASE,
-)
 
 
 class _Sendable(Protocol):
     async def send(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
+_DEFAULT_RULE_ENGINE = DeterministicRuleEngine()
+
+
 def location_passes_smart(location: str, text_blob: str, allowlist: Sequence[str] | None) -> bool:
     """Check if location matches criteria, falling back to remote keyword in text."""
-    if not allowlist:
-        return True
-
-    loc = (location or "").strip().lower()
-    blob = (text_blob or "").lower()
-
-    if not loc or "not listed" in loc:
-        if any(a.strip().lower() == "remote" for a in allowlist if a) and "remote" in blob:
-            return True
-        return any(tok.lower() in blob for tok in allowlist if tok)
-
-    if any(tok.lower() in loc for tok in allowlist if tok):
-        return True
-
-    if any(a.strip().lower() == "remote" for a in allowlist if a) and "remote" in blob:
-        return True
-
-    return any(tok.lower() in blob for tok in allowlist if tok)
+    return location_matches(location, text_blob, allowlist)
 
 
 def matches_filter_criteria(job: JobPosting, criteria: JobFilterCriteria) -> bool:
-    """
-    Evaluate whether a JobPosting matches the filtering rules.
-
-    Hard gates:
-      1. Rejects seniority terms.
-      2. Rejects non-tech terms.
-      3. Requires tech discipline signal.
-      4. Requires early-career signal if require_early_career is True.
-    Soft gates:
-      5. Deny keywords (regex word-boundary).
-      6. Allow keywords (if configured).
-      7. Location allowlist.
-    """
-    blob = (job.text_blob or f"{job.title} {job.location}").lower()
-
-    # Gate 1: Reject seniority
-    if _SENIORITY_RX.search(blob):
-        return False
-
-    # Gate 1b: Reject non-tech
-    if _NON_TECH_RX.search(blob):
-        return False
-
-    # Gate 2: Require early career if configured
-    if criteria.require_early_career and not _EARLY_CAREER_HINT_RX.search(blob):
-        return False
-
-    # Gate 3: Require a tech discipline signal
-    if not _DISCIPLINE_RX.search(blob):
-        return False
-
-    # Gate 4: Deny keywords
-    if criteria.keywords_denylist:
-        for d in criteria.keywords_denylist:
-            if not d:
-                continue
-            pattern = rf"\b{re.escape(d)}\b"
-            if re.search(pattern, blob, re.IGNORECASE):
-                return False
-
-    # Gate 5: Allow keywords (if provided, at least one must match)
-    if criteria.keywords_allowlist and not any(a.lower() in blob for a in criteria.keywords_allowlist if a):
-        return False
-
-    # Gate 6: Location
-    return location_passes_smart(job.location, job.text_blob, criteria.location_allowlist)
+    """Evaluate whether a JobPosting matches the filtering rules via DeterministicRuleEngine."""
+    return _DEFAULT_RULE_ENGINE.evaluate(job, criteria).matched
 
 
 class JobsIngestionPipeline:
@@ -148,6 +65,11 @@ class JobsIngestionPipeline:
         self.greenhouse_adapter = GreenhouseAdapter()
         self.lever_adapter = LeverAdapter()
         self.workday_adapter = WorkdayAdapter()
+        self.rule_engine = DeterministicRuleEngine()
+
+    def evaluate_posting(self, job: JobPosting, criteria: JobFilterCriteria) -> MatchDecision:
+        """Evaluate a JobPosting against JobFilterCriteria and return an explainable MatchDecision."""
+        return self.rule_engine.evaluate(job, criteria)
 
     def get_or_create_health(self, source_key: str, provider: str, target: str) -> SourceHealth:
         if source_key not in self.source_health_map:

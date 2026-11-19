@@ -1,0 +1,474 @@
+[
+  {
+    "id": "eval-001",
+    "provider": "greenhouse",
+    "employer": "Stripe",
+    "title": "Software Engineering Intern - Summer 2027",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["software"],
+    "should_match_preset": {
+      "tech_swe": true,
+      "engineering_cs": true,
+      "business_finance": false,
+      "accounting": false,
+      "design_ux": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-002",
+    "provider": "lever",
+    "employer": "Palantir",
+    "title": "Backend Systems Developer Co-op",
+    "location": "Ottawa, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["software"],
+    "should_match_preset": {
+      "tech_swe": true,
+      "engineering_cs": true,
+      "business_finance": false,
+      "accounting": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-003",
+    "provider": "workday",
+    "employer": "RBC",
+    "title": "New Grad Software Engineer (2027)",
+    "location": "Toronto, ON",
+    "expected_career_level": "new_grad",
+    "expected_disciplines": ["software"],
+    "should_match_preset": {
+      "tech_swe": true,
+      "engineering_cs": true,
+      "business_finance": false,
+      "accounting": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-004",
+    "provider": "greenhouse",
+    "employer": "Databricks",
+    "title": "Machine Learning Research Scientist Intern",
+    "location": "Remote - Canada",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["cs"],
+    "should_match_preset": {
+      "tech_swe": true,
+      "engineering_cs": true,
+      "data_analytics": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-005",
+    "provider": "workday",
+    "employer": "AMD",
+    "title": "Hardware PCB Design Co-op",
+    "location": "Markham, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["hardware"],
+    "should_match_preset": {
+      "tech_swe": true,
+      "engineering_cs": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-006",
+    "provider": "workday",
+    "employer": "RBC",
+    "title": "Investment Banking Summer Analyst",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["finance"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": true,
+      "accounting": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-007",
+    "provider": "lever",
+    "employer": "BMO",
+    "title": "Financial Analyst Intern - Capital Markets",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["finance"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": true,
+      "accounting": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-008",
+    "provider": "workday",
+    "employer": "Deloitte",
+    "title": "Tax Associate (Entry Level) - Fall 2027",
+    "location": "Toronto, ON",
+    "expected_career_level": "entry",
+    "expected_disciplines": ["accounting"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": true,
+      "accounting": true,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-009",
+    "provider": "workday",
+    "employer": "PwC",
+    "title": "Audit Associate - CPA Track",
+    "location": "Waterloo, ON",
+    "expected_career_level": "entry",
+    "expected_disciplines": ["accounting"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": true,
+      "accounting": true,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-010",
+    "provider": "greenhouse",
+    "employer": "KPMG",
+    "title": "Assurance Intern - Winter 2027",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["accounting"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": true,
+      "accounting": true,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-011",
+    "provider": "lever",
+    "employer": "Figma",
+    "title": "Product Design Intern - Summer 2027",
+    "location": "Remote - Canada",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["design"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "design_ux": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-012",
+    "provider": "greenhouse",
+    "employer": "Shopify",
+    "title": "UI/UX Designer Co-op",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["design"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "design_ux": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-013",
+    "provider": "lever",
+    "employer": "Canva",
+    "title": "Visual Designer - Early Career",
+    "location": "Toronto, ON",
+    "expected_career_level": "entry",
+    "expected_disciplines": ["design"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "design_ux": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-014",
+    "provider": "greenhouse",
+    "employer": "Biolab Corp",
+    "title": "Biotechnology Laboratory Intern",
+    "location": "Mississauga, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["biology"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "biotech_health": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-015",
+    "provider": "workday",
+    "employer": "AstraZeneca",
+    "title": "Clinical Research Assistant Co-op",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["biology"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "biotech_health": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-016",
+    "provider": "greenhouse",
+    "employer": "DeepGenomics",
+    "title": "Bioinformatics Intern - Computational Biology",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["biology"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "biotech_health": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-017",
+    "provider": "lever",
+    "employer": "Wealthsimple",
+    "title": "Growth Marketing Intern",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["marketing"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "marketing": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-018",
+    "provider": "greenhouse",
+    "employer": "Hootsuite",
+    "title": "Digital Marketing Coordinator Co-op",
+    "location": "Remote - Canada",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["marketing"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "marketing": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-019",
+    "provider": "workday",
+    "employer": "Scotiabank",
+    "title": "Business Operations Analyst Intern",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["business"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": true,
+      "data_analytics": true,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-020",
+    "provider": "lever",
+    "employer": "McKinsey",
+    "title": "Strategy & Management Consulting Summer Analyst",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["consulting", "business"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": true,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-021",
+    "provider": "greenhouse",
+    "employer": "Stripe",
+    "title": "Associate Software Engineer",
+    "location": "Toronto, ON",
+    "expected_career_level": "entry",
+    "expected_disciplines": ["software"],
+    "should_match_preset": {
+      "tech_swe": true,
+      "engineering_cs": true,
+      "business_finance": false,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-022",
+    "provider": "lever",
+    "employer": "Bain",
+    "title": "Associate Consultant (New Grad 2027)",
+    "location": "Toronto, ON",
+    "expected_career_level": "new_grad",
+    "expected_disciplines": ["consulting"],
+    "should_match_preset": {
+      "tech_swe": true,
+      "engineering_cs": true,
+      "business_finance": true,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-023",
+    "provider": "workday",
+    "employer": "RBC",
+    "title": "Data Analyst Intern - Technology & Operations",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["cs"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "data_analytics": true,
+      "business_finance": true,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-024",
+    "provider": "greenhouse",
+    "employer": "Stripe",
+    "title": "Senior Associate Consultant",
+    "location": "Toronto, ON",
+    "expected_career_level": "experienced",
+    "expected_disciplines": ["consulting"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": false,
+      "all": false
+    }
+  },
+  {
+    "id": "eval-025",
+    "provider": "workday",
+    "employer": "PwC",
+    "title": "Associate Director - Cybersecurity & Privacy",
+    "location": "Toronto, ON",
+    "expected_career_level": "experienced",
+    "expected_disciplines": ["cs"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": false,
+      "all": false
+    }
+  },
+  {
+    "id": "eval-026",
+    "provider": "lever",
+    "employer": "Palantir",
+    "title": "Senior Staff Infrastructure Architect",
+    "location": "Toronto, ON",
+    "expected_career_level": "experienced",
+    "expected_disciplines": ["software"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": false,
+      "all": false
+    }
+  },
+  {
+    "id": "eval-027",
+    "provider": "workday",
+    "employer": "RBC",
+    "title": "Director of Quantitative Research & Trading",
+    "location": "Toronto, ON",
+    "expected_career_level": "experienced",
+    "expected_disciplines": ["cs", "finance"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": false,
+      "all": false
+    }
+  },
+  {
+    "id": "eval-028",
+    "provider": "greenhouse",
+    "employer": "Shopify",
+    "title": "Lead Product Designer",
+    "location": "Toronto, ON",
+    "expected_career_level": "experienced",
+    "expected_disciplines": ["design"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "design_ux": false,
+      "all": false
+    }
+  },
+  {
+    "id": "eval-029",
+    "provider": "lever",
+    "employer": "Blackstone",
+    "title": "Private Equity Associate",
+    "location": "Toronto, ON",
+    "expected_career_level": "entry",
+    "expected_disciplines": ["finance"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": true,
+      "all": true
+    }
+  },
+  {
+    "id": "eval-030",
+    "provider": "greenhouse",
+    "employer": "Goldman Sachs",
+    "title": "Quantitative Trading Summer Analyst",
+    "location": "Toronto, ON",
+    "expected_career_level": "intern",
+    "expected_disciplines": ["cs", "finance"],
+    "should_match_preset": {
+      "tech_swe": false,
+      "engineering_cs": false,
+      "business_finance": true,
+      "data_analytics": true,
+      "all": true
+    }
+  }
+]
+

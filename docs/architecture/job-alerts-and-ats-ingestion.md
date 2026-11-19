@@ -162,3 +162,70 @@ Performance verification (`test_1000_jobs_performance_and_memory_benchmark`) con
 | **Peak Memory Allocation** | `< 15.00 MB` | `~2.40 MB` (bounded generator processing and string deduplication) |
 | **Leak / Growth Invariant** | Zero unbounded object retention | Traced memory freed immediately upon batch checkpoint |
 
+---
+
+## 8. Configurable Disciplines, Presets, and Deterministic Rule Engine
+
+### 8.1 Multi-Major Taxonomy & Presets
+To avoid hardcoding matching rules strictly to Computer Science / Software Engineering, the classification system uses a normalized taxonomy of disciplines spanning engineering, business, sciences, and liberal arts:
+- `software`, `hardware`, `cs`, `electrical`, `mechanical`, `civil`, `chemical`
+- `consulting`, `finance`, `accounting`, `business`, `marketing`
+- `design`, `biology`, `law`
+
+Predefined discipline presets allow quick configuration for common campus cohorts:
+- `tech_swe` (Default baseline): Matches software, CS, electrical, and hardware roles with strict early-career filtering and exclusion of non-tech roles.
+- `engineering_cs`: Matches across all engineering disciplines and computer science.
+- `business_finance`: Matches finance, banking, private equity, capital markets, consulting, and business analysis.
+- `accounting`: Matches audit, tax, assurance, bookkeeping, and staff accountant roles.
+- `data_analytics`: Matches data analyst, business intelligence, analytics engineering, and quantitative analysis.
+- `design_ux`: Matches UI/UX, product design, visual design, graphic design, and interaction design.
+- `marketing`: Matches marketing, growth, social media, content, SEO/SEM, and brand management.
+- `biotech_health`: Matches biology, bioinformatics, lab technician, clinical research, biochemistry, and pharma.
+- `law_compliance`: Matches legal assistant, paralegal, compliance, regulatory affairs, and corporate counsel roles.
+- `general_entry`: Broad early-career filter matching any intern, co-op, new grad, or junior role regardless of field.
+- `all`: Unrestricted matching with zero discipline or seniority filtering.
+
+### 8.2 Deterministic Explainable Matching (`MatchDecision` & `MatchTraceItem`)
+Every job evaluation runs through `DeterministicRuleEngine`, returning a structured `MatchDecision`:
+```python
+@dataclass(frozen=True)
+class MatchTraceItem:
+    rule: str
+    passed: bool
+    reason: str
+
+@dataclass(frozen=True)
+class MatchDecision:
+    matched: bool
+    preset: str
+    career_level: CareerLevel
+    disciplines: tuple[str, ...]
+    trace: tuple[MatchTraceItem, ...]
+    explanation: str
+```
+The trace details every evaluation step in deterministic order:
+1. **Employer Allowlist Check**: Validates employer against whitelist if defined.
+2. **Title Exclusion Check**: Rejects known off-scope keywords (e.g. medical doctor, nurse, construction, truck driver).
+3. **Explicit Seniority Check**: Disambiguates senior qualifiers while protecting entry-level roles.
+4. **Preset / Custom Seniority Validation**: Matches against target career levels (intern, new grad, entry).
+5. **Preset Discipline Match**: Evaluates discipline regex patterns against job title and text blob.
+6. **Custom Keyword / Exclude Word Checks**: Evaluates user- or guild-defined include/exclude terms.
+7. **Location & Remote Matching**: Checks geographic filters and remote preferences.
+
+### 8.3 Disambiguation of Ambiguous Titles
+- **"Staff Accountant" vs "Staff"**: In accounting, "Staff Accountant" is standard entry-level terminology. While bare "staff" indicates senior engineering levels (Staff Software Engineer), the rule engine protects "Staff Accountant" (without "Senior") and intern/co-op positions from the generic senior exclusion.
+- **"Associate"**: Context-aware disambiguation. Pure "Associate" or "Associate Consultant" is recognized as entry-level, whereas "Senior Associate", "Associate Director", or "Associate VP" are strictly rejected as experienced/executive roles.
+- **"Analyst"**: In legacy filters, "analyst" was frequently caught by non-tech exclusions. Under multi-major presets (`data_analytics`, `business_finance`), "Data Analyst" and "Financial Analyst" are recognized and retained.
+
+### 8.4 Evaluation Dataset & Precision/Recall Benchmark
+A 30-item labeled evaluation dataset (`tests/fixtures/labeled_job_eval_dataset.json`) spans 5+ university programs (CS, Accounting, Finance, Biology, Design) across Greenhouse, Lever, and Workday ATS listings.
+Automated unit tests benchmark the matching engine against ground-truth labels:
+- **Precision Target**: $\ge 95\%$ across presets.
+- **Recall Target**: $\ge 95\%$ across presets.
+- **Regression Guard**: All legacy tech tests run unmodified under the `tech_swe` preset.
+
+### 8.5 User Job Preferences & Ephemeral Preview UX
+- **User Job Preferences**: Stored locally in SQLite table `user_job_preferences` (user ID, preset, career levels, disciplines, keywords, excluded words, locations, remote preference). Zero external profiling or third-party telemetry calls.
+- **`/ic job_preview` Command**: Allows users and server admins to test job filters against recent listings or arbitrary job titles before configuring alerts, providing an ephemeral embed with full trace inspection (`PASS`/`FAIL` per rule) and explanation.
+
+

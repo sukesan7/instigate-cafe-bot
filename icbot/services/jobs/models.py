@@ -101,6 +101,27 @@ class JobPosting:
 
 
 @dataclass(frozen=True)
+class MatchTraceItem:
+    """Individual rule evaluation result in a match trace."""
+
+    rule: str
+    passed: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class MatchDecision:
+    """Explainable verdict and trace returned by the rule engine."""
+
+    matched: bool
+    preset: str
+    career_level: CareerLevel
+    disciplines: tuple[str, ...]
+    trace: tuple[MatchTraceItem, ...]
+    explanation: str
+
+
+@dataclass(frozen=True)
 class JobFilterCriteria:
     """Filter criteria for matching candidate job postings."""
 
@@ -108,3 +129,8 @@ class JobFilterCriteria:
     keywords_allowlist: tuple[str, ...] = ()
     keywords_denylist: tuple[str, ...] = ()
     require_early_career: bool = False
+    disciplines: tuple[str, ...] = ()
+    career_levels: tuple[CareerLevel, ...] = ()
+    remote_only: bool = False
+    preset: str = "tech_swe"
+    employer_allowlist: tuple[str, ...] = ()
