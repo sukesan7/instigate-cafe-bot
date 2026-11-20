@@ -329,7 +329,7 @@ GETTING_STARTED_STEPS: list[dict[str, Any]] = [
                 False,
             ),
         ],
-        "tip": "No configuration is required! You can claim your daily allowance right now with `/ic dailyclaim`.",
+        "tip": "No configuration is required! Run `/ic dailyclaim` right now. For privacy and data deletion policies, check `/ic botinfo`.",
     },
     {
         "step": 2,
@@ -355,7 +355,8 @@ GETTING_STARTED_STEPS: list[dict[str, Any]] = [
             (
                 "📅 Exam Schedules & Tracking",
                 "Never miss a test. Run **`/ic exam list`** to see midterms and finals for your courses. "
-                "You can export your schedule to Google Calendar or Apple Calendar using **`/ic exam export`**.",
+                "You can export your schedule to Google Calendar or Apple Calendar using **`/ic exam export`**. "
+                "(Course instructors and admins add exams via `/ic exam add`).",
                 False,
             ),
             (
@@ -391,7 +392,7 @@ GETTING_STARTED_STEPS: list[dict[str, Any]] = [
             (
                 "📄 Private AI Resume Review",
                 "Upload a draft with **`/ic resume`** to get confidential, constructive feedback. "
-                "Your document is processed in private and never shown to the channel.",
+                "Your document is evaluated ephemerally in memory and never stored on disk or in the database.",
                 False,
             ),
         ],

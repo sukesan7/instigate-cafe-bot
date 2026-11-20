@@ -111,6 +111,13 @@ async def botinfo(interaction: discord.Interaction):
     fields = [
         ("LLM Engine", f"Powered by **{llm_model}**", False),
         ("Integration Readiness", "\n".join(cap_lines) or "Standard offline features active", False),
+        (
+            "🔒 Data Privacy & User Rights",
+            "• **Data Minimization:** No personal chat messages are retained long-term.\n"
+            "• **Ephemeral Resumes:** Resumes are processed in memory and never stored on disk or database.\n"
+            "• **Data Deletion:** Contact a server administrator or operator to purge stored virtual economy data.",
+            False,
+        ),
     ]
     task_health_fn = getattr(interaction.client, "task_health", None)
     if callable(task_health_fn):
