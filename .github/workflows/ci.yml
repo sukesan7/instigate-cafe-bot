@@ -42,10 +42,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Set up uv and Python ${{ matrix.python-version }}
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v5.1.0
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
@@ -58,6 +58,9 @@ jobs:
 
       - name: Run deterministic secret and publish-safety scan
         run: uv run python tools/scan_secrets.py --enforce-clean
+
+      - name: Run dependency vulnerability audit
+        run: uv run pip-audit --desc auto
 
       - name: Validate and run offline pre-commit hooks
         run: |
@@ -75,5 +78,17 @@ jobs:
       - name: Run offline AST and zero-token import smoke check
         run: uv run python tools/smoke_offline.py
 
+      - name: Run offline usability review benchmark
+        run: uv run pytest tests/unit/test_usability_review_archetypes.py -v
+
       - name: Run offline pytest suite with branch coverage
-        run: uv run pytest --cov=icbot --cov-report=term-missing -v
+        run: uv run pytest --cov=icbot --cov-report=term-missing --cov-report=xml:coverage.xml -v
+
+      - name: Upload safe coverage report artifact
+        if: always() && matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: coverage-report-py312
+          path: coverage.xml
+          retention-days: 14
+          if-no-files-found: ignore

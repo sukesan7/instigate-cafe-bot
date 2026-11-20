@@ -33,17 +33,22 @@ FORBIDDEN_FILE_PATTERNS = [
     "*.sqlite3",
     "*.db-wal",
     "*.db-shm",
+    "*.sqlite-wal",
+    "*.sqlite-shm",
+    "*.sqlite3-wal",
+    "*.sqlite3-shm",
     ".env",
-    ".env.local",
-    ".env.production",
-    ".env.prod",
-    ".env.staging",
+    ".env.*",
     "*.pem",
     "*.key",
+    "*.p12",
+    "*.pfx",
     "id_rsa*",
     "id_ed25519*",
     "tools/lore.*.json",
     "lore.*.json",
+    "*credential*.json",
+    "*client_secret*.json",
 ]
 
 # Patterns explicitly exempted from the forbidden list
@@ -83,6 +88,7 @@ SCAN_EXEMPT_PATHS = {
     "docs/audit/sensitive_artifact_audit.md",
     "docs/publishing-checklist.md",
     "tests/fixtures/synthetic_lore.json",
+    "tests/unit/test_supply_chain_and_leak_guards.py",
 }
 
 
@@ -361,6 +367,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print()
 
     print("================================================================================")
+    if (
+        critical_findings
+        or (legacy_findings and args.enforce_clean)
+        or (legacy_findings and not args.allow_legacy)
+    ):
+        print(" Maintainer Remediation Guide:")
+        print("--------------------------------------------------------------------------------")
+        print(" 1. To untrack a forbidden file without deleting your local copy:")
+        print("      git rm --cached <path/to/file>")
+        print("      echo '<pattern>' >> .gitignore")
+        print()
+        print(" 2. If a secret or token was committed to git history:")
+        print("      a. Immediately REVOKE and ROTATE the compromised credential at the provider.")
+        print("      b. Remove the secret from code/configuration and commit the scrubbed version.")
+        print("      c. Consult docs/publishing-checklist.md for git history inspection policies.")
+        print("================================================================================")
+
     if critical_findings:
         print(" [FAIL] Scan failed due to critical violations. Remediate findings before commit/push.")
         return 1

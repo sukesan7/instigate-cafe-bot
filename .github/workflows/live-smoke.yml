@@ -1,0 +1,62 @@
+name: Live Provider Smoke Check (Optional)
+
+# Distinct optional scheduled smoke checks for live third-party endpoints.
+# - Gated by explicit repository secrets / workflow dispatch.
+# - NEVER part of required PR tests.
+# - Zero Discord gateway activity (never starts main.py or bot.run).
+# - Zero Railway deployment steps.
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Provider suite to smoke check (all, academics, transit, jobs)"
+        required: false
+        default: "all"
+  schedule:
+    # Low-frequency opt-in check: Sundays at 04:00 UTC
+    - cron: "0 4 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ICBOT_ALLOW_GATEWAY: "false"
+  LLM_ENABLED: "false"
+
+jobs:
+  live-smoke:
+    name: Live Provider Smoke Diagnostics
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up uv and Python 3.12
+        uses: astral-sh/setup-uv@v5.1.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install locked development environment
+        run: uv sync --frozen --dev
+
+      - name: Verify credential gating and run live smoke
+        env:
+          OPT_IN_LIVE_SMOKE: ${{ secrets.OPT_IN_LIVE_SMOKE }}
+          GO_API_KEY: ${{ secrets.GO_API_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+        run: |
+          if [ "$OPT_IN_LIVE_SMOKE" != "true" ] && [ -z "$GO_API_KEY" ]; then
+            echo "[NOTICE] Live provider smoke checks are disabled (no OPT_IN_LIVE_SMOKE secret or live keys set)."
+            echo "Skipping live endpoint verification to avoid uncredentialed scraping."
+            exit 0
+          fi
+          echo "Executing opt-in live smoke checks for provider: ${{ inputs.provider || 'all' }}..."
+          uv run pytest -m live_smoke --tb=short
+
