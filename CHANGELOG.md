@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.4] - 2026-11-19
 
 ### Added
+- **Maintainer, Privacy & Operational Documentation (Phase 12C):**
+  - [`docs/architecture.md`](docs/architecture.md): High-level system architecture and Mermaid sequence diagrams for interaction routing, background task scheduling with circuit breakers, and atomic SQLite WAL economy transactions.
+  - [`docs/configuration.md`](docs/configuration.md): Exhaustive environment reference covering all 33+ flags from `icbot.config.Settings` across 7 domains with defaults, types, and security/cost risks.
+  - [`docs/providers.md`](docs/providers.md): External provider catalog (RMP, Metrolinx, TTC Mastodon, ATS engines, Gemini, Yahoo Finance, Esplora) and a 4-step contributor guide for adding campus providers safely without production credentials.
+  - [`docs/privacy.md`](docs/privacy.md): Technical privacy specification detailing data minimization, classification, zero-disk ephemeral resume handling, third-party flows, and Right-to-be-Forgotten data deletion (`user_store.delete_user_data`).
+  - [`docs/operations.md`](docs/operations.md): Operational guide covering health diagnostics (`/ic status`), log redaction, circuit breakers, schema v7 WAL maintenance, single-instance scheduler ownership, and hot database backup runbooks.
+  - [`README.md`](README.md): Rebuilt open-source documentation with accurate feature matrix matching all 53 registered leaf commands, tested Python versions (3.11–3.13), and safe offline quick-start guides.
+  - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md): Original community code of conduct defining standards, moderation, and confidential reporting channels.
+  - GitHub issue & PR templates: Added [`.github/ISSUE_TEMPLATE/feature_request.md`](.github/ISSUE_TEMPLATE/feature_request.md) and [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) with explicit privacy warnings against pasting tokens or private server data.
+- **Safe Production Hosting & Disaster Recovery (Phase 12B):**
+  - Safe automated staging verification script [`tools/smoke_staging.py`](tools/smoke_staging.py) validating migrations, supervisor health, and container initialization offline.
+  - Online hot backup and restore utilities [`tools/backup_db.py`](tools/backup_db.py) and [`tools/restore_db.py`](tools/restore_db.py) using SQLite VACUUM INTO and WAL checkpointing.
 - **GitHub Actions Quality Gate (`.github/workflows/ci.yml`):** Pinned offline CI pipeline executing Ruff lint/format, Mypy static analysis, `pip-audit` dependency vulnerability scanning, secret checking, and Pytest coverage across Python 3.11, 3.12, and 3.13.
 - **Optional Live Provider Smoke Workflow (`.github/workflows/live-smoke.yml`):** Credential-gated workflow for testing live third-party endpoints (RMP, Metrolinx, Mastodon) on manual trigger or low-frequency schedule, isolated from PR checks.
 - **Dependabot Automation (`.github/dependabot.yml`):** Weekly automated dependency update tracking for Python packages and GitHub Actions.

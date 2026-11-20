@@ -88,3 +88,15 @@ Every pull request requires:
 - 100% green status on the GitHub Actions **Offline Quality Gate** (Ruff, Mypy, Pytest, Pip-Audit, Scan-Secrets).
 - Clean diff verification ensuring no `.db`, `.env`, or credential artifacts are introduced.
 
+---
+
+## 6. Adding a New Campus Provider
+
+We welcome community contributions expanding the bot's academic tools to other universities! Please consult the [Provider Integration Guide](docs/providers.md#4-contributor-guide-adding-a-new-campus-provider) for step-by-step instructions on implementing `AcademicProviderProtocol`, SSRF validation, and writing offline tests with synthetic fixtures.
+
+---
+
+## 7. Code of Conduct
+
+All contributors and community participants are expected to adhere to our [Community Code of Conduct](CODE_OF_CONDUCT.md). Please report any concerns to **`imsukesan@gmail.com`**.
+

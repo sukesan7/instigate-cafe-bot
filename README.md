@@ -1,277 +1,180 @@
-# Instigate Cafe Bot (v0.2.16)
+# Instigate Cafe Bot
 
-![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
-![discord.py](https://img.shields.io/badge/discord.py-app__commands-5865F2)
-![SQLite](https://img.shields.io/badge/Storage-SQLite-lightgrey)
-![Status](https://img.shields.io/badge/Project-active-a)
+[![Python 3.11 | 3.12 | 3.13](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
+[![discord.py 2.3+](https://img.shields.io/badge/discord.py-2.3%2B%20app__commands-5865F2)](https://github.com/Rapptz/discord.py)
+[![Storage SQLite WAL](https://img.shields.io/badge/Storage-SQLite%20WAL-lightgrey)](https://www.sqlite.org/)
+[![CI Offline Quality Gate](https://img.shields.io/badge/CI-Offline%20Quality%20Gate-success)](.github/workflows/ci.yml)
+[![License MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A modular Discord bot built with Python and `discord.py` that combines:
-- Slash-command utilities under a single root command group (`/ic`)
-- Background pollers for ATS Job Alerts, Transit advisories, and Market reporting
-- Persistent storage using SQLite for state, checkpoints, leaderboards, schedules, and a unified game/economy bankroll
-- An optional mention-based LLM assistant powered by the Gemini API (text + image)
-
-This codebase is structured to be easy to extend: **features** (slash commands), **tasks** (polling loops), **games** (engines), and **services** (API clients) are cleanly separated.
-
-THIS IS A TEST MESSAGE
+A modular, student-focused Discord bot combining academic study tools, tech job alerts, regional transit advisories, a virtual campus economy, and optional privacy-first AI resume feedback.
 
 ---
 
-## Highlights
+## 1. What the Bot Is (and What It Is Not)
 
-### Command Features (`icbot/features/`)
-- **Jobs Engine**: `/ic jobs` discovers and filters new SWE/CS/hardware Intern and New Grad roles ingested directly from Workday, Greenhouse, and Lever ATS boards.
-- **University Toolkit**: `/ic notes <course>` pulls live, up-to-date Notion links from web-scraped engineering repositories (Jasper Cruz & Krish Patel). `/ic prof <name>` fetches real-time RateMyProfessors ratings.
-- **Market Report**: `/ic report` generates a real-time market snapshot and report.
-- **Fun Market / ICSE**: `/ic icse ...` commands for server-specific stocks (e.g., capstone teams, meme stocks), long/short positions, portfolios, trade history, and leaderboards.
-- **Casino Games**: Includes fully playable table games (`/ic casino blackjack`, `/ic casino roulette`, `/ic casino slots`) powered by independent `engine` backends, seamlessly integrated into a persistent user economy bankroll.
-- **Profile & Leaderboard**: `/ic profile` handles unified bankroll limits, investments, and cash balances, while `/ic leaderboard` surfaces top server net-worth rankings.
-- **System Information**: `/ic botinfo` and `/ic serverinfo` provide deep-dive diagnostics on the LLM powering the bot, runtime environment, and Discord Server settings.
-- **Sports Utility**: `/ic sports nba`, `/ic sports nfl`, `/ic sports ufc`, `/ic sports mma`, `/ic sports boxing` to show upcoming events and related headlines.
+- **What it IS:**
+  - An application running strictly on Discord Slash Commands (`/ic`) under a single clean command namespace.
+  - An academic utility providing study guide links (Notion), RateMyProfessors ratings, and shared guild exam calendars with iCalendar (`.ics`) export.
+  - A tech careers feed filtering junior software engineering internships and new grad postings from Greenhouse, Lever, and Workday.
+  - A simulated campus paper-trading exchange (ICSE) and casino mini-games running on an atomic, double-entry SQLite ledger.
+  - A self-hostable service executing as a non-root process with outbound-only networking and zero open inbound ports.
 
-### Background Tasks (`icbot/tasks/`)
-- **TTC & GO Alerts**: Polls Metrolinx GO Open Data API and TTC Mastodon for critical network service advisories.
-- **Jobs Poller**: Crawls Greenhouse, Lever, and Workday endpoints, aggressively parsing and filtering for strict CS/SWE Junior profiles before alerting Discord.
-- **Market Watch**: Volatility watcher (VIX threshold and large index/stock moves) with anti-spam latching protocols.
-- **Daily Market Report**: Scheduled daily summary at configured local time (default: 16:30 America/Toronto), summarizing virtual stock closes and fun-market rollovers.
-- **LLM Mention Assistant**: Triggers entirely ambient responses whenever `@Instigator` is called, utilizing context memory windows and specific lore parameters to maintain unique character traits.
-
-### External Integrations (`icbot/services/`)
-- **Gemini API** (LLM): Text and Image understanding endpoints.
-- **RateMyProfessors** GraphQL Client: Retrieves direct ratings, difficulty thresholds, and class identifiers.
-- **Workday, Lever, Greenhouse**: Native parsing pipelines resolving unindexed JSON structures and API graphs from modern ATS software.
-- **Yahoo Finance & Crypto**: Lightweight HTTP clients for indexes/quotes and Fear & Greed indices.
-- **Metrolinx & Mastodon**: Active network pollers for dynamic alerts.
+- **What it is NOT:**
+  - **Not a universal multi-campus bot:** Default study guides and course notes focus on Toronto Metropolitan University (TMU) STEM curricula. Adding new institutions requires implementing a campus adapter (see [Provider Guide](docs/providers.md)).
+  - **Not a financial or investment platform:** All stock quotes, trades, and casino bets are purely educational simulations using virtual campus tokens. Real money transactions are neither supported nor possible.
+  - **Not an automated compliance tool:** While engineered for data minimization and Right-to-be-Forgotten deletion, hosting operators remain responsible for their community's privacy policies.
+  - **Not an always-listening microphone:** The bot does not eavesdrop on channel chat. Message content is processed only when explicitly invoked via slash commands or direct `@mentions`.
 
 ---
 
-## Command Reference
+## 2. High-Level Architecture
 
-All slash commands fall under the highly-structured `/ic` root group to avoid root-level namespace pollution in large Discord Servers.
-
-### Utilities and Tools
-- `/ic report` — Generate the current market report.
-- `/ic jobs` — Show the most recent matching SWE/CS/CE jobs scraped.
-- `/ic exams` — Track configured course exams.
-- `/ic notes <course>` — Search through and fetch Notion archives from predefined student markdown sites.
-- `/ic prof <name>` — Retrieves direct Professor ratings, difficulty bounds, and top tags from RateMyProfessors.
-- `/ic grades <course>` — Scrapes and displays university grade distributions per professor for a specific course.
-- `/ic resume` — Uses the Gemini AI to provide a technical review and ATS scan of your uploaded resume.
-
-### Economy, Games, & Assets
-- `/ic profile [user]` — Check centralized net worth, cash holdings, and total locked equity.
-- `/ic leaderboard` — Ranks entire server by Net Worth (Cash + Portfolios).
-- `/ic casino blackjack` — Play an interactive visual blackjack hand inside Discord against the dealer (buttons).
-- `/ic casino roulette` — Wager on specific colors, odds, or numerical sets.
-- `/ic casino slots` — Test your luck across dozens of high-value slot machine payouts.
-
-### Fun Market / Investing (`/ic icse ...`)
-A highly mature, paper-trading simulated market running on the **centralized economy bankroll**.
-- `/ic icse market` — Show all active fun stocks (price + weekly move snapshot).
-- `/ic icse quote <symbol>` — Show a single stock quote.
-- `/ic icse portfolio [user]` — Show open positions, margins, and marked equity.
-- `/ic icse buy/sell <symbol> <qty>` — Execute long position closures or scaling.
-- `/ic icse short/cover <symbol> <qty>` — Take short execution routes against server stocks using strict collateral logic.
-
-#### Admin / Market Controls (Admin/Allowed Roles)
-- `/ic admin move <symbol> <delta> [reason]` — Move a stock price by a delta increment.
-- `/ic admin set <symbol> <value> [reason]` — Hard-reset an equity price.
-- `/ic admin llm_stop` — Pauses the LLM functionality (chatbot and resume tool).
-- `/ic admin llm_start` — Re-enables the LLM functionality.
-
-### System & Info Diagnostics
-- `/ic botinfo` — View LLM runtime bounds, active tech stack, and internal modules.
-- `/ic serverinfo` — View meta-data on the current discord server (guild ids, roles, structure).
-
----
-
-## LLM Assistant (Gemini)
-
-The LLM assistant is absolutely **mention-based** and designed seamlessly to respond identically to a user (`@Instigator ...`).
-
-### Behavior
-- Auto-caches recent histories up to `LLM_MAX_MESSAGES` messages.
-- Transparently handles image Q/A parsing if an attachment is detected inline.
-- Defends against user pings (`@everyone`) inside synthesized messages safely.
-
-### Lore Injection
-Unique character-behaviors or "server inside jokes" are loaded silently and implicitly through prompt-injection.
-`tools/lore.x_files.json` structures these boundaries safely so the bot maintains extreme character adherence without bloating overhead.
-
----
-
-## Jobs Ingestion & Security Strictness
-
-The Job Board engine tracks endpoints strictly injected through `.env`:
-`GREENHOUSE_BOARDS` | `LEVER_SITES` | `WORKDAY_SITES`
-
-All jobs are run through ultra-aggressive filters dictating:
-1. Allowlisted Keywords (`SWE`, `Software`, `Hardware`, `Electrical`).
-2. Hard Denies against Mid-Senior configurations (`Analyst`, `Senior`, `Manager`).
-3. Position Bounds optionally limiting roles using `JOBS_REQUIRE_EARLY_CAREER=true` (forces `Intern`, `Co-op`, or `New Grad` nomenclature). If `false` (default), standard mid-level engineering roles are accepted.
-
----
-
-## Data Storage (SQLite)
-
-The bot operates entirely on an AIO-synchronized SQLite cache (`icbot/db.py`) utilizing unique stores across:
-- Checkpoints & Event Deduping (Jobs, Feeds, Transit).
-- Leaderboard/Count/Stats tracking.
-- Casino state logic.
-- Investment logic (Positions, Lock collateral, Ledgers, Portfolios).
-
----
-
-## Project Layout
-
-```text
-project-root/
-├─ .env.example
-├─ .gitignore
-├─ README.md
-├─ main.py
-├─ docs/
-│  ├─ development-baseline.md
-│  ├─ publishing-checklist.md
-│  ├─ testing.md
-│  ├─ privacy/
-│  │  └─ data-map.md
-│  └─ audit/
-│     ├─ architecture_inventory.md
-│     ├─ feature_disposition.md
-│     └─ sensitive_artifact_audit.md
-├─ icbot/
-│  ├─ app.py
-│  ├─ config.py
-│  ├─ db.py
-│  ├─ embeds.py
-│  ├─ permissions.py
-│  ├─ features/
-│  │  ├─ admin.py
-│  │  ├─ blackjack.py
-│  │  ├─ exams.py
-│  │  ├─ grades.py                  
-│  │  ├─ info.py                  
-│  │  ├─ invest.py                  
-│  │  ├─ jobs.py
-│  │  ├─ lc_leaderboard.py
-│  │  ├─ notes.py                   
-│  │  ├─ prof.py                    
-│  │  ├─ profile.py                 
-│  │  ├─ report.py
-│  │  ├─ resume.py                  
-│  │  ├─ roulette.py                
-│  │  ├─ slots.py                   
-│  │  └─ sports.py                   
-│  ├─ games/
-│  │  ├─ blackjack_engine.py
-│  │  ├─ roulette_engine.py
-│  │  └─ slots_engine.py
-│  ├─ services/
-│  │  ├─ btc_esplora.py
-│  │  ├─ crypto_fng.py
-│  │  ├─ fun_market.py              
-│  │  ├─ fun_market_catalog.py      
-│  │  ├─ gemini_client.py
-│  │  ├─ go_client.py
-│  │  ├─ jobs_ats_client.py
-│  │  ├─ jobs_workday_client.py
-│  │  ├─ prof_client.py             
-│  │  ├─ sports_client.py
-│  │  ├─ ttc_client.py
-│  │  ├─ user_service.py            
-│  │  └─ yahoo_quotes.py
-│  └─ tasks/
-│     ├─ btc_watch.py
-│     ├─ go_alerts.py
-│     ├─ job_alerts.py
-│     ├─ jobs_workday_alerts.py
-│     ├─ llm_assistant.py
-│     ├─ market_daily_report.py     
-│     ├─ market_watch.py
-│     └─ ttc_alerts.py
-├─ pyproject.toml
-├─ scripts/
-│  └─ manual/
-│     ├─ README.md
-│     ├─ test_kh_notes.py
-│     ├─ test_notes.py
-│     ├─ test_rmp.py
-│     ├─ test_tmu.py
-│     └─ test_yf.py
-├─ tests/
-│  ├─ __init__.py
-│  ├─ conftest.py
-│  ├─ helpers.py
-│  ├─ fixtures/
-│  │  ├─ gemini_generate_response.json
-│  │  ├─ greenhouse_jobs.json
-│  │  ├─ lever_jobs.json
-│  │  ├─ metrolinx_service_alerts.json
-│  │  ├─ notes_spa_bundle.js
-│  │  ├─ notes_spa_index.html
-│  │  ├─ rmp_prof_response.json
-│  │  ├─ rmp_school_response.json
-│  │  ├─ synthetic_lore.json
-│  │  ├─ tmu_grades_course.html
-│  │  ├─ workday_careers.html
-│  │  ├─ workday_cxs_jobs.json
-│  │  └─ yahoo_quotes_response.json
-│  ├─ unit/
-│  │  ├─ test_config.py
-│  │  ├─ test_game_engines.py
-│  │  ├─ test_network_guard.py
-│  │  ├─ test_permissions_and_embeds.py
-│  │  └─ test_privacy_model.py
-│  └─ integration/
-│     ├─ test_discord_mock_commands.py
-│     ├─ test_provider_contracts.py
-│     └─ test_storage_user_and_market.py
-└─ tools/
-   ├─ lore.example.json
-   ├─ lore_loader.py
-   ├─ purge_global_commands.py
-   └─ scan_secrets.py
+```
+                       Discord Platform
+                     (Outgoing WSS / HTTPS)
+                              │
+                              ▼
+                   ┌───────────────────────┐
+                   │   main.py (Gateway)   │
+                   └──────────┬────────────┘
+                              │
+         ┌────────────────────┴────────────────────┐
+         ▼                                         ▼
+┌──────────────────┐                     ┌──────────────────┐
+│ Command Router   │                     │ TaskSupervisor   │
+│ (/ic 53 leaves)  │                     │ (8 pollers)      │
+└────────┬─────────┘                     └────────┬─────────┘
+         │                                        │
+         ▼                                        ▼
+┌───────────────────────────────────────────────────────────┐
+│              ServiceContainer & Domain Engines            │
+│  • Academics   • Careers (ATS)   • Economy   • Gemini AI  │
+└─────────────────────────────┬─────────────────────────────┘
+                              │
+                              ▼
+                   ┌───────────────────────┐
+                   │  SQLite 3 (WAL Mode)  │
+                   │  • users  • ledger    │
+                   └───────────────────────┘
 ```
 
 ---
 
-## License & Attribution
+## 3. Feature Status & Module Matrix
 
-### Software Code License
-The source code of this repository is licensed under the [MIT License](LICENSE):
+All user-facing commands reside under the root group **`/ic`** across 17 modular subsystems:
 
-```text
-MIT License
+| Feature Domain | Root Slash Commands | Background Loop | External API Dependency | Offline Fallback Behavior |
+|---|---|---|---|---|
+| **Academics** | `/ic notes`, `/ic prof`, `/ic grades`, `/ic exam ...` | None | RateMyProfessors (GraphQL) | Server manual catalog links; empty error guidance |
+| **Careers & Jobs** | `/ic jobs`, `/ic job_preferences`, `/ic job_preview`, `/ic resume` | Jobs Poller (`JOBS_POLL_SECONDS`) | Greenhouse, Lever, Workday | In-memory cached postings; offline resume rubric |
+| **Virtual Economy** | `/ic dailyclaim`, `/ic profile`, `/ic leaderboard` | None | None (Internal SQLite Ledger) | Fully offline, atomic ACID transactions |
+| **Casino Games** | `/ic casino blackjack/roulette/slots/payouts` | None | None (Pure Python Game Engines) | Fully offline math engines |
+| **Fun-Stock Market** | `/ic icse buy/sell/short/cover/market/quote...` | Market Watch & Daily Report | Yahoo Finance / AlphaVantage | Internal catalog prices; simulated price moves |
+| **Transit Alerts** | Background channel alerts | TTC & GO Pollers | Metrolinx Open Data, TTC Mastodon | Circuit breakers pause requests during outages |
+| **Administration** | `/ic admin setup`, `/ic admin config`, `/ic admin features`, `/ic admin roles`, `/ic admin set`, `/ic admin move`, `/ic admin audit`, `/ic admin sync_catalog`, `/ic admin weekroll`, `/ic admin llm_start`, `/ic admin llm_stop` | None | None | Instant local configuration mutation |
+| **Diagnostics** | `/ic botinfo`, `/ic serverinfo`, `/ic status`, `/ic help`, `/ic report`, `/ic getting-started` | None | None | Redacted system and storage status inspection |
 
-Copyright (c) 2026 sukesan
+<details>
+<summary><b>Click to expand the complete 53 slash command inventory</b></summary>
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+| Subsystem | Slash Commands | Description |
+|---|---|---|
+| **Admin (11)** | `/ic admin setup`, `/ic admin config`, `/ic admin features`, `/ic admin roles`, `/ic admin set`, `/ic admin move`, `/ic admin audit`, `/ic admin sync_catalog`, `/ic admin weekroll`, `/ic admin llm_start`, `/ic admin llm_stop` | Server configuration, feature toggles, role management, audit logs, and AI killswitch |
+| **Academics (9)** | `/ic notes`, `/ic prof`, `/ic grades`, `/ic exam add`, `/ic exam remove`, `/ic exam list`, `/ic exam clear`, `/ic exam export`, `/ic exam import` | Course study notes, RateMyProfessors ratings, grade distributions, and shared exam schedules |
+| **Careers (5)** | `/ic jobs`, `/ic job_preferences`, `/ic job_preview`, `/ic job_subscribe`, `/ic resume` | ATS job matching (Greenhouse, Lever, Workday) and memory-only AI resume critique |
+| **Economy & Casino (7)** | `/ic dailyclaim`, `/ic profile`, `/ic leaderboard`, `/ic casino blackjack`, `/ic casino roulette`, `/ic casino slots`, `/ic casino payouts` | Daily allowances, net worth leaderboards, and provably fair math engines |
+| **Fun-Stock Market ICSE (10)** | `/ic icse market`, `/ic icse stock`, `/ic icse quote`, `/ic icse buy`, `/ic icse sell`, `/ic icse short`, `/ic icse cover`, `/ic icse portfolio`, `/ic icse trades`, `/ic icse history` | Virtual equity exchange with long/short trading and real-time market data |
+| **Info & Diagnostics (6)** | `/ic botinfo`, `/ic serverinfo`, `/ic status`, `/ic help`, `/ic report`, `/ic getting-started` | System diagnostics, component readiness, redaction test, and onboarding guides |
+| **Sports (5)** | `/ic sports nba`, `/ic sports nfl`, `/ic sports mma`, `/ic sports ufc`, `/ic sports boxing` | Upcoming game schedules, betting odds, and sports news headlines |
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+</details>
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+*(See full architecture details and sequence diagrams in [Architecture Documentation](docs/architecture.md)).*
+
+---
+
+## 4. Self-Hosted Source Release vs. Hosted Public Invite
+
+| Consideration | Model A: Self-Hosted Community Bot (Recommended) | Model B: Maintainer-Hosted Public Invite |
+|---|---|---|
+| **Hosting Model** | Community hosts their own container (Docker / systemd) | Upstream maintainer hosts multi-tenant instance |
+| **Data Ownership** | 100% data sovereignty; SQLite DB stays on your disk | Data stored on maintainer's central infrastructure |
+| **Discord Verification** | Not required (<100 servers) | Required by Discord (>100 servers) |
+| **Privileged Intents** | Not required for slash commands; Message Content optional | Strictly restricted by Discord review team |
+| **API Costs & Quotas** | Self-hoster supplies their own free/low-tier API keys | Maintainer absorbs all external API expenses |
+
+---
+
+## 5. Quick Start (Safe Offline Default)
+
+### 5.1 Prerequisites
+- Python 3.11, 3.12, or 3.13
+- [`uv`](https://docs.astral.sh/uv/) package manager
+
+### 5.2 Local Setup
+```bash
+# 1. Clone repository
+git clone https://github.com/your-username/campus-bot.git
+cd campus-bot
+
+# 2. Install locked development environment
+uv sync --dev
+
+# 3. Run the complete test suite offline (625+ tests)
+uv run pytest
+
+# 4. Run the zero-token offline smoke check
+uv run python tools/smoke_offline.py
+
+# 5. Run the staging lifecycle smoke check
+uv run python tools/smoke_staging.py
 ```
 
-### Community Branding and Trademark
-The "Instigate Cafe" name, server logos, graphic assets, and private community lore packs (`tools/lore.*.json`) are the property of Instigate Cafe and its community maintainers. The MIT license grants permissions only to the software source code; it does not grant rights to use server trademarks, community identities, or proprietary member lore in external commercial or public deployments.
+### 5.3 Launching the Live Bot
+By default, the bot **refuses to connect to Discord** to protect developers from accidental live launches. To launch:
 
-### Third-Party Data & External Asset Attribution
-This bot integrates with external data services and educational materials. Contributors and operators should review [docs/publishing-checklist.md](docs/publishing-checklist.md) and [docs/privacy/data-map.md](docs/privacy/data-map.md) for full licensing boundaries:
-- **Privacy & Data Protection:** See [docs/privacy/data-map.md](docs/privacy/data-map.md) for the data-flow inventory, third-party disclosure boundaries (Google Gemini, Discord CDN), configurable retention settings, and the transactional deletion/anonymization model.
-- **Course Notes:** Notion-hosted engineering and computer science course notes (authored by Jasper Cruz and Krish Patel) are student-authored educational materials linked as third-party resources. They are not covered by the MIT software license.
-- **RateMyProfessors:** Professor ratings and search results are retrieved from RateMyProfessors / Chewse Inc. for non-commercial student informational lookup.
-- **Transit Data:** GO Transit information is powered by the [Metrolinx Open Data API](https://www.metrolinx.com/en/about-us/open-data) under Metrolinx Open Data terms. TTC alerts are syndicated from public transit feeds.
-- **Financial Quotes:** Stock and market data queries are provided for informational and entertainment purposes only and do not constitute financial advice.
+```bash
+# 1. Copy example configuration
+cp .env.example .env
+chmod 600 .env
+
+# 2. Edit .env with your DISCORD_TOKEN and GUILD_ID
+# 3. Launch with explicit gateway opt-in:
+uv run python main.py --allow-gateway
+```
+
+*(For production Docker Compose and systemd deployment recipes, see [Production Hosting Guide](docs/production-hosting-and-recovery.md)).*
+
+---
+
+## 6. Module Management & Setup
+
+Server administrators can configure modules directly inside Discord without touching code:
+- **Interactive Setup Wizard:** Run **`/ic admin setup`** to configure channel assignments and community profiles (`default`, `engineering_heavy`, `student_core`).
+- **Feature Toggling:** Run **`/ic admin features disable:casino`** to silence gambling commands in academic channels.
+- **Diagnostics & Issue Reports:** Run **`/ic status issue_report:True`** to export a sanitized diagnostic file with all tokens redacted.
+
+---
+
+## 7. Documentation Index
+
+- [System Architecture & Sequence Flows](docs/architecture.md)
+- [Complete Configuration Reference](docs/configuration.md)
+- [External Provider Specifications & Integration Guide](docs/providers.md)
+- [Privacy Architecture, Data Flows & Deletion Model](docs/privacy.md)
+- [Operations, Backups & Incident Runbook](docs/operations.md)
+- [Production Hosting & Recovery Runbook](docs/production-hosting-and-recovery.md)
+- [Usability Review & Archetype Audit Report](docs/usability_review.md)
+- [Contributing Guidelines](CONTRIBUTING.md)
+- [Security Policy & Vulnerability Disclosure](SECURITY.md)
+- [Changelog](CHANGELOG.md)
+
+---
+
+## 8. License & Attribution
+
+- Bot source code is licensed under the [MIT License](LICENSE) (Copyright &copy; 2026 sukesan).
+- "Instigate Cafe" brand identity and server logos are reserved by the Instigate Cafe community.
+- Course notes study guides are authored by **Jasper Cruz** and **Krish Patel** (Copyright &copy; respective authors).
+- Transit data provided under the Metrolinx Open Data Licence and public TTC Mastodon feeds.
