@@ -232,7 +232,10 @@ async def notes_cmd(interaction: discord.Interaction, course: str):
 
     normalized_course = normalize_course_key(course)
     if len(normalized_course) < 3:
-        await interaction.followup.send("❌ Please provide a more specific course code.", ephemeral=True)
+        await interaction.followup.send(
+            "❌ Please provide a valid course code with at least 3 letters/digits (e.g. `CPS109`, `MTH140`, or `CS135`).",
+            ephemeral=True,
+        )
         return
 
     if getattr(interaction.client, "settings", None) is None:

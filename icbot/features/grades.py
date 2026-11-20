@@ -21,7 +21,7 @@ from icbot.academics.charts import (
     render_grade_distribution_chart,
     render_grade_distribution_chart_async,
 )
-from icbot.academics.models import campus_from_settings
+from icbot.academics.models import campus_from_settings, normalize_course_key
 from icbot.academics.parsers import parse_tmu_grades_html
 from icbot.academics.url_safety import validate_fetch_url
 from icbot.app import ic
@@ -271,6 +271,20 @@ async def grades_command(interaction: discord.Interaction, course: str):
     await interaction.response.defer(thinking=True)
 
     settings = await resolve_guild_settings(interaction.client, interaction)
+
+    clean_key = normalize_course_key(course)
+    if len(clean_key) < 2:
+        await interaction.followup.send(
+            embed=system_embed(
+                settings,
+                title="Invalid Course Code",
+                summary="❌ Please provide a valid course code (e.g. `ELE888` or `CPS109`).",
+                footer_hint="Academics",
+            ),
+            ephemeral=True,
+        )
+        return
+
     container = get_container(interaction.client)
     campus = campus_from_settings(settings)
     shared_session = (

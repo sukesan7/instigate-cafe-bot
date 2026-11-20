@@ -140,6 +140,7 @@ FEATURE_MANIFESTS: dict[str, FeatureManifest] = {
             "ic admin roles",
             "ic admin setup",
             "ic botinfo",
+            "ic getting-started",
             "ic help",
             "ic leaderboard",
             "ic serverinfo",

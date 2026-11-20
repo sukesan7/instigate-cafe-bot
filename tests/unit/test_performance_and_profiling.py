@@ -72,7 +72,7 @@ async def test_startup_latency_and_memory_bounds(tmp_path: Path):
 
 
 def test_slash_command_registration_latency_and_leaf_count():
-    """Slash command tree registration builds all 52 leaf commands in under 50ms."""
+    """Slash command tree registration builds all 53 leaf commands in under 50ms."""
     from icbot.registry import load_feature_modules, registered_qualified_names
 
     t0 = time.perf_counter()
@@ -80,7 +80,7 @@ def test_slash_command_registration_latency_and_leaf_count():
     names = registered_qualified_names()
     elapsed = time.perf_counter() - t0
 
-    assert len(names) == 52, f"Expected exactly 52 leaf commands, found {len(names)}"
+    assert len(names) == 53, f"Expected exactly 53 leaf commands, found {len(names)}"
     assert elapsed < 0.05, f"Registration took {elapsed:.3f}s, expected < 0.05s"
 
 

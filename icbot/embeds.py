@@ -23,9 +23,16 @@ _MAX_FIELDS = 25
 _MAX_TOTAL = 6000
 
 _MENTION_RE = re.compile(r"@(everyone|here)")
-_USER_ROLE_PING_RE = re.compile(r"<@&?(\d+)>")
+_USER_ROLE_PING_RE = re.compile(r"<@[!&]?(\d+)>")
 
 Field = tuple[str, str] | tuple[str, str, bool]
+
+
+def escape_markdown(s: str | None) -> str:
+    """Safely escape Discord Markdown characters to prevent formatting breakage or injection."""
+    if not s:
+        return ""
+    return discord.utils.escape_markdown(str(s))
 
 
 def sanitize_text(s: str | None, limit: int | None = None) -> str | None:
@@ -40,6 +47,126 @@ def sanitize_text(s: str | None, limit: int | None = None) -> str | None:
     if limit is not None:
         return _truncate(text, limit)
     return text
+
+
+def stale_data_notice(
+    source: str,
+    last_updated_unix: int | None = None,
+    *,
+    is_stale: bool = True,
+    reason: str | None = None,
+) -> str:
+    """Generate an accessible, standardized badge/notice indicating cached or stale provider data."""
+    if not is_stale and last_updated_unix is None:
+        return ""
+
+    parts: list[str] = []
+    if is_stale:
+        parts.append(f"⚠️ **[Stale / Cached Data]** Sourced from {source}.")
+    else:
+        parts.append(f"ℹ️ **[Cached Data]** Sourced from {source}.")
+
+    if last_updated_unix and last_updated_unix > 0:
+        parts.append(f"Last updated: <t:{last_updated_unix}:R> (<t:{last_updated_unix}:f>).")
+
+    if reason:
+        parts.append(f"*{reason}*")
+    elif is_stale:
+        parts.append("*Live provider is currently unavailable or refresh timed out; showing cached record.*")
+
+    return " ".join(parts)
+
+
+def disabled_feature_embed(
+    settings: Settings,
+    feature_name: str,
+    *,
+    module_id: str | None = None,
+    admin_tip: bool = True,
+    category: str | None = None,
+) -> discord.Embed:
+    """Create a standardized, supportive embed when a requested command belongs to a disabled feature."""
+    cat_prefix = f" • {category}" if category else ""
+    title = f"Module Disabled{cat_prefix}"
+    clean_feature = sanitize_text(feature_name, 100) or "This feature"
+
+    lines = [
+        f"The **{clean_feature}** module is currently turned off in this server.",
+        "",
+        "This feature can be enabled by a server administrator.",
+    ]
+    if admin_tip:
+        mod_hint = f" `enable:{module_id}`" if module_id else ""
+        lines.append("")
+        lines.append(
+            f"🔧 **Server Admins:** Use `/ic admin features{mod_hint}` or `/ic admin config` to enable it."
+        )
+
+    return system(
+        settings,
+        title=title,
+        summary="\n".join(lines),
+        footer_hint="Feature Governance",
+    )
+
+
+def empty_state_embed(
+    settings: Settings,
+    *,
+    title: str,
+    message: str,
+    suggestion: str | None = None,
+    category: str = "System",
+) -> discord.Embed:
+    """Standardized empty state embed with clear text and recovery guidance."""
+    clean_title = sanitize_text(title, _MAX_TITLE) or "No Results"
+    clean_msg = sanitize_text(message, 1000) or "No entries were found."
+    lines = [clean_msg]
+    if suggestion:
+        clean_sugg = sanitize_text(suggestion, 500)
+        lines.append("")
+        lines.append(f"💡 **Tip:** {clean_sugg}")
+
+    return _base_embed(
+        settings,
+        title=clean_title,
+        kind=EMBED_KIND_SYSTEM,
+        description="\n".join(lines),
+        footer_hint=category,
+    )
+
+
+def paginated_embed(
+    settings: Settings,
+    *,
+    title: str,
+    description: str | None = None,
+    fields: Iterable[Field] = (),
+    page: int = 0,
+    total_pages: int = 1,
+    kind: str = EMBED_KIND_SYSTEM,
+    footer_hint: str | None = None,
+    subtitle: str | None = None,
+) -> discord.Embed:
+    """Standard paginated embed automatically including page indicators in footer."""
+    page_safe = max(0, page) + 1
+    total_safe = max(1, total_pages)
+    hint_parts = []
+    if footer_hint:
+        hint_parts.append(footer_hint)
+    hint_parts.append(f"Page {page_safe}/{total_safe}")
+    full_hint = " • ".join(hint_parts)
+
+    e = _base_embed(
+        settings,
+        title=title,
+        kind=kind,
+        description=description,
+        subtitle=subtitle,
+        footer_hint=full_hint,
+    )
+    _add_fields(e, fields)
+    return e
 
 
 def safe_allowed_mentions() -> discord.AllowedMentions:
