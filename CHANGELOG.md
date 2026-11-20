@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.5] - 2026-11-19
+
+### Added
+- **Staging Acceptance & Fault-Injection Protocol (Phase 13A):**
+  - [`tools/run_staging_acceptance.py`](tools/run_staging_acceptance.py): Automated offline acceptance and fault-injection harness executing a complete 27-scenario matrix covering multi-guild isolation, missing API credentials, exam CRUD, jobs mock subscriptions, atomic money settlement, alert deduplication, restart scheduler uniqueness, server permissions, and command timeouts.
+  - Controlled failure injections: Network partitions (`aiohttp.ClientConnectorError`), invalid credentials (`HTTP 401/403` with secret scrubbing), rate limits (`HTTP 429` with `Retry-After`), Discord API errors (`403/404`), SQLite database lock contention, disk full (`OSError: [Errno 28]`), process crash recovery mid-transaction, DST boundary shifts, and double-click race conditions.
+  - Disaster recovery: Point-in-time online hot backups, restore verification, and schema v1–v7 forward migrations.
+  - Comprehensive runbook and severity matrix in [`docs/staging-acceptance-and-fault-injection.md`](docs/staging-acceptance-and-fault-injection.md).
+  - Automated integration test suite in [`tests/integration/test_staging_acceptance_and_fault_injection.py`](tests/integration/test_staging_acceptance_and_fault_injection.py) asserting 100% pass rate with zero open P0/P1 defects.
+
+---
+
 ## [0.2.4] - 2026-11-19
 
 ### Added
