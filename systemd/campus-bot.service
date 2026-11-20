@@ -1,0 +1,61 @@
+# ==============================================================================
+# Instigate Cafe Bot — systemd Service Unit for Linux VPS
+# ==============================================================================
+# Optional deployment unit for running the bot natively under systemd on Linux.
+#
+# Installation:
+#   1. Copy to /etc/systemd/system/campus-bot.service
+#   2. systemctl daemon-reload
+#   3. systemctl enable --now campus-bot.service
+# ==============================================================================
+
+[Unit]
+Description=Instigate Cafe Discord Bot
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/your-username/campus-bot/blob/main/docs/production-hosting-and-recovery.md
+
+[Service]
+Type=simple
+User=campusbot
+Group=campusbot
+WorkingDirectory=/opt/campus-bot
+
+# Runtime secrets loaded from file with strict permissions (chmod 600)
+EnvironmentFile=/opt/campus-bot/.env
+Environment=SQLITE_PATH=/opt/campus-bot/data/campus.db
+Environment=ICBOT_ALLOW_GATEWAY=true
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/campus-bot/.venv/bin/python main.py --allow-gateway
+
+# Process lifecycle and graceful signal handling
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=10s
+
+# Security hardening and sandboxing directives
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/campus-bot/data
+
+# Resource quotas to avoid starving other host services
+CPUQuota=100%
+MemoryMax=512M
+
+# Logging to systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=campus-bot
+
+[Install]
+WantedBy=multi-user.target
+

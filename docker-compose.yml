@@ -1,0 +1,57 @@
+# ==============================================================================
+# Instigate Cafe Bot — Self-Hosted Docker Compose Recipe
+# ==============================================================================
+# Supported production deployment path for self-hosted community instances.
+#
+# Safety invariants:
+# - Secrets injected at runtime via .env (never baked into images).
+# - Outbound networking only (no inbound port exposure).
+# - Bind-mounted persistent volume for SQLite state and WAL journals.
+# - Log rotation prevents disk exhaustion.
+# - Resource limits protect host VPS stability.
+# - Single active instance prevents duplicate pollers and database race conditions.
+# ==============================================================================
+
+services:
+  campus-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: campus-bot:0.2.4
+    container_name: campus-bot
+    restart: unless-stopped
+
+    # Runtime secret injection (file must exist locally with chmod 600)
+    env_file:
+      - .env
+
+    environment:
+      - SQLITE_PATH=/data/campus.db
+      - ICBOT_ALLOW_GATEWAY=true
+      - PYTHONUNBUFFERED=1
+
+    # Persistent storage for SQLite database (WAL mode), backups, and local state
+    volumes:
+      - ./data:/data
+
+    # Resource quotas to prevent runaway memory leaks or CPU starvation
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+        reservations:
+          cpus: "0.20"
+          memory: 128M
+
+    # Graceful shutdown lifecycle: forward SIGTERM and allow 30s for clean SQLite flush
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+    # Standard log rotation (caps total log usage at 30MB)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
