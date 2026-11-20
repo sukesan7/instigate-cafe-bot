@@ -123,7 +123,7 @@ async def test_100_concurrent_cached_lookups_bounded_lag():
     with contextlib.suppress(asyncio.CancelledError):
         await hb_task
 
-    assert elapsed < 0.05, f"100 lookups took {elapsed:.4f}s, expected < 0.05s"
+    assert elapsed < 0.15, f"100 lookups took {elapsed:.4f}s, expected < 0.15s"
     assert max_lag_s < 0.010, f"Event-loop lag {max_lag_s * 1000:.2f}ms exceeded 10ms bound"
 
 

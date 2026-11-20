@@ -1,12 +1,14 @@
 # Instigate Cafe Bot
 
+[![Version v1.0.0-rc1](https://img.shields.io/badge/version-v1.0.0--rc1-blue.svg)](pyproject.toml)
 [![Python 3.11 | 3.12 | 3.13](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![discord.py 2.3+](https://img.shields.io/badge/discord.py-2.3%2B%20app__commands-5865F2)](https://github.com/Rapptz/discord.py)
 [![Storage SQLite WAL](https://img.shields.io/badge/Storage-SQLite%20WAL-lightgrey)](https://www.sqlite.org/)
+[![Tests 646 Passing](https://img.shields.io/badge/Tests-646%20Passing%20(100%25%20Offline)-success)](tests/)
 [![CI Offline Quality Gate](https://img.shields.io/badge/CI-Offline%20Quality%20Gate-success)](.github/workflows/ci.yml)
 [![License MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A modular, student-focused Discord bot combining academic study tools, tech job alerts, regional transit advisories, a virtual campus economy, and optional privacy-first AI resume feedback.
+A modular, student-focused Discord bot combining academic study tools, tech job alerts, regional transit advisories, a virtual campus economy, and optional privacy-first AI resume feedback. Built with clean architecture, strict multi-guild tenancy, and atomic SQLite Write-Ahead Logging (WAL) transactions.
 
 ---
 
@@ -92,6 +94,29 @@ All user-facing commands reside under the root group **`/ic`** across 17 modular
 
 *(See full architecture details and sequence diagrams in [Architecture Documentation](docs/architecture.md)).*
 
+### 3.1 Honest Provider Comparison & Operating Limits
+
+To prevent unexpected hosting surprises or hidden subscription dependencies, all external provider boundaries, rate limits, and fallback mechanisms are documented honestly:
+
+| Provider Domain | External Integration | Upstream Limits & Cost Boundaries | Local Fallback & Degradation Invariant |
+|---|---|---|---|
+| **RateMyProfessors** | Unofficial GraphQL API | Undocumented upstream rate limits; free access. | In-memory query caching; user guidance with direct web lookup links. |
+| **Metrolinx GO** | Official Open Data REST API | Requires free Metrolinx API key; rate limits apply. | Exponential-backoff outage dampener; suppresses duplicate alerts. |
+| **TTC Alerts** | Public Fediverse / Mastodon | Public RSS/REST polling; no API key required. | Circuit breaker pauses on connection failure; zero crash loops. |
+| **Career ATS Feeds** | Public RSS & JSON Feeds (Greenhouse, Lever, Workday) | Scraping frequency bounded by poller interval (default 30m). | In-memory cache preserved; stale listings served with timestamp warnings. |
+| **Google Gemini AI** | Google AI Studio REST API | Free tier: 15 RPM / 1M TPM; paid tier pay-as-you-go. | Mandatory opt-in barrier (`ResumeConfirmView`); offline checklist fallback. |
+| **Market Quotes** | Yahoo Finance / AlphaVantage | Yahoo rate limits scrapers; AlphaVantage free key (25 req/day). | Simulated price movement generator; internal exchange catalog keeps trading active. |
+| **SQLite WAL Storage** | Local filesystem (`sqlite3`) | Single-writer concurrency lock; zero cloud storage fee. | Immediate ACID write transactions; double-entry ledger prevents balance drift. |
+
+### 3.2 Staging Visual Showcase (Synthetic Mockups)
+
+The bot has been tested against synthetic staging test guilds (**Guild Alpha** `900000000000000001` and **Guild Beta** `900000000000000002`). Detailed ASCII/text mockups and video demonstration storyboards are available in [`docs/launch-assets.md`](docs/launch-assets.md):
+
+- **Pillar 1 — Academic Hub & Exam Countdown:** Autonomous guild setup (`/ic admin setup`) and shared exam countdowns with iCalendar (`.ics`) export.
+- **Pillar 2 — Career Tools & AI Resume Consent:** Ephemeral resume critiques with mandatory third-party AI consent disclosure and no-AI offline rubric.
+- **Pillar 3 — Transit & Regional Commuter Alerts:** Metrolinx GO transit line delays and TTC transit advisories with circuit breaker dampening.
+- **Pillar 4 — Virtual Stock Exchange (ICSE) & Economy:** Atomic double-entry paper trading with strict multi-guild ledger isolation.
+
 ---
 
 ## 4. Self-Hosted Source Release vs. Hosted Public Invite
@@ -167,6 +192,7 @@ Server administrators can configure modules directly inside Discord without touc
 - [Staging Acceptance & Fault-Injection Plan](docs/staging-acceptance-and-fault-injection.md)
 - [Production Hosting & Recovery Runbook](docs/production-hosting-and-recovery.md)
 - [Private Alpha & Public Beta Readiness Gates](docs/alpha-beta-readiness.md)
+- [Portfolio Presentation & Launch Assets](docs/launch-assets.md)
 - [Usability Review & Archetype Audit Report](docs/usability_review.md)
 - [Contributing Guidelines](CONTRIBUTING.md)
 - [Security Policy & Vulnerability Disclosure](SECURITY.md)
@@ -180,3 +206,9 @@ Server administrators can configure modules directly inside Discord without touc
 - "Instigate Cafe" brand identity and server logos are reserved by the Instigate Cafe community.
 - Course notes study guides are authored by **Jasper Cruz** and **Krish Patel** (Copyright &copy; respective authors).
 - Transit data provided under the Metrolinx Open Data Licence and public TTC Mastodon feeds.
+
+---
+
+## 9. GitHub Topics & Discovery Tags
+
+`discord-bot` • `discord-py` • `python3` • `sqlite-wal` • `asyncio` • `clean-architecture` • `career-tools` • `academic-schedule` • `transit-alerts` • `virtual-economy` • `rate-my-professor` • `privacy-by-design` • `offline-testing` • `student-community`
