@@ -568,7 +568,7 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
                     bad_sources.add(src_key)
                 else:
                     transient_errors.append(e)
-                print(f"[JOBS] greenhouse fetch failed: {format_exception_safe(e, secrets)}")
+                log.warning("[JOBS] greenhouse fetch failed: %s", format_exception_safe(e, secrets))
 
         for site in lv:
             site = (site or "").strip()
@@ -588,12 +588,12 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
                     bad_sources.add(src_key)
                 else:
                     transient_errors.append(e)
-                print(f"[JOBS] lever fetch failed: {format_exception_safe(e, secrets)}")
+                log.warning("[JOBS] lever fetch failed: %s", format_exception_safe(e, secrets))
 
     if not all_jobs:
         if raise_on_error and transient_errors:
             raise transient_errors[0]
-        print("[JOBS] fetched 0 postings (all sources empty or invalid).")
+        log.info("[JOBS] fetched 0 postings (all sources empty or invalid).")
         return
 
     by_source: dict[str, list[JobPosting]] = {}
@@ -612,7 +612,9 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
         if not has_any:
             if not bootstrap_post:
                 await _mark_seen(db, jobs, clock=container.clock, container=container)
-                print(f"[JOBS] baseline checkpointed {len(jobs)} jobs for {source} (no bootstrap post).")
+                log.info(
+                    "[JOBS] baseline checkpointed %d jobs for %s (no bootstrap post).", len(jobs), source
+                )
                 continue
 
             # STRICT bootstrap: only post matches
@@ -646,9 +648,13 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
 
             await _mark_seen(db, jobs, clock=container.clock, container=container)
             if sample:
-                print(f"[JOBS] bootstrap posted {len(sample)} and checkpointed {len(jobs)} for {source}.")
+                log.info(
+                    "[JOBS] bootstrap posted %d and checkpointed %d for %s.", len(sample), len(jobs), source
+                )
             else:
-                print(f"[JOBS] bootstrap posted 0 (no matches) and checkpointed {len(jobs)} for {source}.")
+                log.info(
+                    "[JOBS] bootstrap posted 0 (no matches) and checkpointed %d for %s.", len(jobs), source
+                )
             continue
 
         # ---- Normal operation: only new unseen jobs ----
@@ -701,8 +707,11 @@ async def poll_and_post_jobs(bot: discord.Client, *, raise_on_error: bool = Fals
         except (aiosqlite.Error, sqlite3.Error, AttributeError, ValueError, RuntimeError) as exc:
             log.debug("Multi-guild outbox dispatch skipped: %s", exc)
 
-    print(
-        f"[JOBS] cycle complete: fetched={len(all_jobs)} posted={posted_total} bad_sources={len(bad_sources)}"
+    log.info(
+        "[JOBS] cycle complete: fetched=%d posted=%d bad_sources=%d",
+        len(all_jobs),
+        posted_total,
+        len(bad_sources),
     )
 
 

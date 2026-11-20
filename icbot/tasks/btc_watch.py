@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import aiohttp
@@ -17,6 +18,8 @@ from icbot.services.alert_dedupe import (
     sanitize_btc_addresses,
 )
 from icbot.services.btc_esplora import DEFAULT_BASE_URL, fetch_address_txs
+
+log = logging.getLogger(__name__)
 
 
 def _to_int(s: str, default: int = 0) -> int:
@@ -99,13 +102,13 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
     )
     if not channel_id:
         if debug:
-            print("[BTC] enabled=true but no channel configured")
+            log.debug("[BTC] enabled=true but no channel configured")
         return
 
     ch = await _resolve_channel(bot, channel_id)
     if ch is None:
         if debug:
-            print(f"[BTC] could not resolve channel_id={channel_id}")
+            log.warning("[BTC] could not resolve channel_id=%s", channel_id)
         return
 
     base_url = str(getattr(settings, "btc_esplora_base_url", "") or "").strip() or DEFAULT_BASE_URL
@@ -113,7 +116,7 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
     addresses = sanitize_btc_addresses(getattr(settings, "btc_watch_addresses", None), max_addresses=50)
     if not addresses:
         if debug:
-            print("[BTC] enabled but no valid BTC_WATCH_ADDRESSES configured")
+            log.debug("[BTC] enabled but no valid BTC_WATCH_ADDRESSES configured")
         return
 
     guild = getattr(ch, "guild", None)
@@ -147,8 +150,10 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
         except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError, KeyError) as e:
             last_fetch_err = e
             if debug:
-                print(
-                    f"[BTC] fetch failed addr={mask_btc_address(addr)} err={format_exception_safe(e, secrets)}"
+                log.warning(
+                    "[BTC] fetch failed addr=%s err=%s",
+                    mask_btc_address(addr),
+                    format_exception_safe(e, secrets),
                 )
             continue
 
@@ -171,7 +176,9 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
             await dedupe_mgr.checkpoint_bootstrap_item(db, guild_id, "btc_watch", channel_id, entity_id, h)
             await dedupe_mgr.mark_bootstrapped(db, guild_id, "btc_watch", channel_id)
             if debug:
-                print(f"[BTC] bootstrap checkpoint addr={mask_btc_address(addr)} txid={newest.txid[:8]}")
+                log.info(
+                    "[BTC] bootstrap checkpoint addr=%s txid=%s", mask_btc_address(addr), newest.txid[:8]
+                )
             continue
 
         lifecycle = await dedupe_mgr.check_alert(db, guild_id, "btc_watch", channel_id, entity_id, h)
@@ -209,7 +216,7 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
         ok, send_status = await safe_send_alert(bot, channel_id, embed=embed, fallback_text=fallback)
         if not ok:
             if debug:
-                print(f"[BTC] send failed: {send_status}")
+                log.warning("[BTC] send failed: %s", send_status)
             if raise_on_error:
                 raise RuntimeError(f"BTC send failed: {send_status}")
             return
@@ -219,7 +226,7 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
         await _set_meta(db, f"btc_last_tx:{addr}", newest.txid)
         await _set_meta(db, "btc_last_alert_any", str(now))
         if debug:
-            print(f"[BTC] posted alert addr={mask_btc_address(addr)} txid={newest.txid[:10]}…")
+            log.info("[BTC] posted alert addr=%s txid=%s…", mask_btc_address(addr), newest.txid[:10])
         return
 
     if raise_on_error and not any_fetch_ok and last_fetch_err is not None:

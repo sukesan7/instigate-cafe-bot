@@ -604,6 +604,12 @@ class Settings:
     exam_reminders_channel_id: int = 0
     exam_reminder_lead_hours: list[int] | None = None
 
+    # Logging, Observability & Telemetry
+    log_file: str = ""
+    log_max_bytes: int = 5_000_000
+    log_backup_count: int = 3
+    telemetry_enabled: bool = False
+
     # ---- Typed component views ----
 
     @property
@@ -1279,6 +1285,12 @@ class Settings:
         if self.btc_watch_cooldown_minutes < 0:
             _err("btc_watch_cooldown_minutes", "btc_watch_cooldown_minutes must be >= 0.")
 
+        # Logging & observability validations
+        if self.log_max_bytes <= 0:
+            _err("log_max_bytes", "log_max_bytes must be > 0.")
+        if self.log_backup_count < 0:
+            _err("log_backup_count", "log_backup_count must be >= 0.")
+
         # Feature profile & module validations
         if self.theme_preset and self.theme_preset.strip().lower() not in KNOWN_THEME_NAMES:
             _warn(
@@ -1742,6 +1754,10 @@ class Settings:
         feature_profile = _env("FEATURE_PROFILE", "default").strip() or "default"
         enabled_features = _to_str_list(_env("ENABLED_FEATURES", ""))
         disabled_features = _to_str_list(_env("DISABLED_FEATURES", ""))
+        log_file = _env("LOG_FILE", "").strip()
+        log_max_bytes = _parse_int_field("LOG_MAX_BYTES", "log_max_bytes", 5_000_000)
+        log_backup_count = _parse_int_field("LOG_BACKUP_COUNT", "log_backup_count", 3)
+        telemetry_enabled = _parse_bool_field("ICBOT_TELEMETRY", "telemetry_enabled", False)
 
         # Preserve fallback rule only when workday_poll_seconds was non-negative unset/zero
         if workday_poll_seconds == 0:
@@ -1873,6 +1889,10 @@ class Settings:
             feature_profile=feature_profile,
             enabled_features=enabled_features,
             disabled_features=disabled_features,
+            log_file=log_file,
+            log_max_bytes=log_max_bytes,
+            log_backup_count=log_backup_count,
+            telemetry_enabled=telemetry_enabled,
         )
         if strict:
             settings.validate(strict=True, extra_issues=raw_issues)

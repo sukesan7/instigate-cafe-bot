@@ -231,8 +231,10 @@ async def poll_and_post_workday_jobs(bot: discord.Client, *, raise_on_error: boo
                         bad_sources.add(src)
                     else:
                         last_transient_err = fetch_err
-                    print(
-                        f"[JOBS] workday fetch failed ({site.label}): {format_exception_safe(fetch_err, secrets)}"
+                    log.warning(
+                        "[JOBS] workday fetch failed (%s): %s",
+                        site.label,
+                        format_exception_safe(fetch_err, secrets),
                     )
                     continue
 
@@ -256,7 +258,9 @@ async def poll_and_post_workday_jobs(bot: discord.Client, *, raise_on_error: boo
             if not await _source_has_any(db, src):
                 if not bootstrap_post:
                     await _mark_seen(db, jobs, clock=container.clock, container=container)
-                    print(f"[JOBS] baseline checkpointed {len(jobs)} jobs for {src} (no bootstrap post).")
+                    log.info(
+                        "[JOBS] baseline checkpointed %d jobs for %s (no bootstrap post).", len(jobs), src
+                    )
                     continue
 
                 # Workday bootstrap is STRICT: never ignores filters.
@@ -287,12 +291,17 @@ async def poll_and_post_workday_jobs(bot: discord.Client, *, raise_on_error: boo
                 await _mark_seen(db, jobs, clock=container.clock, container=container)
 
                 if sample:
-                    print(
-                        f"[JOBS] bootstrap posted {len(sample)} jobs for {src}; checkpointed {len(jobs)} jobs."
+                    log.info(
+                        "[JOBS] bootstrap posted %d jobs for %s; checkpointed %d jobs.",
+                        len(sample),
+                        src,
+                        len(jobs),
                     )
                 else:
-                    print(
-                        f"[JOBS] bootstrap posted 0 (no matching SWE/CS jobs) for {src}; checkpointed {len(jobs)} jobs."
+                    log.info(
+                        "[JOBS] bootstrap posted 0 (no matching SWE/CS jobs) for %s; checkpointed %d jobs.",
+                        src,
+                        len(jobs),
                     )
                 continue
 
@@ -341,4 +350,4 @@ async def poll_and_post_workday_jobs(bot: discord.Client, *, raise_on_error: boo
         raise last_transient_err
 
     if posted:
-        print(f"[JOBS] workday cycle complete: posted={posted}")
+        log.info("[JOBS] workday cycle complete: posted=%d", posted)

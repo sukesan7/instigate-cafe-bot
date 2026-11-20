@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ from icbot.services.alert_dedupe import (
 from icbot.services.crypto_fng import fetch_fear_greed
 from icbot.services.fun_market import FunMarketError, FunMarketStore
 from icbot.services.yahoo_quotes import Quote, fetch_quotes
+
+log = logging.getLogger(__name__)
 
 
 def _fmt_pct(x: float | None) -> str:
@@ -112,7 +115,7 @@ async def _apply_sp500_move(
     last = await _get_meta(db, "fun_auto_move_last_date")
     if last == today:
         if debug:
-            print(f"[DAILY] fun-market auto-move already applied for {today}")
+            log.debug("[DAILY] fun-market auto-move already applied for %s", today)
         return
 
     open_session = (
@@ -137,12 +140,12 @@ async def _apply_sp500_move(
         spy = quotes.get("SPY")
     except (aiohttp.ClientError, TimeoutError, RuntimeError, json.JSONDecodeError, ValueError) as e:
         if debug:
-            print(f"[DAILY] SPY fetch failed for auto-move: {format_exception_safe(e, secrets)}")
+            log.warning("[DAILY] SPY fetch failed for auto-move: %s", format_exception_safe(e, secrets))
         return
 
     if spy is None or spy.regular_change_pct is None:
         if debug:
-            print("[DAILY] no SPY data available, skipping auto-move")
+            log.debug("[DAILY] no SPY data available, skipping auto-move")
         return
 
     pct = spy.regular_change_pct  # e.g. +1.25 or -0.80
@@ -160,7 +163,7 @@ async def _apply_sp500_move(
         stocks = await store.list_stocks(active_only=True)
     except (FunMarketError, aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as e:
         if debug:
-            print(f"[DAILY] list_stocks failed for auto-move: {format_exception_safe(e, secrets)}")
+            log.warning("[DAILY] list_stocks failed for auto-move: %s", format_exception_safe(e, secrets))
         return
 
     moved = 0
@@ -186,11 +189,11 @@ async def _apply_sp500_move(
             moved += 1
         except (FunMarketError, aiosqlite.Error, sqlite3.Error, TypeError, ValueError) as e:
             if debug:
-                print(f"[DAILY] auto-move {s.symbol}: {format_exception_safe(e, secrets)}")
+                log.warning("[DAILY] auto-move %s: %s", s.symbol, format_exception_safe(e, secrets))
 
     await _set_meta(db, "fun_auto_move_last_date", today)
     if debug:
-        print(f"[DAILY] auto-move applied: SPY {pct:+.2f}% → {moved} stocks moved")
+        log.info("[DAILY] auto-move applied: SPY %+.2f%% → %d stocks moved", pct, moved)
 
 
 async def _resolve_channel(bot: discord.Client, channel_id: int) -> discord.abc.Messageable | None:
@@ -450,7 +453,7 @@ async def _finalize_daily_report_post(
         TypeError,
     ) as e:
         if debug:
-            print(f"[DAILY] auto-move error: {format_exception_safe(e, secrets)}")
+            log.warning("[DAILY] auto-move error: %s", format_exception_safe(e, secrets))
 
 
 async def post_daily_market_report(bot: discord.Client, *, raise_on_error: bool = False) -> None:
@@ -475,13 +478,13 @@ async def post_daily_market_report(bot: discord.Client, *, raise_on_error: bool 
 
     if not channel_id:
         if debug:
-            print("[DAILY] enabled=true but no channel configured")
+            log.debug("[DAILY] enabled=true but no channel configured")
         return
 
     ch = await _resolve_channel(bot, channel_id)
     if ch is None:
         if debug:
-            print(f"[DAILY] could not resolve channel_id={channel_id}")
+            log.warning("[DAILY] could not resolve channel_id=%s", channel_id)
         return
 
     tz_name = str(getattr(settings, "market_daily_report_tz", "America/Toronto") or "America/Toronto")
@@ -495,7 +498,7 @@ async def post_daily_market_report(bot: discord.Client, *, raise_on_error: bool 
     lifecycle = await dedupe_mgr.check_alert(db, guild_id, "market_daily_report", channel_id, today, today)
     if last == today or lifecycle == AlertLifecycleStatus.IDENTICAL_DUPLICATE:
         if debug:
-            print(f"[DAILY] already posted for {today}")
+            log.debug("[DAILY] already posted for %s", today)
         return
 
     tickers = resolve_market_report_tickers(settings)
@@ -521,7 +524,7 @@ async def post_daily_market_report(bot: discord.Client, *, raise_on_error: bool 
         TypeError,
     ) as e:
         if debug:
-            print(f"[DAILY] build embed failed: {format_exception_safe(e, secrets)}")
+            log.warning("[DAILY] build embed failed: %s", format_exception_safe(e, secrets))
         if raise_on_error:
             raise
         return
@@ -535,13 +538,13 @@ async def post_daily_market_report(bot: discord.Client, *, raise_on_error: bool 
     ok, send_status = await safe_send_alert(bot, channel_id, embed=embed, fallback_text=plain_text)
     if not ok:
         if debug:
-            print(f"[DAILY] send failed: {send_status}")
+            log.warning("[DAILY] send failed: %s", send_status)
         if raise_on_error:
             raise RuntimeError(f"Daily report send failed: {send_status}")
         return
 
     if debug:
-        print(f"[DAILY] posted ok for {today}")
+        log.info("[DAILY] posted ok for %s", today)
     await dedupe_mgr.record_delivery(db, guild_id, "market_daily_report", channel_id, today, today)
     await _finalize_daily_report_post(
         bot,

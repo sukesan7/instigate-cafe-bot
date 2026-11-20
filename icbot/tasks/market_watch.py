@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import aiohttp
@@ -16,6 +17,8 @@ from icbot.services.alert_dedupe import (
     safe_send_alert,
 )
 from icbot.services.yahoo_quotes import Quote, fetch_quotes
+
+log = logging.getLogger(__name__)
 
 
 def _fmt_pct(x: float | None) -> str:
@@ -134,13 +137,13 @@ async def poll_and_post_market_watch(bot: discord.Client, *, raise_on_error: boo
     )
     if not channel_id:
         if debug:
-            print("[MARKET] enabled=true but no channel_id configured")
+            log.debug("[MARKET] enabled=true but no channel_id configured")
         return
 
     ch = await _resolve_channel(bot, channel_id)
     if ch is None:
         if debug:
-            print(f"[MARKET] could not resolve channel_id={channel_id}")
+            log.warning("[MARKET] could not resolve channel_id=%s", channel_id)
         return
 
     vix_level_thr = float(getattr(settings, "market_watch_vix_level", 20.0) or 20.0)
@@ -175,7 +178,7 @@ async def poll_and_post_market_watch(bot: discord.Client, *, raise_on_error: boo
             )
     except (aiohttp.ClientError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
         if debug:
-            print(f"[MARKET] fetch error: {format_exception_safe(e, secrets)}")
+            log.warning("[MARKET] fetch error: %s", format_exception_safe(e, secrets))
         if raise_on_error:
             raise
         return
@@ -293,14 +296,20 @@ async def poll_and_post_market_watch(bot: discord.Client, *, raise_on_error: boo
     if debug:
         spy_s, _spy_p, spy_pct, _ = spy_sess
         qqq_s, _qqq_p, qqq_pct, _ = qqq_sess
-        print(
-            "[MARKET] snapshot: "
-            f"state={market_state} "
-            f"VIX={_fmt_price(vix_level)}(thr>={vix_level_thr:g}) "
-            f"SPY({spy_s})={_fmt_pct(spy_pct)}(thr>={index_move_thr:g}%) "
-            f"QQQ({qqq_s})={_fmt_pct(qqq_pct)}(thr>={index_move_thr:g}%) "
-            f"movers={len(movers)}(thr>={stock_move_thr:g}%) "
-            f"alerts={len(alerts)}"
+        log.debug(
+            "[MARKET] snapshot: state=%s VIX=%s(thr>=%g) SPY(%s)=%s(thr>=%g%%) QQQ(%s)=%s(thr>=%g%%) movers=%d(thr>=%g%%) alerts=%d",
+            market_state,
+            _fmt_price(vix_level),
+            vix_level_thr,
+            spy_s,
+            _fmt_pct(spy_pct),
+            index_move_thr,
+            qqq_s,
+            _fmt_pct(qqq_pct),
+            index_move_thr,
+            len(movers),
+            stock_move_thr,
+            len(alerts),
         )
 
     if not alerts:
@@ -338,7 +347,7 @@ async def poll_and_post_market_watch(bot: discord.Client, *, raise_on_error: boo
     )
 
     if debug:
-        print(f"[MARKET] posting alert -> channel_id={channel_id}")
+        log.info("[MARKET] posting alert -> channel_id=%s", channel_id)
 
     guild = getattr(ch, "guild", None)
     guild_id = int(getattr(guild, "id", 0) or 0)
@@ -348,7 +357,7 @@ async def poll_and_post_market_watch(bot: discord.Client, *, raise_on_error: boo
     ok, send_status = await safe_send_alert(bot, channel_id, embed=embed, fallback_text=plain_text)
     if not ok:
         if debug:
-            print(f"[MARKET] send failed: {send_status}")
+            log.warning("[MARKET] send failed: %s", send_status)
         if raise_on_error:
             raise RuntimeError(f"Market watch send failed: {send_status}")
         return
@@ -358,4 +367,4 @@ async def poll_and_post_market_watch(bot: discord.Client, *, raise_on_error: boo
         db, guild_id, "market_volatility", channel_id, f"mv_{now_ts}", content_hash
     )
     if debug:
-        print(f"[MARKET] posted ok: status={send_status}")
+        log.info("[MARKET] posted ok: status=%s", send_status)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ YF_QUOTE_ENDPOINTS = [
 ]
 
 # Cookie+crumb helpers
+log = logging.getLogger(__name__)
 YF_FC_URL = "https://fc.yahoo.com"
 YF_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 
@@ -176,7 +178,7 @@ async def _refresh_crumb(session: aiohttp.ClientSession, debug: bool) -> str:
             raise ProviderError(f"crumb invalid: {redact_secrets(crumb[:80])!r}")
 
     if debug:
-        print("[YF] crumb refreshed")
+        log.debug("[YF] crumb refreshed")
     return crumb
 
 
@@ -287,14 +289,14 @@ async def _fetch_quotes_chunk(
             if r.status == 200:
                 data = await r.json()
                 if debug:
-                    print(f"[YF] quote ok via {url} (crumb)")
+                    log.debug("[YF] quote ok via %s (crumb)", url)
                 return _quotes_from_payload(data)
 
             last_retry_after = parse_retry_after(r.headers.get("Retry-After")) or last_retry_after
             txt = await r.text(errors="ignore")
             last_body = redact_secrets(txt[:200])
             if debug:
-                print(f"[YF] quote status={r.status} via {url} body={last_body!r}")
+                log.debug("[YF] quote status=%s via %s body=%r", r.status, url, last_body)
 
             # If Yahoo suddenly rejects the crumb, refresh once and let the next poll retry cleanly
             if r.status in (401, 403):
@@ -366,8 +368,11 @@ async def fetch_quotes(
             last_err = e
             # Best-effort: keep the rest of the chunks; caller can decide if partial is ok.
             if debug:
-                print(
-                    f"[YF] chunk fetch failed: {redact_secrets(repr(e))} chunk={chunk[:5]}...(+{max(0, len(chunk) - 5)})"
+                log.warning(
+                    "[YF] chunk fetch failed: %s chunk=%s...(+%s)",
+                    redact_secrets(repr(e)),
+                    chunk[:5],
+                    max(0, len(chunk) - 5),
                 )
             continue
     if not out and last_err is not None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import sqlite3
 
 import discord
@@ -8,6 +9,7 @@ from icbot.app import ic
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 from icbot.errors import redact_secrets
+from icbot.logging import BOT_VERSION, generate_sanitized_issue_report
 from icbot.permissions import can_manage_guild
 from icbot.registry import FEATURE_MANIFESTS, get_feature_registry
 
@@ -159,7 +161,7 @@ async def botinfo(interaction: discord.Interaction):
 @ic.command(
     name="status", description="Display operational status and actionable diagnostics for server features."
 )
-async def status_cmd(interaction: discord.Interaction):
+async def status_cmd(interaction: discord.Interaction, issue_report: bool = False):
     if interaction.guild is None:
         await interaction.response.send_message(
             "❌ This command must be used within a server.", ephemeral=True
@@ -176,8 +178,9 @@ async def status_cmd(interaction: discord.Interaction):
 
     reg = get_feature_registry()
     container = get_container(interaction.client)
+    secrets = settings.secret_values()
 
-    # 1. Deployment Mode
+    # 1. Deployment Mode & Version
     proc_settings = getattr(container, "settings", None) or settings
     is_hosted = proc_settings.guild_id == 0
     mode_str = (
@@ -188,11 +191,15 @@ async def status_cmd(interaction: discord.Interaction):
 
     # 2. Storage / Database Health
     db_status_str = "Standard in-memory / uninitialized"
+    schema_v = 0
+    journal_m = "unknown"
     db = container.db or getattr(interaction.client, "db", None)
     health_fn = getattr(db, "get_storage_health", None) or getattr(db, "storage_health", None)
     if callable(health_fn):
         try:
             health = await health_fn()
+            schema_v = getattr(health, "schema_version", 0)
+            journal_m = getattr(health, "journal_mode", "unknown")
             wal_badge = "🟢 WAL" if health.journal_mode == "wal" else f"⚪ {health.journal_mode.upper()}"
             int_badge = "🟢 OK" if health.integrity_ok else "🔴 FAILED"
             db_status_str = f"{wal_badge} • Integrity: {int_badge} • Schema v{health.schema_version}"
@@ -202,9 +209,11 @@ async def status_cmd(interaction: discord.Interaction):
     # 3. Feature Modules Health & Actionable Fixes
     module_rows: list[str] = []
     actionable_fixes: list[str] = []
+    feature_statuses: dict[str, str] = {}
 
     for mod_id, manifest in FEATURE_MANIFESTS.items():
         fh = reg.resolve_feature_health(mod_id, settings)
+        feature_statuses[mod_id] = fh.status
         if fh.status == "ready":
             badge = "🟢 **Working**"
         elif fh.status == "degraded":
@@ -239,8 +248,8 @@ async def status_cmd(interaction: discord.Interaction):
 
         module_rows.append(f"• **{manifest.display_name}**: {badge}")
 
-    fields = [
-        ("Deployment Track", mode_str, True),
+    fields: list[tuple[str, str, bool]] = [
+        ("Deployment Track", f"{mode_str}\n• **Bot Version:** `{BOT_VERSION}`", True),
         ("Database Health", db_status_str, True),
         (
             "Campus & Timezone",
@@ -261,7 +270,7 @@ async def status_cmd(interaction: discord.Interaction):
             )
         )
 
-    # Background Tasks Status
+    # 4. Background Tasks & Provider Status
     task_health_fn = getattr(interaction.client, "task_health", None)
     if callable(task_health_fn):
         health_map = task_health_fn()
@@ -269,15 +278,76 @@ async def status_cmd(interaction: discord.Interaction):
             t_lines = [
                 f"• `{name}`: **{th.state}**"
                 + (f" (failures={th.consecutive_failures})" if th.consecutive_failures else "")
-                for name, th in health_map.items()
+                for name, th in sorted(health_map.items())
             ]
-            fields.append(("Task Supervisor", "\n".join(t_lines), False))
+            fields.append(("Provider Tasks & Supervisor", "\n".join(t_lines), False))
+
+    # 5. Channel Permission Audit
+    channel_audits: list[tuple[str, int]] = [
+        ("Job Alerts", int(settings.job_alerts_channel_id or 0)),
+        ("TTC Alerts", int(settings.ttc_alerts_channel_id or 0)),
+        ("GO Alerts", int(settings.go_alerts_channel_id or 0)),
+        ("Stock Ticker", int(settings.stock_channel_id or 0)),
+    ]
+    perm_warnings: list[str] = []
+    verified_channels: list[str] = []
+
+    bot_member = getattr(interaction.guild, "me", None)
+    for label, ch_id in channel_audits:
+        if ch_id <= 0:
+            continue
+        get_ch = getattr(interaction.guild, "get_channel", None)
+        if not callable(get_ch):
+            continue
+        ch = get_ch(ch_id)
+        if ch is None:
+            perm_warnings.append(f"• **{label}**: Channel ID `{ch_id}` not found in this server.")
+            continue
+        if bot_member is not None and hasattr(ch, "permissions_for"):
+            perms = ch.permissions_for(bot_member)
+            missing: list[str] = []
+            if not getattr(perms, "view_channel", True):
+                missing.append("View Channel")
+            if not getattr(perms, "send_messages", True):
+                missing.append("Send Messages")
+            if not getattr(perms, "embed_links", True):
+                missing.append("Embed Links")
+            ch_repr = getattr(ch, "mention", f"#{getattr(ch, 'name', ch_id)}")
+            if missing:
+                perm_warnings.append(f"• **{label}** ({ch_repr}): Missing {', '.join(missing)}")
+            else:
+                verified_channels.append(f"{label} ({ch_repr})")
+        else:
+            ch_repr = getattr(ch, "mention", f"#{getattr(ch, 'name', ch_id)}")
+            verified_channels.append(f"{label} ({ch_repr})")
+
+    if perm_warnings:
+        fields.append(("⚠️ Channel Permission Warnings", "\n".join(perm_warnings), False))
+    elif verified_channels:
+        fields.append(
+            ("Channel Permissions", f"✅ Bot permissions verified in: {', '.join(verified_channels)}", False)
+        )
+
+    # Redact any accidental secrets from field values
+    safe_fields = [(name, redact_secrets(val, secrets), inline) for name, val, inline in fields]
 
     embed = system_embed(
         settings,
         title=f"📊 System Status — {interaction.guild.name}",
-        summary="Live operational health diagnostic report for Instigate Cafe Bot.",
-        fields=fields,
+        summary=f"Live operational health diagnostic report for {settings.bot_display_name} (`{BOT_VERSION}`).",
+        fields=safe_fields,
         footer_hint="Instigate Cafe Bot Diagnostics",
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    if issue_report:
+        report_md = generate_sanitized_issue_report(
+            version=BOT_VERSION,
+            db_schema_version=schema_v,
+            db_journal_mode=journal_m,
+            feature_statuses=feature_statuses,
+            secrets=secrets,
+        )
+        report_file = discord.File(io.BytesIO(report_md.encode("utf-8")), filename="status_issue_report.md")
+        await interaction.response.send_message(embed=embed, file=report_file, ephemeral=True)
+    else:
+        await interaction.response.send_message(embed=embed, ephemeral=True)

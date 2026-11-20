@@ -230,7 +230,7 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
     settings = getattr(bot, "settings", None)
     db = getattr(bot, "db", None)
     if settings is None or db is None:
-        print("[GO] missing bot.settings or bot.db")
+        log.warning("[GO] missing bot.settings or bot.db")
         return
     container = get_container(bot)
     secrets = settings.secret_values() if hasattr(settings, "secret_values") else ()
@@ -244,11 +244,11 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
     )
 
     if not channel_id:
-        print("[GO] WARNING: no channel id set (GO_ALERTS_CHANNEL_ID or TTC_ALERTS_CHANNEL_ID). ")
+        log.warning("[GO] WARNING: no channel id set (GO_ALERTS_CHANNEL_ID or TTC_ALERTS_CHANNEL_ID).")
         return
 
     if not api_base or not access_key:
-        print("[GO] WARNING: GO API not configured (GO_API_BASE/GO_API_KEY missing). ")
+        log.warning("[GO] WARNING: GO API not configured (GO_API_BASE/GO_API_KEY missing).")
         return
 
     poll_level = str(getattr(settings, "go_alert_level", "major") or "major").strip().lower()
@@ -262,7 +262,7 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
 
     channel = await _resolve_channel(bot, channel_id)
     if channel is None:
-        print("[GO] cannot resolve channel")
+        log.warning("[GO] cannot resolve channel")
         return
 
     # Fetch with small retry on standalone calls; supervised calls delegate retry/backoff to TaskSupervisor
@@ -284,14 +284,14 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
                 await asyncio.sleep(1.5 * (attempt + 1))
 
     if last_err is not None:
-        print(f"[GO] fetch failed: {format_exception_safe(last_err, secrets)}")
+        log.warning("[GO] fetch failed: %s", format_exception_safe(last_err, secrets))
         if raise_on_error:
             raise last_err
         return
 
     if not msgs:
         if debug:
-            print("[GO] poll: fetched=0")
+            log.debug("[GO] poll: fetched=0")
         return
 
     # Filter to train-related messages unless include_buses=true
@@ -304,7 +304,7 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
 
     if not msgs:
         if debug:
-            print("[GO] poll: fetched items but 0 remained after filters (include_buses/allowlist).")
+            log.debug("[GO] poll: fetched items but 0 remained after filters (include_buses/allowlist).")
         return
 
     # Sort (oldest -> newest) by PostedDateTime where possible.
@@ -319,13 +319,17 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
 
     if debug:
         major_ct = sum(1 for m in msgs_sorted if _is_major(m))
-        print(
-            f"[GO] poll: fetched={len(msgs_sorted)} major={major_ct} level={poll_level} "
-            f"include_buses={include_buses} allowlist={'on' if bool(allow) else 'off'} "
-            f"last_code={'set' if bool(last_code) else 'none'}"
+        log.debug(
+            "[GO] poll: fetched=%s major=%s level=%s include_buses=%s allowlist=%s last_code=%s",
+            len(msgs_sorted),
+            major_ct,
+            poll_level,
+            include_buses,
+            "on" if bool(allow) else "off",
+            "set" if bool(last_code) else "none",
         )
         if len(msgs_sorted) > 0 and poll_level == "major" and major_ct == 0:
-            print(
+            log.debug(
                 "[GO] NOTE: items fetched but none matched MAJOR patterns; set GO_ALERT_LEVEL=all to see them."
             )
 
@@ -368,8 +372,11 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
 
         await _set_meta(db, "go_last_servicealert_code", newest.code)
         if debug:
-            print(
-                f"[GO] bootstrap: checkpoint={newest.code} posted_latest={bootstrap_post_latest} level={poll_level}"
+            log.info(
+                "[GO] bootstrap: checkpoint=%s posted_latest=%s level=%s",
+                newest.code,
+                bootstrap_post_latest,
+                poll_level,
             )
         return
 
@@ -377,7 +384,7 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
     codes = [m.code for m in msgs_sorted]
     if last_code not in codes:
         if debug:
-            print("[GO] WARNING: last checkpoint not found in feed; treating as bootstrap.")
+            log.warning("[GO] WARNING: last checkpoint not found in feed; treating as bootstrap.")
         if bootstrap_post_latest:
             for m in reversed(msgs_sorted):
                 major = _is_major(m)
@@ -447,7 +454,7 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
             fallback_text=f"GO {level}: {headline} - {m.body_en or ''}".strip(),
         )
         if not ok:
-            print(f"[GO] post failed: {send_status}")
+            log.warning("[GO] post failed: %s", send_status)
             if raise_on_error:
                 raise RuntimeError(f"GO post failed: {send_status}")
             return

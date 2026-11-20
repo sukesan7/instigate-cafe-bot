@@ -102,7 +102,7 @@ def _load_lore_entries(bot: discord.Client, settings: Settings) -> list[dict]:
             cleaned.append(e)
 
         if bool(getattr(settings, "llm_debug", False)):
-            print(f"[LORE] loaded {len(cleaned)} entries from {lore_path}")
+            log.debug("[LORE] loaded %d entries from %s", len(cleaned), lore_path)
 
         cache[lore_path] = {"mtime": mtime, "entries": cleaned}
         return cleaned
@@ -637,7 +637,7 @@ async def maybe_handle_llm_mention(
 
     except GeminiError as e:
         if bool(getattr(settings, "llm_debug", False)):
-            print(f"[LLM] gemini error: {format_exception_safe(e, settings.secret_values())}")
+            log.warning("[LLM] gemini error: %s", format_exception_safe(e, settings.secret_values()))
         if raise_on_error:
             raise
         return False
@@ -655,7 +655,7 @@ async def maybe_handle_llm_mention(
         LookupError,
     ) as e:
         if bool(getattr(settings, "llm_debug", False)):
-            print(f"[LLM] unexpected error: {format_exception_safe(e, settings.secret_values())}")
+            log.warning("[LLM] unexpected error: %s", format_exception_safe(e, settings.secret_values()))
         if raise_on_error:
             raise
         return False

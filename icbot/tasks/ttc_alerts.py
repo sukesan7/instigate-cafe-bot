@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import sqlite3
 from contextlib import asynccontextmanager
@@ -19,6 +20,8 @@ from icbot.services.alert_dedupe import (
     safe_send_alert,
 )
 from icbot.services.ttc_client import TTCFetchError, TTCItem, fetch_account_status_items, resolve_account_id
+
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -119,7 +122,7 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
     api_base = str(getattr(settings, "ttc_mastodon_base", "") or "").strip()
     acct = str(getattr(settings, "ttc_mastodon_acct", "") or "").strip()
     if not api_base or not acct:
-        print("[TTC] missing TTC_MASTODON_BASE or TTC_MASTODON_ACCT")
+        log.warning("[TTC] missing TTC_MASTODON_BASE or TTC_MASTODON_ACCT")
         return
 
     poll_level = (getattr(settings, "ttc_alert_level", "major") or "major").strip().lower()
@@ -135,7 +138,7 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
 
     channel = await _resolve_channel(bot, channel_id)
     if channel is None:
-        print("[TTC] cannot resolve TTC_ALERTS_CHANNEL_ID")
+        log.warning("[TTC] cannot resolve TTC_ALERTS_CHANNEL_ID")
         return
 
     # Resolve account id once (cached in DB)
@@ -153,7 +156,7 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
                 sqlite3.Error,
                 ValueError,
             ) as e:
-                print(f"[TTC] resolve account id failed: {format_exception_safe(e, secrets)}")
+                log.warning("[TTC] resolve account id failed: %s", format_exception_safe(e, secrets))
                 if raise_on_error:
                     raise
                 return
@@ -186,13 +189,13 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
                 await asyncio.sleep(1.5 * (attempt + 1))
             except TTCFetchError as e:
                 # These are usually config/rate-limit issues; no point retrying rapidly
-                print(f"[TTC] fetch failed: {format_exception_safe(e, secrets)}")
+                log.warning("[TTC] fetch failed: %s", format_exception_safe(e, secrets))
                 if raise_on_error:
                     raise
                 return
 
         if last_err is not None:
-            print(f"[TTC] fetch failed: {format_exception_safe(last_err, secrets)}")
+            log.warning("[TTC] fetch failed: %s", format_exception_safe(last_err, secrets))
             if raise_on_error:
                 raise last_err
             return
@@ -200,12 +203,16 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
         if debug:
             major_ct = sum(1 for it in items if _is_major(it))
             since_preview = last_id[-8:] if last_id else "none"
-            print(
-                f"[TTC] poll: fetched={len(items)} major={major_ct} "
-                f"level={poll_level} include_replies={include_replies} since_id={since_preview}"
+            log.debug(
+                "[TTC] poll: fetched=%s major=%s level=%s include_replies=%s since_id=%s",
+                len(items),
+                major_ct,
+                poll_level,
+                include_replies,
+                since_preview,
             )
             if len(items) > 0 and poll_level == "major" and major_ct == 0:
-                print(
+                log.debug(
                     "[TTC] NOTE: items fetched but none matched MAJOR patterns; set TTC_ALERT_LEVEL=all to see them."
                 )
 
@@ -253,8 +260,11 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
             # Checkpoint to the newest status id we saw
             await _set_meta(db, "ttc_last_status_id", items[0].guid)
             if debug:
-                print(
-                    f"[TTC] bootstrap: checkpoint={items[0].guid[-8:]} posted_latest={bootstrap_post_latest} level={poll_level}"
+                log.info(
+                    "TTC bootstrap completed: checkpoint=%s posted_latest=%s level=%s",
+                    items[0].guid[-8:],
+                    bootstrap_post_latest,
+                    poll_level,
                 )
             return
 
@@ -293,7 +303,7 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
                 fallback_text=f"TTC {level}: {headline} - {it.summary or ''} {it.link or ''}".strip(),
             )
             if not ok:
-                print(f"[TTC] post failed: {send_status}")
+                log.warning("TTC post failed: %s", send_status)
                 if raise_on_error:
                     raise RuntimeError(f"TTC post failed: {send_status}")
                 return

@@ -26,6 +26,7 @@ from icbot.container import ServiceContainer, resolve_guild_settings
 from icbot.db import Database
 from icbot.errors import BotError, format_exception_safe, safe_error_summary
 from icbot.guild_config import GuildSettingsStore
+from icbot.logging import get_correlation_id, log_event
 from icbot.permissions import is_admin_or_allowed
 from icbot.registry import check_command_gate, register_ic_commands
 from icbot.scheduler import (
@@ -149,12 +150,35 @@ async def on_app_command_error(
     client_settings = getattr(getattr(interaction, "client", None), "settings", None)
     secrets = client_settings.secret_values() if isinstance(client_settings, Settings) else ()
     inner = getattr(error, "original", error)
+    cid = get_correlation_id()
+    cmd_name = interaction.command.qualified_name if interaction.command else "unknown"
+    guild_id = interaction.guild_id
 
     if isinstance(inner, BotError):
-        log.warning("App command domain/provider error: %s", format_exception_safe(inner, secrets))
+        log_event(
+            log,
+            logging.WARNING,
+            "app_command_domain_error",
+            f"App command domain error in {cmd_name}: {format_exception_safe(inner, secrets)}",
+            guild_id=guild_id,
+            correlation_id=cid,
+            outcome="domain_error",
+            error_type=type(inner).__name__,
+            extra={"command": cmd_name},
+        )
         user_msg = f"❌ {safe_error_summary(inner, secrets)}"
     else:
-        log.error("App command error: %s", format_exception_safe(error, secrets))
+        log_event(
+            log,
+            logging.ERROR,
+            "app_command_unexpected_error",
+            f"App command error in {cmd_name}: {format_exception_safe(error, secrets)}",
+            guild_id=guild_id,
+            correlation_id=cid,
+            outcome="unexpected_error",
+            error_type=type(inner).__name__,
+            extra={"command": cmd_name},
+        )
         user_msg = "❌ An unexpected error occurred."
 
     try:
@@ -551,16 +575,21 @@ class CampusBot(commands.Bot):
         await self.supervisor.stop_all()
 
     async def _cleanup_runtime(self) -> None:
+        log.info("[SHUTDOWN] Initiating runtime resource cleanup...")
         self.setup_complete = False
         await self._cancel_background_tasks()
+        log.debug("[SHUTDOWN] Background supervisor tasks cancelled.")
         await self._close_http_sessions()
+        log.debug("[SHUTDOWN] HTTP sessions closed.")
         try:
             await self.db.close()
+            log.debug("[SHUTDOWN] Database connections closed.")
         except (aiosqlite.Error, sqlite3.Error, RuntimeError, OSError) as exc:
             log.warning(
                 "[SHUTDOWN] Error closing database: %s",
                 format_exception_safe(exc, self._secrets()),
             )
+        log.info("[SHUTDOWN] Runtime cleanup complete.")
 
     async def setup_hook(self) -> None:
         """Perform idempotent one-time startup before gateway readiness."""
