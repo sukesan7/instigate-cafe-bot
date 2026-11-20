@@ -23,7 +23,7 @@ from typing import Any
 
 from icbot.errors import redact_secrets
 
-BOT_VERSION: str = "v2.0.0 (Modernized)"
+BOT_VERSION: str = "v1.0.0-rc1"
 
 
 # Context variable for tracing asynchronous operations across coroutines

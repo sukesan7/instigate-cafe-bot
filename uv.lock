@@ -306,7 +306,7 @@ filecache = [
 
 [[package]]
 name = "campus-bot"
-version = "0.2.4"
+version = "1.0.0rc1"
 source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },

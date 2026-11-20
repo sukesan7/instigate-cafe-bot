@@ -1,6 +1,6 @@
 [project]
 name = "campus-bot"
-version = "0.2.4"
+version = "1.0.0rc1"
 description = "Instigate Cafe Bot — Campus utility, transit alerts, job alerts, and community simulation Discord bot"
 readme = "README.md"
 license = { text = "MIT" }

@@ -166,6 +166,7 @@ Server administrators can configure modules directly inside Discord without touc
 - [Operations, Backups & Incident Runbook](docs/operations.md)
 - [Staging Acceptance & Fault-Injection Plan](docs/staging-acceptance-and-fault-injection.md)
 - [Production Hosting & Recovery Runbook](docs/production-hosting-and-recovery.md)
+- [Private Alpha & Public Beta Readiness Gates](docs/alpha-beta-readiness.md)
 - [Usability Review & Archetype Audit Report](docs/usability_review.md)
 - [Contributing Guidelines](CONTRIBUTING.md)
 - [Security Policy & Vulnerability Disclosure](SECURITY.md)

@@ -10,8 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Public alpha release and staging guild onboarding.
+- Public deployment and automated production migration.
 - Optional web dashboard for community event and exam scheduling.
+
+---
+
+## [1.0.0-rc1] - 2026-11-20
+
+### Added
+- **Private Alpha & Public Beta Readiness (Phase 13B):**
+  - **Release Candidate Version:** Bumped package and bot version to `v1.0.0-rc1` (`1.0.0rc1` in `pyproject.toml`).
+  - **Automated Release Gate Verifier ([`tools/verify_beta_readiness.py`](tools/verify_beta_readiness.py)):** Offline evaluation tool testing all 8 mandatory release gates:
+    - `GATE-1`: Multi-Discipline Onboarding & Autonomous Setup (CS/Engineering vs. Business/Commerce cohorts).
+    - `GATE-2`: Multi-Guild Data, Settings & Economy Isolation (Guild Alpha vs. Guild Beta).
+    - `GATE-3`: Security, Clean Secret Scan & Log Redaction (`tools/scan_secrets.py --enforce-clean` + `RedactingLogFilter`).
+    - `GATE-4`: Financial Economy Integrity & ACID Settlement (Zero balance drift, 10-way double-claim concurrency lock, ledger audit trail).
+    - `GATE-5`: Bounded Interactive Response Latency (< 2500ms response/deferral token deadline).
+    - `GATE-6`: Predictable Provider Failure & Graceful Degradation (User-friendly fallback guidance, zero unhandled 5xx tracebacks).
+    - `GATE-7`: Cost Controls, Quota Budgets & Feature-Flag Toggles (`student_core` profile).
+    - `GATE-8`: Privacy-Preserving Feedback & RTBF Data Deletion Compliance (`ResumeConfirmView` consent disclosure, `delete_user_data` profile purge with audit ledger preservation).
+  - **Alpha/Beta Readiness Specification ([`docs/alpha-beta-readiness.md`](docs/alpha-beta-readiness.md)):** Multi-discipline cohort specifications, 8 measurable release gate matrices, privacy feedback ingestion rules, bug triage SLA definitions (P0–P3), feature-flag degradation runbooks, and formal Launch Decision Record (LDR) sign-off.
+  - **Integration Test Suite ([`tests/integration/test_beta_readiness_and_release_gates.py`](tests/integration/test_beta_readiness_and_release_gates.py)):** Pytest coverage asserting 100% pass rate across all 8 release gates.
 
 ---
 
