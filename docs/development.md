@@ -67,17 +67,23 @@ All hooks use `repo: local` so they run 100% offline with pinned `.venv` binarie
 
 ## 4. Full Pre-PR Verification Sequence
 
-Run this offline verification sequence before opening a pull request:
+Run this offline verification sequence before opening a pull request (never rely on syntax checks alone):
 
 ```bash
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy .
 uv run python tools/check_docs.py
+uv run python tools/check_command_docs.py
 uv run python tools/scan_secrets.py --enforce-clean
 uv run python tools/smoke_offline.py
 uv run pytest
 ```
+
+### 4.1 Maintainer Engineering Invariants
+- **Schema migrations:** Test every schema change against synthetic temporary SQLite databases with a backward-compatible upgrade path and verified backup/restore (`tools/backup_db.py`); never silently migrate live databases.
+- **Economy & ledger atomicity:** Changes touching virtual balances, casino games, or ICSE trades must assert `BEGIN IMMEDIATE` atomicity and no duplicate settlement under concurrency.
+- **Dynamic registration checks:** Before removing an apparently unused module, verify dynamic `/ic` command registration in [`icbot/registry.py`](../icbot/registry.py), task specs in [`icbot/scheduler.py`](../icbot/scheduler.py), and CLI scripts under `tools/`.
 
 ---
 

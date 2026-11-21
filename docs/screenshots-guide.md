@@ -1,6 +1,6 @@
 # Screenshots Capture & Redaction Guide
 
-This guide defines the **manual owner-run procedure** for capturing clean, redacted Discord screenshots on a private staging server or isolated test channel once development is complete. Final gallery links in `README.md` remain **unreferenced** until the owner supplies and approves sanitized images (populated in final prompt E3).
+This guide defines the **manual owner-run procedure** for capturing clean, redacted Discord screenshots on a private staging server or isolated test channel once development is complete. Final gallery links in `README.md` remain **unreferenced** until the owner supplies and approves sanitized images.
 
 > [!CAUTION]
 > **Mandatory Isolation & Token Safety Rules**
@@ -143,7 +143,7 @@ Capture shots in priority order (Priorities 1–3 form the core README gallery; 
 
 ---
 
-## 3. Pre-Commit Verification & Future Gallery Template (E3)
+## 3. Pre-Commit Verification & Future Gallery Template
 
 Do **not** reference `assets/screenshots/*.png` in `README.md` until the sanitized files exist on disk and pass offline checks:
 
@@ -152,4 +152,4 @@ uv run python tools/scan_secrets.py --enforce-clean
 uv run python tools/check_docs.py
 ```
 
-Once approved PNGs are added under `assets/screenshots/` in final prompt E3, replace the text note in `README.md`'s `Screenshots / Gallery` section with verified Markdown image links using the alt-text drafts above.
+Once approved PNGs are added under `assets/screenshots/`, replace the text note in `README.md`'s `Screenshots / Gallery` section with verified Markdown image links using the alt-text drafts above.

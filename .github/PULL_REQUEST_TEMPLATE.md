@@ -1,8 +1,8 @@
 ## Description
 Brief summary of the proposed changes and their operational intent.
 
-## Related Issue / Prompt
-Fixes #(issue number) or relates to Phase XX modernization.
+## Related Issue
+Fixes #(issue number)
 
 ## Subsystem Impact
 - [ ] Academics (`icbot/academics/`)
@@ -17,7 +17,7 @@ Before requesting review, confirm that all local offline checks pass:
 - [ ] `uv run pytest` passes 100% of tests offline.
 - [ ] `uv run ruff check . && uv run ruff format --check .` reports clean formatting.
 - [ ] `uv run mypy .` reports no type errors.
-- [ ] `uv run python tools/check_docs.py` passes offline documentation validation.
+- [ ] `uv run python tools/check_docs.py` and `uv run python tools/check_command_docs.py` pass offline documentation and command-parity checks.
 - [ ] `uv run python tools/smoke_offline.py` passes zero-token import check.
 - [ ] `uv run python tools/scan_secrets.py --enforce-clean` reports zero leaked secrets.
 

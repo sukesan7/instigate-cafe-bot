@@ -4,16 +4,16 @@ Thank you for your interest in contributing to the Instigate Cafe Bot! This proj
 
 ---
 
-## 1. Absolute Safety & Development Invariants
+## 1. Contributor Safety & Testing Standards
 
-Before making any changes or submitting pull requests, you must adhere to these foundational safety rules:
+Before making changes or opening a pull request, follow these project invariants:
 
 > [!CAUTION]
-> **Railway Autodeploy & Gateway Safeguards:**
-> - **Never connect to the live Discord Gateway** during development or testing. Do not run `python main.py` or call `bot.run()` without explicit authorization.
-> - **Never commit or push real secrets, `.env` files, or SQLite databases (`*.db`, `*.sqlite-wal`).**
-> - **Never deploy to Railway or alter production deployment settings.**
-> - Use fake Discord interactions (`FakeInteraction`, `FakeClient`), in-memory databases (`:memory:`), and mocked HTTP routers (`AiohttpMockRouter`) for all testing.
+> **Offline Testing & Data Safety:**
+> - **Never connect to the live Discord Gateway** during ordinary development or testing (`ICBOT_ALLOW_GATEWAY=false` by default). Do not run `python main.py --allow-gateway` or call `bot.run()` in tests or imports.
+> - **Never commit secrets or private data:** Do not commit `.env` files, API tokens, SQLite databases (`*.db`, `*-wal`, `*-shm`), private server lore, real user messages, or student resumes into source, fixtures, logs, or issue reports.
+> - **Mock external APIs by default:** Use fake Discord interactions (`FakeInteraction`, `FakeClient`), temporary SQLite databases (`tmp_path`), and mocked HTTP routers (`AiohttpMockRouter`). Never infer that tests pass from syntax checks alone.
+> - **Deployments are strictly human-controlled:** Never trigger production deployments or alter hosting settings from CI or PRs.
 
 ---
 
@@ -55,8 +55,10 @@ uv run mypy .
 # 3. Run zero-token offline smoke check
 uv run python tools/smoke_offline.py
 
-# 4. Run deterministic secret and publish-safety scan
+# 4. Run deterministic secret, docs, and command-parity scans
 uv run python tools/scan_secrets.py --enforce-clean
+uv run python tools/check_docs.py
+uv run python tools/check_command_docs.py
 
 # 5. Run the offline pytest suite
 uv run pytest
@@ -76,8 +78,11 @@ uv run python tools/run_usability_audit.py
    - `docs(...)`: Documentation, checklists, and guides.
    - `test(...)`: Unit, integration, or benchmark tests.
    - `chore(...)`: Tooling, dependency, or configuration updates.
-3. **Narrow Scope:** Keep PRs atomic and focused on a single change. Include tests verifying your change offline.
-4. **No Direct Production Pushes:** All changes must land via reviewed pull requests passing the GitHub Actions offline quality gate.
+3. **Narrow Scope & Verification:** Keep PRs focused on a single change with offline regression tests.
+   - **Schema changes:** Use synthetic temp fixtures, write backward-compatible migrations, and verify backups/restore cleanly.
+   - **Economy & market changes:** Assert transactional atomicity (`BEGIN IMMEDIATE`) and zero duplicate settlement or balance drift.
+   - **Module cleanup:** Verify dynamic slash-command registration (`icbot/registry.py`) and CLI/test entrypoints before removing any module.
+4. **No Direct Production Pushes:** All changes land via reviewed pull requests passing the GitHub Actions offline quality gate. Production deployments are triggered manually by maintainers.
 
 ---
 

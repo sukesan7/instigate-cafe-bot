@@ -129,7 +129,7 @@ Because production Railway deployments must never be modified automatically by s
 
 | Railway UI Setting | Required State | Purpose |
 | :--- | :--- | :--- |
-| **Autodeploy** | **OFF (Disabled)** during modernization | Prevents unverified Git pushes from restarting production (note: disabling autodeploy does not stop an already active service). |
+| **Autodeploy** | **OFF (Disabled)** — manual deploys only | Prevents unverified Git pushes from restarting production (note: disabling autodeploy does not stop an already active service). |
 | **Release Trigger** | **Manual Deploy Only** | Deploy only after offline tests, secret scans, and a verified backup pass. |
 | **Start Command** | `python3 main.py --allow-gateway` | Satisfies the explicit gateway opt-in guard (`ICBOT_ALLOW_GATEWAY`). |
 | **Replicas** | **`1`** | Mandatory single-scheduler and SQLite WAL safety invariant. |
@@ -207,7 +207,7 @@ docker compose start campus-bot
 
 ## 9. Pre-Publication Security, Leak Guard & Attribution Checklist
 
-Before publishing a fork or triggering a production release, verify every offline gate:
+Before publishing a fork or triggering a production release, verify every offline gate (and note that publishing open-source code and operating a hosted public bot instance are separate maintainer decisions):
 
 ```bash
 uv run python tools/scan_secrets.py --enforce-clean

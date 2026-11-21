@@ -33,6 +33,37 @@ def test_all_tracked_repository_markdown_files_pass_offline_validation() -> None
     assert report.local_images_checked >= 1
 
 
+def test_public_repo_contains_no_private_agent_scaffolding_or_prompt_pack_references() -> None:
+    """Verify AGENTS.md is removed and public docs/templates do not reference internal agent prompt packs."""
+    assert not (PROJECT_ROOT / "AGENTS.md").exists(), (
+        "Private agent rules file AGENTS.md should not be tracked"
+    )
+
+    forbidden_terms = (
+        "AGENTS.md",
+        "START_HERE.md",
+        "RELEASE_GATES.md",
+        "phase_XX",
+        "Phase XX",
+        "prompt E3",
+        "Antigravity",
+    )
+    public_files = [
+        PROJECT_ROOT / "README.md",
+        PROJECT_ROOT / "CONTRIBUTING.md",
+        PROJECT_ROOT / "SECURITY.md",
+        *sorted((PROJECT_ROOT / "docs").glob("*.md")),
+        *sorted((PROJECT_ROOT / ".github").rglob("*.md")),
+        *sorted((PROJECT_ROOT / ".github" / "workflows").glob("*.yml")),
+    ]
+    for path in public_files:
+        content = path.read_text(encoding="utf-8")
+        for term in forbidden_terms:
+            assert term not in content, (
+                f"Internal agent/prompt reference '{term}' found in {path.relative_to(PROJECT_ROOT)}"
+            )
+
+
 def test_validator_rejects_file_uris_missing_links_images_anchors_placeholders_and_unknown_hosts(
     tmp_path: Path,
 ) -> None:

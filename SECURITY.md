@@ -6,7 +6,7 @@ Only the current modernized release line is actively supported with security pat
 
 | Version | Supported | Status |
 |---|---|---|
-| `0.2.x` | :white_check_mark: | Active Development & Modernization |
+| `1.0.x` / `0.2.x` | :white_check_mark: | Active Supported Release |
 | `0.1.x` | :x: | Legacy / Deprecated (Do not deploy) |
 
 ---
@@ -42,5 +42,6 @@ If a Discord bot token, Gemini API key, or third-party credential is accidentall
 - **Ephemeral Resume Reviews:** Resumes submitted via `/ic resume` are parsed and evaluated strictly in memory. They are never written to disk, saved in SQLite, or logged.
 - **Zero Raw Message Logging:** Personal chat messages are never recorded in application databases.
 - **Right-to-be-Forgotten:** Community members can request complete deletion of their profile and economy balance at any time (`user_store.delete_user_data(user_id, anonymize_ledger=True)`).
-- **Least-Privilege CI:** Continuous integration workflows run exclusively in offline mock mode with zero access to live Discord or Railway credentials.
+- **Least-Privilege Permissions & CI:** The bot requests only minimal Discord permissions (bitmask `277025507392`, zero privileged intents for `/ic` slash commands), and CI workflows run exclusively offline with zero access to live Discord or hosting credentials.
+- **Validated Attribution & Privacy:** Contributors must never introduce real user data, private server lore, or unlicensed third-party content into source, fixtures, or issue reports.
 
