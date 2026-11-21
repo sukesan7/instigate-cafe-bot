@@ -23,7 +23,8 @@ WorkingDirectory=/opt/campus-bot
 
 # Runtime secrets loaded from file with strict permissions (chmod 600)
 EnvironmentFile=/opt/campus-bot/.env
-Environment=SQLITE_PATH=/opt/campus-bot/data/campus.db
+Environment=DB_PATH=/opt/campus-bot/data/campus.db
+Environment=GRADES_DB_PATH=/opt/campus-bot/data/tmu_grades.db
 Environment=ICBOT_ALLOW_GATEWAY=true
 Environment=PYTHONUNBUFFERED=1
 
