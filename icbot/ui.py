@@ -7,8 +7,10 @@ interaction acknowledgments, and handles deleted messages or Discord 403/404/429
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar
@@ -17,8 +19,11 @@ import discord
 
 from icbot.config import Settings
 from icbot.container import extract_guild_id, resolve_guild_settings
+from icbot.errors import respond_with_failure
 from icbot.permissions import can_manage_guild, is_admin_or_allowed
 from icbot.registry import is_feature_enabled
+
+log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -471,6 +476,24 @@ class BasePaginationView(discord.ui.View):
         self._timed_out = True
         self._sync_buttons()
         await safe_timeout_disable(self, self.message)
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction[Any],
+        error: Exception,
+        item: discord.ui.Item[Any],
+    ) -> None:
+        """Route view callback errors ephemerally with safe correlation IDs; never swallow cancellation."""
+        if isinstance(error, asyncio.CancelledError):
+            raise error
+        await respond_with_failure(
+            interaction,
+            error,
+            logger=log,
+            settings=self.settings,
+            command_name=f"{type(self).__name__}.{getattr(item, 'custom_id', type(item).__name__)}",
+            prefer_embed=False,
+        )
 
     async def _step_page(self, interaction: discord.Interaction, delta: int) -> None:
         if not await self._ensure_access(interaction):

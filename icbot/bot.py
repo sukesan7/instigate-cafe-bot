@@ -24,9 +24,12 @@ from discord.ext import commands
 from icbot.config import MAX_SNOWFLAKE, Settings
 from icbot.container import ServiceContainer, resolve_guild_settings
 from icbot.db import Database
-from icbot.errors import BotError, format_exception_safe, safe_error_summary
+from icbot.errors import (
+    format_exception_safe,
+    respond_with_failure,
+)
 from icbot.guild_config import GuildSettingsStore
-from icbot.logging import get_correlation_id, log_event
+from icbot.logging import get_correlation_id
 from icbot.permissions import is_admin_or_allowed
 from icbot.registry import check_command_gate, register_ic_commands
 from icbot.scheduler import (
@@ -132,7 +135,11 @@ async def on_app_command_error(
     interaction: discord.Interaction[Any],
     error: app_commands.AppCommandError,
 ) -> None:
-    """Handle application command cooldowns, check failures, domain errors, and unexpected errors."""
+    """Handle application command cooldowns, check failures, and classified failure taxonomy."""
+    inner = getattr(error, "original", error)
+    if isinstance(inner, asyncio.CancelledError):
+        raise inner
+
     if isinstance(error, app_commands.CommandOnCooldown):
         mins, secs = divmod(error.retry_after, 60)
         msg = (
@@ -147,47 +154,16 @@ async def on_app_command_error(
     if isinstance(error, app_commands.CheckFailure):
         return
 
-    client_settings = getattr(getattr(interaction, "client", None), "settings", None)
-    secrets = client_settings.secret_values() if isinstance(client_settings, Settings) else ()
-    inner = getattr(error, "original", error)
     cid = get_correlation_id()
     cmd_name = interaction.command.qualified_name if interaction.command else "unknown"
-    guild_id = interaction.guild_id
-
-    if isinstance(inner, BotError):
-        log_event(
-            log,
-            logging.WARNING,
-            "app_command_domain_error",
-            f"App command domain error in {cmd_name}: {format_exception_safe(inner, secrets)}",
-            guild_id=guild_id,
-            correlation_id=cid,
-            outcome="domain_error",
-            error_type=type(inner).__name__,
-            extra={"command": cmd_name},
-        )
-        user_msg = f"❌ {safe_error_summary(inner, secrets)}"
-    else:
-        log_event(
-            log,
-            logging.ERROR,
-            "app_command_unexpected_error",
-            f"App command error in {cmd_name}: {format_exception_safe(error, secrets)}",
-            guild_id=guild_id,
-            correlation_id=cid,
-            outcome="unexpected_error",
-            error_type=type(inner).__name__,
-            extra={"command": cmd_name},
-        )
-        user_msg = "❌ An unexpected error occurred."
-
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(user_msg, ephemeral=True)
-        else:
-            await interaction.followup.send(user_msg, ephemeral=True)
-    except (discord.DiscordException, aiohttp.ClientError, RuntimeError) as exc:
-        log.debug("Failed sending app command error response: %s", format_exception_safe(exc, secrets))
+    await respond_with_failure(
+        interaction,
+        error,
+        logger=log,
+        command_name=cmd_name,
+        correlation_id=cid,
+        prefer_embed=False,
+    )
 
 
 class _CafeCommandTree(app_commands.CommandTree["CampusBot"]):

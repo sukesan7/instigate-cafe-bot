@@ -107,6 +107,86 @@ class SSRFBlockedError(TransportError):
     """Raised when a request target violates Server-Side Request Forgery safety policies."""
 
 
+class CircuitBreakerOpenError(TransportError):
+    """Raised immediately when a provider circuit breaker is open during an ongoing outage."""
+
+
+class ProviderCircuitBreaker:
+    """Lightweight deterministic circuit breaker (closed -> open -> half_open -> closed).
+
+    Prevents thundering retries during sustained upstream provider outages without
+    fabricating fallback data.
+    """
+
+    def __init__(
+        self,
+        *,
+        failure_threshold: int = 3,
+        recovery_timeout_seconds: float = 60.0,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        self.failure_threshold = max(1, int(failure_threshold))
+        self.recovery_timeout_seconds = max(1.0, float(recovery_timeout_seconds))
+        self._clock = clock
+        self._state: str = "closed"
+        self._consecutive_failures: int = 0
+        self._opened_at: float = 0.0
+        self._half_open_probe_in_flight: bool = False
+
+    def _now(self) -> float:
+        return float(self._clock() if self._clock is not None else time.time())
+
+    @property
+    def state(self) -> str:
+        if self._state == "open" and (self._now() - self._opened_at) >= self.recovery_timeout_seconds:
+            return "half_open"
+        return self._state
+
+    @property
+    def retry_after_remaining(self) -> float:
+        if self._state != "open":
+            return 0.0
+        return max(0.0, self.recovery_timeout_seconds - (self._now() - self._opened_at))
+
+    def before_request(self, source_name: str = "provider") -> None:
+        """Raise CircuitBreakerOpenError if the breaker is open and cooldown has not elapsed."""
+        cur = self.state
+        if cur == "open":
+            raise CircuitBreakerOpenError(
+                f"Provider '{source_name}' circuit breaker is open due to repeated failures.",
+                status=503,
+                retry_after=self.retry_after_remaining,
+            )
+        if cur == "half_open":
+            if self._half_open_probe_in_flight:
+                raise CircuitBreakerOpenError(
+                    f"Provider '{source_name}' circuit breaker probe already in progress.",
+                    status=503,
+                    retry_after=1.0,
+                )
+            self._state = "half_open"
+            self._half_open_probe_in_flight = True
+
+    def record_success(self) -> None:
+        self._state = "closed"
+        self._consecutive_failures = 0
+        self._opened_at = 0.0
+        self._half_open_probe_in_flight = False
+
+    def record_failure(self, *, retry_after: float | None = None) -> None:
+        self._half_open_probe_in_flight = False
+        if self._state == "half_open":
+            self._state = "open"
+            self._opened_at = self._now()
+            return
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self.failure_threshold:
+            self._state = "open"
+            self._opened_at = self._now()
+            if retry_after is not None and retry_after > self.recovery_timeout_seconds:
+                self.recovery_timeout_seconds = float(retry_after)
+
+
 # ---------------------------------------------------------------------------
 # Data Provenance and Caching Models
 # ---------------------------------------------------------------------------
@@ -263,6 +343,7 @@ class BoundedHttpTransport:
         session: aiohttp.ClientSession | None = None,
         cache: HttpTransportCache | None = None,
         cache_ttl_seconds: float = 0.0,
+        circuit_breaker: ProviderCircuitBreaker | None = None,
         clock: Callable[[], float] | None = None,
         sleep_func: Callable[[float], Coroutine[Any, Any, None]] | None = None,
     ) -> None:
@@ -285,6 +366,7 @@ class BoundedHttpTransport:
         self._owned_session: aiohttp.ClientSession | None = None
         self.cache = cache
         self.cache_ttl_seconds = float(cache_ttl_seconds)
+        self.circuit_breaker = circuit_breaker
         self._clock = clock
         self._sleep_func = sleep_func
 
@@ -399,6 +481,9 @@ class BoundedHttpTransport:
             total=self.total_timeout,
         )
 
+        if self.circuit_breaker is not None:
+            self.circuit_breaker.before_request(self.source_name)
+
         session = await self.get_session()
 
         for attempt in range(1, max_attempts + 1):
@@ -512,6 +597,8 @@ class BoundedHttpTransport:
                                 headers=resp_headers,
                             )
                         elif status == 429:
+                            if self.circuit_breaker is not None:
+                                self.circuit_breaker.record_failure(retry_after=retry_after)
                             raise TransportRateLimitError(
                                 err_msg,
                                 status=status,
@@ -520,6 +607,8 @@ class BoundedHttpTransport:
                                 headers=resp_headers,
                             )
                         elif status >= 500:
+                            if self.circuit_breaker is not None:
+                                self.circuit_breaker.record_failure(retry_after=retry_after)
                             raise TransportServerError(
                                 err_msg,
                                 status=status,
@@ -537,6 +626,8 @@ class BoundedHttpTransport:
                             )
 
                     # Successful response (status < 400)
+                    if self.circuit_breaker is not None:
+                        self.circuit_breaker.record_success()
                     curr_now = self._now()
                     etag = resp_headers.get("ETag")
                     last_mod = resp_headers.get("Last-Modified")
@@ -596,7 +687,11 @@ class BoundedHttpTransport:
                     )
                     await self._sleep(delay)
                     continue
-                raise TransportTimeoutError(f"Request to {safe_url} timed out: {exc}") from exc
+                if self.circuit_breaker is not None:
+                    self.circuit_breaker.record_failure()
+                raise TransportTimeoutError(
+                    f"Request to {safe_url} timed out: {redact_secrets(str(exc), secrets)}"
+                ) from exc
             except aiohttp.ClientError as exc:
                 safe_url = redact_secrets(clean_url, secrets)
                 if is_idempotent and attempt < max_attempts:
@@ -607,11 +702,15 @@ class BoundedHttpTransport:
                         attempt,
                         max_attempts,
                         delay,
-                        exc,
+                        redact_secrets(str(exc), secrets),
                     )
                     await self._sleep(delay)
                     continue
-                raise TransportNetworkError(f"Network error requesting {safe_url}: {exc}") from exc
+                if self.circuit_breaker is not None:
+                    self.circuit_breaker.record_failure()
+                raise TransportNetworkError(
+                    f"Network error requesting {safe_url}: {redact_secrets(str(exc), secrets)}"
+                ) from exc
             except asyncio.CancelledError:
                 raise
 

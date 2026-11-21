@@ -13,7 +13,7 @@ from icbot.app import sports
 from icbot.config import Settings
 from icbot.container import RssCache, get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
-from icbot.errors import format_exception_safe, safe_error_summary
+from icbot.errors import ProviderError, format_exception_safe, safe_error_summary
 from icbot.services.sports_client import OddsAPIClient, OddsAPIError
 
 log = logging.getLogger(__name__)
@@ -212,20 +212,28 @@ async def _send_sport(interaction: discord.Interaction, sport: str, title: str):
         await interaction.response.send_message("Bot settings not initialized.", ephemeral=True)
         return
 
+    # Acknowledge within Discord's 3-second deadline before outbound Odds API & RSS HTTP calls
+    if not interaction.response.is_done():
+        await interaction.response.defer(thinking=True)
+
     settings = await resolve_guild_settings(interaction.client, interaction)
     container = get_container(interaction.client)
     secrets = settings.secret_values()
     sport_key = SPORT_KEYS[sport]
+    odds_degraded = False
 
     if (getattr(settings, "odds_api_key", "") or "").strip():
         client = container.build_odds_client(settings)
         try:
             events = await client.get_upcoming(sport_key, limit=5, days_from=7)
             upcoming_text = _format_upcoming(events)
-        except (OddsAPIError, TimeoutError, aiohttp.ClientError, ValueError) as e:
-            upcoming_text = f"Upcoming games unavailable: {_clip(safe_error_summary(e, secrets), 900)}"
+        except (ProviderError, OddsAPIError, TimeoutError, aiohttp.ClientError, ValueError) as e:
+            odds_degraded = True
+            upcoming_text = (
+                f"Upcoming games temporarily unavailable: {_clip(safe_error_summary(e, secrets), 900)}"
+            )
     else:
-        upcoming_text = "Upcoming games unavailable (ODDS_API_KEY is not configured)."
+        upcoming_text = "Upcoming games not configured (ODDS_API_KEY is not configured)."
 
     open_session = (
         container.http_session
@@ -235,6 +243,7 @@ async def _send_sport(interaction: discord.Interaction, sport: str, title: str):
 
     # News is optional: if RSS fails, we still show games or status cleanly
     news_items: list[tuple[str, str]] = []
+    news_degraded = False
     try:
         news_items = await _get_news(
             sport,
@@ -245,6 +254,7 @@ async def _send_sport(interaction: discord.Interaction, sport: str, title: str):
             clock=container.clock,
         )
     except (aiohttp.ClientError, TimeoutError, ET.ParseError, ValueError) as exc:
+        news_degraded = True
         log.debug("Sports RSS fetch failed for %s: %s", sport, format_exception_safe(exc, secrets))
         news_items = []
 
@@ -257,8 +267,9 @@ async def _send_sport(interaction: discord.Interaction, sport: str, title: str):
             ("News (latest 5)", _format_news(news_items)),
         ],
         footer_hint=f"Sports • {sport.upper()}",
+        status="warning" if (odds_degraded or news_degraded) else "normal",
     )
-    await interaction.response.send_message(embed=emb)
+    await interaction.followup.send(embed=emb)
 
 
 @sports.command(name="nba", description="Upcoming NBA games + latest headlines")
