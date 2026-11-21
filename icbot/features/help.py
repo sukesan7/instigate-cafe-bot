@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import contextlib
 from typing import Any
 
 import discord
 
 from icbot.app import ic
 from icbot.config import Settings
-from icbot.container import resolve_guild_settings
+from icbot.container import extract_guild_id, resolve_guild_settings
 from icbot.embeds import Field
 from icbot.embeds import system as system_embed
 from icbot.permissions import can_manage_guild
 from icbot.registry import is_feature_enabled
+from icbot.ui import DEFAULT_PAGINATOR_TIMEOUT_SECONDS, BasePaginationView, safe_edit_view_message
 
 COMMAND_METADATA: dict[str, dict[str, str]] = {
     # Core & Utility
@@ -641,7 +641,7 @@ def build_getting_started_embed(
     return embed
 
 
-class HelpPaginationView(discord.ui.View):
+class HelpPaginationView(BasePaginationView):
     def __init__(
         self,
         current_page: int,
@@ -649,108 +649,81 @@ class HelpPaginationView(discord.ui.View):
         settings: Settings,
         categories: list[dict[str, Any]] | None = None,
         author_id: int | None = None,
+        guild_id: int = 0,
+        timeout: float = DEFAULT_PAGINATOR_TIMEOUT_SECONDS,
     ):
-        super().__init__(timeout=180)  # 3 minute timeout
-        self.current_page = current_page
-        self.total_pages = total_pages
-        self.settings = settings
         self.categories = categories
         self.author_id = author_id
-        self.message: discord.Message | None = None
-        self._sync_buttons()
+        super().__init__(
+            settings=settings,
+            total_pages=total_pages,
+            current_page=current_page,
+            owner_id=author_id or 0,
+            guild_id=guild_id,
+            shared_guild_navigation=author_id is None,
+            timeout=timeout,
+            expired_message="⏳ This help menu has expired. Run `/ic help` again.",
+            guild_mismatch_message="❌ Command context mismatch.",
+            owner_mismatch_message="ℹ️ Only the person who requested this help menu can navigate it.",
+        )
+        self.prev_button.label = "◀ Previous Page"
+        self.next_button.label = "Next Page ▶"
 
-    def _sync_buttons(self) -> None:
-        self.prev_button.disabled = self.current_page <= 0
-        self.next_button.disabled = self.current_page >= self.total_pages - 1
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if self.author_id is not None and interaction.user and interaction.user.id != self.author_id:
-            await interaction.response.send_message(
-                "ℹ️ Only the person who requested this help menu can navigate it.",
-                ephemeral=True,
-            )
-            return False
-        return True
-
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-        if self.message is not None:
-            with contextlib.suppress(discord.HTTPException):
-                await self.message.edit(view=self)
-
-    async def update_message(self, interaction: discord.Interaction) -> None:
-        self._sync_buttons()
-        embed = build_help_embed(
+    def build_current_embed(self) -> discord.Embed:
+        return build_help_embed(
             self.current_page,
             self.total_pages,
             self.settings,
             categories=self.categories,
         )
-        await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="◀ Previous Page", style=discord.ButtonStyle.secondary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        self.current_page = max(0, self.current_page - 1)
-        await self.update_message(interaction)
-
-    @discord.ui.button(label="Next Page ▶", style=discord.ButtonStyle.primary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        self.current_page = min(self.total_pages - 1, self.current_page + 1)
-        await self.update_message(interaction)
+    async def update_message(self, interaction: discord.Interaction) -> None:
+        self._sync_buttons()
+        embed = self.build_current_embed()
+        await safe_edit_view_message(interaction, embed=embed, view=self)
 
 
-class GettingStartedView(discord.ui.View):
+class GettingStartedView(BasePaginationView):
     def __init__(
         self,
         current_step: int,
         settings: Settings,
         author_id: int | None = None,
+        guild_id: int = 0,
+        timeout: float = DEFAULT_PAGINATOR_TIMEOUT_SECONDS,
     ):
-        super().__init__(timeout=180)  # 3 minute timeout
-        self.current_step = current_step
-        self.total_steps = len(GETTING_STARTED_STEPS)
-        self.settings = settings
         self.author_id = author_id
-        self.message: discord.Message | None = None
-        self._sync_buttons()
+        self.total_steps = len(GETTING_STARTED_STEPS)
+        super().__init__(
+            settings=settings,
+            total_pages=self.total_steps,
+            current_page=current_step,
+            owner_id=author_id or 0,
+            guild_id=guild_id,
+            shared_guild_navigation=author_id is None,
+            timeout=timeout,
+            expired_message="⏳ This onboarding guide has expired. Run `/ic getting-started` again.",
+            guild_mismatch_message="❌ Command context mismatch.",
+            owner_mismatch_message="ℹ️ Only the person who opened this guide can navigate it.",
+        )
+        self.prev_button.label = "◀ Previous Step"
+        self.next_button.label = "Next Step ▶"
 
-    def _sync_buttons(self) -> None:
-        self.prev_button.disabled = self.current_step <= 0
-        self.next_button.disabled = self.current_step >= self.total_steps - 1
+    @property
+    def current_step(self) -> int:
+        return self.current_page
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if self.author_id is not None and interaction.user and interaction.user.id != self.author_id:
-            await interaction.response.send_message(
-                "ℹ️ Only the person who opened this guide can navigate it.",
-                ephemeral=True,
-            )
-            return False
-        return True
+    @current_step.setter
+    def current_step(self, value: int) -> None:
+        self.current_page = value
 
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-        if self.message is not None:
-            with contextlib.suppress(discord.HTTPException):
-                await self.message.edit(view=self)
+    def build_current_embed(self) -> discord.Embed:
+        return build_getting_started_embed(self.current_page, self.settings)
 
     async def update_message(self, interaction: discord.Interaction) -> None:
         self._sync_buttons()
-        embed = build_getting_started_embed(self.current_step, self.settings)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="◀ Previous Step", style=discord.ButtonStyle.secondary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        self.current_step = max(0, self.current_step - 1)
-        await self.update_message(interaction)
-
-    @discord.ui.button(label="Next Step ▶", style=discord.ButtonStyle.primary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        self.current_step = min(self.total_steps - 1, self.current_step + 1)
-        await self.update_message(interaction)
+        embed = self.build_current_embed()
+        await safe_edit_view_message(interaction, embed=embed, view=self)
 
 
 @ic.command(name="help", description="Show the paginated help menu for all IC bot commands.")
@@ -769,6 +742,7 @@ async def ic_help(interaction: discord.Interaction) -> None:
         settings,
         categories=categories,
         author_id=author_id,
+        guild_id=extract_guild_id(interaction) or 0,
     )
 
     await interaction.response.send_message(embed=embed, view=view)
@@ -783,5 +757,10 @@ async def ic_getting_started(interaction: discord.Interaction) -> None:
     current_step = 0
     embed = build_getting_started_embed(current_step, settings)
     author_id = interaction.user.id if interaction.user else None
-    view = GettingStartedView(current_step, settings, author_id=author_id)
+    view = GettingStartedView(
+        current_step,
+        settings,
+        author_id=author_id,
+        guild_id=extract_guild_id(interaction) or 0,
+    )
     await interaction.response.send_message(embed=embed, view=view)

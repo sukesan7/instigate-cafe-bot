@@ -17,6 +17,8 @@ from icbot.app import ic
 from icbot.config import Settings
 from icbot.container import NotesCache, extract_guild_id, get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
+from icbot.registry import guard_feature
+from icbot.ui import DEFAULT_PAGINATOR_TIMEOUT_SECONDS, BasePaginationView, compute_page_slice
 
 # Module-level fallback cache for direct external callers that omit a NotesCache instance.
 _NOTES_CACHE: tuple[float, dict[str, list[tuple[str, str]]]] = (0.0, {})
@@ -148,8 +150,9 @@ def build_notes_page_embed(
     freshness_lines: list[str] | None = None,
 ) -> discord.Embed:
     """Build a single paginated course-notes embed respecting Discord limits."""
-    start = page * _FIELDS_PER_PAGE
-    page_fields = all_fields[start : start + _FIELDS_PER_PAGE]
+    slice_info = compute_page_slice(all_fields, page, _FIELDS_PER_PAGE)
+    page_fields = list(slice_info.items)
+    eff_total_pages = max(1, total_pages or slice_info.total_pages)
     summary_lines = [
         f"Found **{total_matches}** resource link(s) for **{course_display}** ({campus_name}).",
         "*External links only — rights remain with original authors/institutions.*",
@@ -159,7 +162,11 @@ def build_notes_page_embed(
     if degraded_providers:
         summary_lines.append(f"⚠️ Some optional sources were unavailable: {', '.join(degraded_providers)}")
 
-    footer_hint = f"Course Notes • Page {page + 1}/{total_pages}" if total_pages > 1 else "Course Notes"
+    footer_hint = (
+        f"Course Notes • Page {slice_info.page + 1}/{eff_total_pages}"
+        if eff_total_pages > 1
+        else "Course Notes"
+    )
     return system_embed(
         settings,
         title=f"📚 Course Notes — {course_display}",
@@ -169,8 +176,12 @@ def build_notes_page_embed(
     )
 
 
-class NotesPaginationView(discord.ui.View):
-    """Pagination controls when a course search returns more resource groups than fit on one page."""
+class NotesPaginationView(BasePaginationView):
+    """Pagination controls when a course search returns more resource groups than fit on one page.
+
+    Deliberate shared-interaction exception: when `owner_id == 0` and `shared_guild_navigation=True`,
+    any member of the owning `guild_id` may navigate pages because all course links are public.
+    """
 
     def __init__(
         self,
@@ -182,24 +193,33 @@ class NotesPaginationView(discord.ui.View):
         total_matches: int,
         degraded_providers: list[str] | None = None,
         freshness_lines: list[str] | None = None,
+        guild_id: int = 0,
+        owner_id: int = 0,
+        shared_guild_navigation: bool = True,
+        timeout: float = DEFAULT_PAGINATOR_TIMEOUT_SECONDS,
     ) -> None:
-        super().__init__(timeout=180)
-        self.settings = settings
         self.course_display = course_display
         self.campus_name = campus_name
         self.all_fields = all_fields
         self.total_matches = total_matches
         self.degraded_providers = degraded_providers or []
         self.freshness_lines = freshness_lines or []
-        self.current_page = 0
-        self.total_pages = max(1, (len(all_fields) + _FIELDS_PER_PAGE - 1) // _FIELDS_PER_PAGE)
-        self._sync_buttons()
+        slice_info = compute_page_slice(all_fields, 0, _FIELDS_PER_PAGE)
+        super().__init__(
+            settings=settings,
+            total_pages=slice_info.total_pages,
+            current_page=0,
+            owner_id=owner_id,
+            guild_id=guild_id,
+            shared_guild_navigation=shared_guild_navigation,
+            feature_key="academics",
+            timeout=timeout,
+            expired_message="⏳ This course notes view has expired. Run `/ic notes` again.",
+            guild_mismatch_message="❌ Command context mismatch.",
+            owner_mismatch_message="❌ Only the user who ran `/ic notes` can navigate these pages.",
+        )
 
-    def _sync_buttons(self) -> None:
-        self.prev_button.disabled = self.current_page <= 0
-        self.next_button.disabled = self.current_page >= self.total_pages - 1
-
-    def current_embed(self) -> discord.Embed:
+    def build_current_embed(self) -> discord.Embed:
         return build_notes_page_embed(
             self.settings,
             course_display=self.course_display,
@@ -212,22 +232,12 @@ class NotesPaginationView(discord.ui.View):
             freshness_lines=self.freshness_lines,
         )
 
-    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        self.current_page = max(0, self.current_page - 1)
-        self._sync_buttons()
-        await interaction.response.edit_message(embed=self.current_embed(), view=self)
-
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        self.current_page = min(self.total_pages - 1, self.current_page + 1)
-        self._sync_buttons()
-        await interaction.response.edit_message(embed=self.current_embed(), view=self)
-
 
 @ic.command(name="notes", description="Search through available course notes and study resources.")
 @app_commands.describe(course="The course code (e.g. ELE888, CS 135, COMP-2404)")
 async def notes_cmd(interaction: discord.Interaction, course: str):
+    if not await guard_feature(interaction, "academics"):
+        return
     await interaction.response.defer(thinking=True)
 
     normalized_course = normalize_course_key(course)
@@ -307,8 +317,10 @@ async def notes_cmd(interaction: discord.Interaction, course: str):
             total_matches=total_matches,
             degraded_providers=degraded_providers,
             freshness_lines=freshness_lines,
+            guild_id=guild_id,
         )
-        await interaction.followup.send(embed=view.current_embed(), view=view)
+        sent_msg = await interaction.followup.send(embed=view.current_embed(), view=view, wait=True)
+        view.message = sent_msg
         return
 
     embed = build_notes_page_embed(

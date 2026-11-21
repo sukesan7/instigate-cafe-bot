@@ -2,19 +2,26 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterable
+from typing import Any
 
 import discord
 from discord import app_commands
 
 from icbot.app import admin, icse
 from icbot.config import Settings
-from icbot.container import get_container, resolve_guild_settings
+from icbot.container import extract_guild_id, get_container, resolve_guild_settings
 from icbot.embeds import stock as stock_embed
 from icbot.embeds import system as system_embed
 from icbot.errors import safe_error_summary
 from icbot.permissions import is_admin_or_allowed
-from icbot.registry import guard_feature
+from icbot.registry import guard_feature, is_feature_enabled
 from icbot.services.fun_market import FunMarketError, FunMarketStore, format_signed_money
+from icbot.ui import (
+    resolve_live_view_settings,
+    safe_edit_view_message,
+    safe_timeout_disable,
+    send_ephemeral_denial,
+)
 from icbot.utils import parse_signed_int
 
 SIMULATED_MARKET_DISCLAIMER = (
@@ -30,54 +37,95 @@ class AdminMarketConfirmView(discord.ui.View):
         *,
         admin_user_id: int,
         settings: Settings,
+        guild_id: int = 0,
         timeout: float = 60.0,
     ) -> None:
         super().__init__(timeout=timeout)
-        self.admin_user_id = admin_user_id
+        self.admin_user_id = int(admin_user_id)
+        self.guild_id = int(guild_id or 0)
         self.settings = settings
         self.confirmed: bool | None = None
+        self.message: Any | None = None
+        self._timed_out = False
+        self._last_checked_interaction_id: int | None = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self._timed_out:
+            self._last_checked_interaction_id = None
+            await send_ephemeral_denial(
+                interaction,
+                "⏳ This confirmation prompt has expired. Please run the command again.",
+            )
+            return False
+        inter_gid = extract_guild_id(interaction)
+        if self.guild_id and (inter_gid is None or int(inter_gid) != self.guild_id):
+            self._last_checked_interaction_id = None
+            await send_ephemeral_denial(interaction, "❌ Command context mismatch.")
+            return False
         if interaction.user.id != self.admin_user_id:
-            await interaction.response.send_message(
+            self._last_checked_interaction_id = None
+            await send_ephemeral_denial(
+                interaction,
                 "❌ Only the admin who initiated this action can confirm or cancel it.",
-                ephemeral=True,
             )
             return False
-        if not is_admin_or_allowed(interaction, self.settings):
-            await interaction.response.send_message(
+        live_settings = await resolve_live_view_settings(interaction, self.settings)
+        if not is_feature_enabled("market", live_settings):
+            self._last_checked_interaction_id = None
+            await send_ephemeral_denial(
+                interaction,
+                "❌ The **market** module is currently disabled in this server.",
+            )
+            return False
+        if not is_admin_or_allowed(interaction, live_settings):
+            self._last_checked_interaction_id = None
+            await send_ephemeral_denial(
+                interaction,
                 "❌ You don’t have permission to confirm this action.",
-                ephemeral=True,
             )
             return False
+        self._last_checked_interaction_id = id(interaction)
         return True
+
+    async def _ensure_access(self, interaction: discord.Interaction) -> bool:
+        if self._last_checked_interaction_id == id(interaction):
+            self._last_checked_interaction_id = None
+            return True
+        user_id = getattr(getattr(interaction, "user", None), "id", None)
+        if not isinstance(user_id, int) and not self._timed_out:
+            return True
+        return await self.interaction_check(interaction)
 
     @discord.ui.button(label="Confirm Reset", style=discord.ButtonStyle.danger, emoji="⚠️")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._ensure_access(interaction):
+            return
         self.confirmed = True
         self.stop()
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
-        await interaction.response.edit_message(view=self)
+        await safe_edit_view_message(interaction, view=self)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._ensure_access(interaction):
+            return
         self.confirmed = False
         self.stop()
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
-        await interaction.response.edit_message(
+        await safe_edit_view_message(
+            interaction,
             content="❌ Action cancelled. Catalog and stock prices remain unchanged.",
             view=self,
         )
 
     async def on_timeout(self) -> None:
+        self._timed_out = True
         self.confirmed = False
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
+        await safe_timeout_disable(self, self.message)
 
 
 async def _post_optional_announcement(

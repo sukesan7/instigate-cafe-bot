@@ -823,3 +823,56 @@ async def test_delete_user_data_atomic_rollback_on_mid_transaction_crash(tmp_pat
         await db.check_integrity()
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_scrub_uid_token_and_ledger_anonymization_when_uid_collides_with_timestamps_or_digests(
+    tmp_path,
+):
+    """Regression test: short numeric user_ids (e.g. 999) embedded inside timestamps or digests are completely scrubbed."""
+    from icbot.db import Database
+    from icbot.services.user_service import UserStore, _scrub_uid_token
+
+    # 1. Direct _scrub_uid_token test when uid="999" appears both as a colon-delimited token AND inside nanosecond digits
+    raw_tx = "credit:888:999:1795299900:15849998521904"
+    scrubbed = _scrub_uid_token(raw_tx, 999, guild_id=888)
+    assert scrubbed is not None
+    assert "999" not in scrubbed
+
+    # 2. End-to-end ledger anonymization with colliding timestamp digits and reference_id linkage
+    db = Database(str(tmp_path / "uid_collision.db"))
+    await db.init()
+    try:
+        gid = 888
+        uid = 999
+        u_store = UserStore(db, guild_id=gid)
+        await u_store.ensure_user(uid, display_name="CollisionUser")
+
+        tx1 = "credit:888:999:1795299900:15849998521904"
+        tx2 = "buy:888:999:IC:1795299901:999000999111"
+        await db.execute(
+            """
+            INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+            VALUES (?, ?, ?, 500, 1500, 'seed', NULL, 1795299900)
+            """,
+            (tx1, gid, uid),
+        )
+        await db.execute(
+            """
+            INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+            VALUES (?, ?, ?, -200, 1300, 'market_buy', ?, 1795299901)
+            """,
+            (tx2, gid, uid, tx1),
+        )
+
+        await u_store.delete_user_data(uid, anonymize_ledger=True)
+        ledger_after = await u_store.get_ledger(0)
+        assert len(ledger_after) == 2
+        assert all(str(uid) not in e.transaction_id for e in ledger_after)
+        assert all(str(uid) not in (e.reference_id or "") for e in ledger_after)
+
+        # Verify referral linkage between tx2.reference_id and tx1.transaction_id survived scrubbing
+        by_cat = {e.category: e for e in ledger_after}
+        assert by_cat["market_buy"].reference_id == by_cat["seed"].transaction_id
+    finally:
+        await db.close()

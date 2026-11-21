@@ -27,7 +27,16 @@ from icbot.config import Settings
 from icbot.container import extract_guild_id, get_container, resolve_guild_settings
 from icbot.embeds import system
 from icbot.permissions import is_admin_or_allowed
-from icbot.registry import guard_feature
+from icbot.registry import guard_feature, is_feature_enabled
+from icbot.ui import (
+    DEFAULT_PAGINATOR_TIMEOUT_SECONDS,
+    BasePaginationView,
+    compute_page_slice,
+    resolve_live_view_settings,
+    safe_edit_view_message,
+    safe_timeout_disable,
+    send_ephemeral_denial,
+)
 
 # Backwards-compatible alias for external callers referencing ExamItem
 ExamItem = Exam
@@ -191,16 +200,20 @@ def build_exam_schedule_embed(
     exam fields can never be serialized into a public embed.
     """
     safe_exams = [ex for ex in exams if allow_private or ex.visibility != PRIVATE_EXAM_VISIBILITY]
-    start = page * _EXAMS_PER_PAGE
-    shown = safe_exams[start : start + _EXAMS_PER_PAGE]
+    slice_info = compute_page_slice(safe_exams, page, _EXAMS_PER_PAGE)
+    shown = list(slice_info.items)
+    eff_total_pages = max(1, total_pages or slice_info.total_pages)
     fields = [_exam_field(x, tz_name) for x in shown]
     summary = "Configured exams (upcoming first)."
     if filter_summary:
         summary += f" {filter_summary}"
-    if total_pages > 1:
-        summary += f" Showing {start + 1}–{start + len(shown)} of {len(safe_exams)}."
+    if eff_total_pages > 1:
+        summary += (
+            f" Showing {slice_info.start_index + 1}–{slice_info.start_index + len(shown)} "
+            f"of {len(safe_exams)}."
+        )
 
-    footer_hint = f"Exams • Page {page + 1}/{total_pages}" if total_pages > 1 else "Exams"
+    footer_hint = f"Exams • Page {slice_info.page + 1}/{eff_total_pages}" if eff_total_pages > 1 else "Exams"
     return system(
         settings,
         title="Exam Schedule",
@@ -211,7 +224,7 @@ def build_exam_schedule_embed(
     )
 
 
-class ExamPaginationView(discord.ui.View):
+class ExamPaginationView(BasePaginationView):
     """Pagination view for guilds with more exams than fit on a single embed page."""
 
     def __init__(
@@ -224,28 +237,25 @@ class ExamPaginationView(discord.ui.View):
         owner_id: int = 0,
         guild_id: int = 0,
         allow_private: bool = False,
+        timeout: float = DEFAULT_PAGINATOR_TIMEOUT_SECONDS,
     ) -> None:
-        super().__init__(timeout=180)
-        self.settings = settings
         self.allow_private = bool(allow_private)
         self.exams = [ex for ex in exams if self.allow_private or ex.visibility != PRIVATE_EXAM_VISIBILITY]
         self.tz_name = tz_name
         self.filter_summary = filter_summary
-        self.owner_id = int(owner_id)
-        self.guild_id = int(guild_id)
-        self.current_page = 0
-        self.total_pages = max(1, (len(self.exams) + _EXAMS_PER_PAGE - 1) // _EXAMS_PER_PAGE)
-        self.message: Any | None = None
-        self._timed_out = False
-        self._sync_buttons()
-
-    def _sync_buttons(self) -> None:
-        if self._timed_out:
-            self.prev_button.disabled = True
-            self.next_button.disabled = True
-            return
-        self.prev_button.disabled = self.current_page <= 0
-        self.next_button.disabled = self.current_page >= self.total_pages - 1
+        slice_info = compute_page_slice(self.exams, 0, _EXAMS_PER_PAGE)
+        super().__init__(
+            settings=settings,
+            total_pages=slice_info.total_pages,
+            current_page=0,
+            owner_id=owner_id,
+            guild_id=guild_id,
+            feature_key="academics",
+            timeout=timeout,
+            expired_message="Error: this exam schedule view has expired. Run `/ic exam list` again.",
+            guild_mismatch_message="Error: guild context mismatch.",
+            owner_mismatch_message="Error: only the user who requested this exam schedule may change pages.",
+        )
 
     def _check_actor(self, interaction: discord.Interaction) -> str | None:
         if self._timed_out:
@@ -260,14 +270,16 @@ class ExamPaginationView(discord.ui.View):
             return "Error: only the user who requested this exam schedule may change pages."
         return None
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def _check_access_error(self, interaction: discord.Interaction) -> str | None:
         err = self._check_actor(interaction)
         if err is not None:
-            await _send_ephemeral_error(interaction, err)
-            return False
-        return True
+            return err
+        live_settings = await resolve_live_view_settings(interaction, self.settings)
+        if not is_feature_enabled("academics", live_settings):
+            return "Error: the academics module is currently disabled in this server."
+        return None
 
-    def current_embed(self) -> discord.Embed:
+    def build_current_embed(self) -> discord.Embed:
         return build_exam_schedule_embed(
             self.settings,
             self.exams,
@@ -277,40 +289,6 @@ class ExamPaginationView(discord.ui.View):
             filter_summary=self.filter_summary,
             allow_private=self.allow_private,
         )
-
-    async def on_timeout(self) -> None:
-        self._timed_out = True
-        self._sync_buttons()
-        self.stop()
-        if self.message is not None:
-            with contextlib.suppress(
-                discord.HTTPException,
-                discord.NotFound,
-                discord.Forbidden,
-                AttributeError,
-                RuntimeError,
-            ):
-                await self.message.edit(view=self)
-
-    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        err = self._check_actor(interaction)
-        if err is not None:
-            await _send_ephemeral_error(interaction, err)
-            return
-        self.current_page = max(0, self.current_page - 1)
-        self._sync_buttons()
-        await _safe_edit_interaction_message(interaction, embed=self.current_embed(), view=self)
-
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        err = self._check_actor(interaction)
-        if err is not None:
-            await _send_ephemeral_error(interaction, err)
-            return
-        self.current_page = min(self.total_pages - 1, self.current_page + 1)
-        self._sync_buttons()
-        await _safe_edit_interaction_message(interaction, embed=self.current_embed(), view=self)
 
 
 class ExamClearConfirmView(discord.ui.View):
@@ -339,12 +317,17 @@ class ExamClearConfirmView(discord.ui.View):
         self.cancelled = False
         self.message: Any | None = None
         self._timed_out = False
+        self._last_checked_interaction_id: int | None = None
 
     def _disable_all(self) -> None:
         self.confirm_button.disabled = True
         self.cancel_button.disabled = True
 
-    def _check_actor(self, interaction: discord.Interaction) -> str | None:
+    def _check_actor(
+        self,
+        interaction: discord.Interaction,
+        live_settings: Settings | None = None,
+    ) -> str | None:
         if self._timed_out:
             return "Error: this confirmation prompt has expired. Run `/ic exam clear` again."
         user_id = getattr(getattr(interaction, "user", None), "id", None)
@@ -355,39 +338,40 @@ class ExamClearConfirmView(discord.ui.View):
             return guild_err or "Error: guild context mismatch."
         if int(gid) != self.guild_id:
             return "Error: guild context mismatch."
-        if not is_admin_or_allowed(interaction, self.settings):
+        eff_settings = live_settings or self.settings
+        if not is_feature_enabled("academics", eff_settings):
+            return "Error: the academics module is currently disabled in this server."
+        if not is_admin_or_allowed(interaction, eff_settings):
             return "Error: you no longer have permission to modify exams."
         return None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        err = self._check_actor(interaction)
+        live_settings = await resolve_live_view_settings(interaction, self.settings)
+        err = self._check_actor(interaction, live_settings)
         if err is not None:
-            await _send_ephemeral_error(interaction, err)
+            self._last_checked_interaction_id = None
+            await send_ephemeral_denial(interaction, err)
             return False
+        self._last_checked_interaction_id = id(interaction)
         return True
+
+    async def _ensure_access(self, interaction: discord.Interaction) -> bool:
+        if self._last_checked_interaction_id == id(interaction):
+            self._last_checked_interaction_id = None
+            return True
+        return await self.interaction_check(interaction)
 
     async def on_timeout(self) -> None:
         self._timed_out = True
         self._disable_all()
-        self.stop()
-        if self.message is not None:
-            with contextlib.suppress(
-                discord.HTTPException,
-                discord.NotFound,
-                discord.Forbidden,
-                AttributeError,
-                RuntimeError,
-            ):
-                await self.message.edit(view=self)
+        await safe_timeout_disable(self, self.message)
 
     @discord.ui.button(label="Confirm Clear", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        err = self._check_actor(interaction)
-        if err:
-            await _send_ephemeral_error(interaction, err)
+        if not await self._ensure_access(interaction):
             return
         if self.confirmed or self.cancelled:
-            await _send_ephemeral_error(interaction, "This confirmation has already been processed.")
+            await send_ephemeral_denial(interaction, "This confirmation has already been processed.")
             return
 
         store = ExamStore(self.db, clock=get_container(interaction.client).clock)
@@ -402,7 +386,7 @@ class ExamClearConfirmView(discord.ui.View):
         scope_note = f" matching term `{self.term_filter}`" if self.term_filter else ""
         if self.preserve_manual:
             scope_note += " (manual exams preserved)"
-        await _safe_edit_interaction_message(
+        await safe_edit_view_message(
             interaction,
             content=f"Cleared all exams for this server{scope_note} ({deleted} removed).",
             embed=None,
@@ -411,17 +395,15 @@ class ExamClearConfirmView(discord.ui.View):
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        err = self._check_actor(interaction)
-        if err:
-            await _send_ephemeral_error(interaction, err)
+        if not await self._ensure_access(interaction):
             return
         if self.confirmed or self.cancelled:
-            await _send_ephemeral_error(interaction, "This confirmation has already been processed.")
+            await send_ephemeral_denial(interaction, "This confirmation has already been processed.")
             return
         self.cancelled = True
         self._disable_all()
         self.stop()
-        await _safe_edit_interaction_message(
+        await safe_edit_view_message(
             interaction,
             content="Cancelled exam clear. No exams were removed.",
             embed=None,

@@ -14,6 +14,12 @@ from icbot.errors import ConfigValidationError
 from icbot.guild_config import GuildSettingsStore
 from icbot.permissions import can_manage_guild, is_admin_or_allowed
 from icbot.theme import KNOWN_THEME_NAMES
+from icbot.ui import (
+    resolve_live_view_settings,
+    safe_edit_view_message,
+    safe_timeout_disable,
+    send_ephemeral_denial,
+)
 
 
 def _get_store(container: ServiceContainer) -> GuildSettingsStore:
@@ -227,7 +233,7 @@ class ProfileSelect(discord.ui.Select):
         new_settings = await container.resolve_settings_for_guild(view.guild_id)
         view.settings = new_settings
         embed = view.build_preview_embed(interaction.guild, new_settings)
-        await interaction.response.edit_message(embed=embed, view=view)
+        await safe_edit_view_message(interaction, embed=embed, view=view)
 
 
 class GuildSetupView(discord.ui.View):
@@ -244,24 +250,51 @@ class GuildSetupView(discord.ui.View):
         self.admin_user_id = admin_user_id
         self.container = container
         self.settings = settings
+        self.message: Any | None = None
+        self._timed_out = False
+        self._last_checked_interaction_id: int | None = None
         self.profile_select = ProfileSelect(settings.feature_profile)
         self.add_item(self.profile_select)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        gid = getattr(interaction, "guild_id", None) or (interaction.guild.id if interaction.guild else None)
-        if gid != self.guild_id:
-            await interaction.response.send_message("❌ Command context mismatch.", ephemeral=True)
-            return False
-        if not can_manage_guild(interaction, self.settings):
-            await interaction.response.send_message(
-                "❌ You do not have permission to manage this server's configuration.",
-                ephemeral=True,
+        if self._timed_out:
+            self._last_checked_interaction_id = None
+            await send_ephemeral_denial(
+                interaction,
+                "⏳ This setup dashboard has expired. Run `/ic admin setup` again.",
             )
             return False
+        gid = getattr(interaction, "guild_id", None) or (interaction.guild.id if interaction.guild else None)
+        if gid != self.guild_id:
+            self._last_checked_interaction_id = None
+            await send_ephemeral_denial(interaction, "❌ Command context mismatch.")
+            return False
+        live_settings = await resolve_live_view_settings(interaction, self.settings)
+        self.settings = live_settings
+        if not can_manage_guild(interaction, live_settings):
+            self._last_checked_interaction_id = None
+            await send_ephemeral_denial(
+                interaction,
+                "❌ You do not have permission to manage this server's configuration.",
+            )
+            return False
+        self._last_checked_interaction_id = id(interaction)
         return True
+
+    async def _ensure_access(self, interaction: discord.Interaction) -> bool:
+        if self._last_checked_interaction_id == id(interaction):
+            self._last_checked_interaction_id = None
+            return True
+        return await self.interaction_check(interaction)
+
+    async def on_timeout(self) -> None:
+        self._timed_out = True
+        await safe_timeout_disable(self, self.message)
 
     @discord.ui.button(label="Edit Campus & Timezone", style=discord.ButtonStyle.primary, emoji="🏫")
     async def campus_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._ensure_access(interaction):
+            return
         modal = CampusTimezoneModal(
             current_campus=self.settings.rmp_university,
             current_tz=self.settings.exams_tz,
@@ -271,6 +304,8 @@ class GuildSetupView(discord.ui.View):
 
     @discord.ui.button(label="Edit Channels", style=discord.ButtonStyle.primary, emoji="📢")
     async def channels_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._ensure_access(interaction):
+            return
         modal = ChannelsConfigModal(
             current_cmd=self.settings.user_command_channel_id,
             current_jobs=self.settings.job_alerts_channel_id,
@@ -281,12 +316,14 @@ class GuildSetupView(discord.ui.View):
 
     @discord.ui.button(label="Reset Overrides", style=discord.ButtonStyle.danger, emoji="🔄")
     async def reset_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._ensure_access(interaction):
+            return
         store = _get_store(self.container)
         await store.reset_overrides(self.guild_id, actor_id=interaction.user.id)
         new_settings = await self.container.resolve_settings_for_guild(self.guild_id)
         self.settings = new_settings
         embed = self.build_preview_embed(interaction.guild, new_settings)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await safe_edit_view_message(interaction, embed=embed, view=self)
 
     def build_preview_embed(self, guild: Any, settings: Settings) -> discord.Embed:
         proc_settings = getattr(self.container, "settings", None) or settings

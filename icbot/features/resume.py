@@ -4,6 +4,7 @@ import io
 import logging
 import re
 from dataclasses import dataclass
+from typing import Any
 
 import aiohttp
 import discord
@@ -11,11 +12,20 @@ from discord import app_commands
 
 from icbot.app import ic
 from icbot.config import Settings
-from icbot.container import get_container, resolve_guild_settings
+from icbot.container import extract_guild_id, get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 from icbot.errors import safe_error_summary
 from icbot.registry import guard_feature
 from icbot.services.gemini_client import GeminiError, ModelRole
+from icbot.ui import (
+    DEFAULT_PAGINATOR_TIMEOUT_SECONDS,
+    BasePaginationView,
+    compute_page_slice,
+    safe_edit_view_message,
+    safe_timeout_disable,
+    send_ephemeral_denial,
+    verify_component_access,
+)
 
 log = logging.getLogger(__name__)
 
@@ -371,7 +381,7 @@ def build_offline_checklist_embed(
     )
 
 
-class ResumeReviewPaginationView(discord.ui.View):
+class ResumeReviewPaginationView(BasePaginationView):
     """Interactive paginator for oversized resume reviews (> 3500 characters)."""
 
     def __init__(
@@ -381,51 +391,38 @@ class ResumeReviewPaginationView(discord.ui.View):
         pages: list[str],
         discipline_title: str,
         user_id: int,
+        guild_id: int = 0,
+        timeout: float = DEFAULT_PAGINATOR_TIMEOUT_SECONDS,
     ) -> None:
-        super().__init__(timeout=300)
-        self.settings = settings
-        self.pages = pages
+        self.pages = pages or [""]
         self.discipline_title = discipline_title
-        self.user_id = user_id
-        self.current_page = 0
-        self._sync_buttons()
-
-    def _sync_buttons(self) -> None:
-        self.prev_button.disabled = self.current_page <= 0
-        self.next_button.disabled = self.current_page >= len(self.pages) - 1
-
-    def build_current_embed(self) -> discord.Embed:
-        page_content = self.pages[self.current_page]
-        return system_embed(
-            self.settings,
-            title=f"📄 {self.settings.bot_display_name} {self.discipline_title} Resume Review (Page {self.current_page + 1}/{len(self.pages)})",
-            summary=page_content,
-            footer_hint=f"Page {self.current_page + 1} of {len(self.pages)} • Ephemeral Feedback",
+        self.user_id = int(user_id)
+        slice_info = compute_page_slice(self.pages, 0, 1)
+        super().__init__(
+            settings=settings,
+            total_pages=slice_info.total_pages,
+            current_page=0,
+            owner_id=user_id,
+            guild_id=guild_id,
+            feature_key="careers",
+            timeout=timeout,
+            expired_message="⏳ This resume review session has expired. Run `/ic resume` again.",
+            guild_mismatch_message="❌ Command context mismatch.",
+            owner_mismatch_message="❌ This review session belongs to another user.",
         )
 
-    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ This review session belongs to another user.", ephemeral=True
-            )
-            return
-        if self.current_page > 0:
-            self.current_page -= 1
-        self._sync_buttons()
-        await interaction.response.edit_message(embed=self.build_current_embed(), view=self)
-
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ This review session belongs to another user.", ephemeral=True
-            )
-            return
-        if self.current_page < len(self.pages) - 1:
-            self.current_page += 1
-        self._sync_buttons()
-        await interaction.response.edit_message(embed=self.build_current_embed(), view=self)
+    def build_current_embed(self) -> discord.Embed:
+        slice_info = compute_page_slice(self.pages, self.current_page, 1)
+        page_content = slice_info.items[0] if slice_info.items else ""
+        return system_embed(
+            self.settings,
+            title=(
+                f"📄 {self.settings.bot_display_name} {self.discipline_title} Resume Review "
+                f"(Page {slice_info.page + 1}/{slice_info.total_pages})"
+            ),
+            summary=page_content,
+            footer_hint=f"Page {slice_info.page + 1} of {slice_info.total_pages} • Ephemeral Feedback",
+        )
 
 
 class ResumeConfirmView(discord.ui.View):
@@ -443,15 +440,49 @@ class ResumeConfirmView(discord.ui.View):
         discipline_title: str,
         target_role: str,
         settings: Settings,
+        timeout: float = 120.0,
     ) -> None:
-        super().__init__(timeout=120)
+        super().__init__(timeout=timeout)
         self.orig_interaction = interaction
         self.attachment = attachment
         self.discipline_key = discipline_key
         self.discipline_title = discipline_title
         self.target_role = target_role
         self.settings = settings
-        self.user_id = interaction.user.id
+        self.user_id = int(interaction.user.id)
+        self.guild_id = extract_guild_id(interaction) or 0
+        self.message: Any | None = None
+        self._timed_out = False
+        self._last_checked_interaction_id: int | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        err = await verify_component_access(
+            interaction,
+            timed_out=self._timed_out,
+            guild_id=self.guild_id,
+            owner_id=self.user_id,
+            feature_key="careers",
+            fallback_settings=self.settings,
+            expired_message="⏳ This privacy disclosure prompt has expired. Run `/ic resume` again.",
+            guild_mismatch_message="❌ Command context mismatch.",
+            owner_mismatch_message="❌ This review session belongs to another user.",
+        )
+        if err is not None:
+            self._last_checked_interaction_id = None
+            await send_ephemeral_denial(interaction, err)
+            return False
+        self._last_checked_interaction_id = id(interaction)
+        return True
+
+    async def _ensure_access(self, interaction: discord.Interaction) -> bool:
+        if self._last_checked_interaction_id == id(interaction):
+            self._last_checked_interaction_id = None
+            return True
+        return await self.interaction_check(interaction)
+
+    async def on_timeout(self) -> None:
+        self._timed_out = True
+        await safe_timeout_disable(self, self.message)
 
     def build_disclosure_embed(self) -> discord.Embed:
         role_label = f"**Target Role:** `{self.target_role}`\n" if self.target_role else ""
@@ -476,16 +507,15 @@ class ResumeConfirmView(discord.ui.View):
 
     @discord.ui.button(label="Submit for AI Review", style=discord.ButtonStyle.primary, emoji="🚀")
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ This review session belongs to another user.", ephemeral=True
-            )
+        if not await self._ensure_access(interaction):
             return
 
         for child in self.children:
             child.disabled = True  # type: ignore[attr-defined]
+        self.stop()
 
-        await interaction.response.edit_message(
+        await safe_edit_view_message(
+            interaction,
             content="⏳ **Analyzing resume with Gemini...** This may take 15–30 seconds.",
             embed=None,
             view=None,
@@ -500,24 +530,19 @@ class ResumeConfirmView(discord.ui.View):
 
     @discord.ui.button(label="View No-AI Checklist", style=discord.ButtonStyle.secondary, emoji="📋")
     async def checklist_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ This review session belongs to another user.", ephemeral=True
-            )
+        if not await self._ensure_access(interaction):
             return
 
         checklist_emb = build_offline_checklist_embed(self.settings, self.discipline_title, self.target_role)
-        await interaction.response.edit_message(content=None, embed=checklist_emb, view=None)
+        await safe_edit_view_message(interaction, content=None, embed=checklist_emb, view=None)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ This review session belongs to another user.", ephemeral=True
-            )
+        if not await self._ensure_access(interaction):
             return
 
-        await interaction.response.edit_message(
+        await safe_edit_view_message(
+            interaction,
             content="❌ **Resume review cancelled.** Your document was not transmitted to any external provider.",
             embed=None,
             view=None,
@@ -692,17 +717,20 @@ class ResumeReviewer:
                 pages=chunks,
                 discipline_title=disc_title,
                 user_id=interaction.user.id,
+                guild_id=extract_guild_id(interaction) or 0,
             )
             file_data = discord.File(
                 io.BytesIO(review_res.encode("utf-8")),
                 filename=f"{disc_key}_resume_review.md",
             )
-            await interaction.followup.send(
+            sent_msg = await interaction.followup.send(
                 embed=paginator.build_current_embed(),
                 view=paginator,
                 file=file_data,
                 ephemeral=True,
+                wait=True,
             )
+            paginator.message = sent_msg
 
 
 @ic.command(

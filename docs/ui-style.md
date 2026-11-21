@@ -155,3 +155,44 @@ This feature can be enabled by a server administrator.
 Color: 0x64748B
 Footer: TMU Student Hub • System • Feature Governance
 ```
+
+---
+
+## 6. Interaction-Audience Matrix & Component Lifetimes
+
+**Primary Module:** [`icbot/ui.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/ui.py)
+
+All `discord.ui.View` components separate pure page/data calculation (`PageSlice`, `compute_page_slice`) from Discord UI state (`BasePaginationView`) and enforce an explicit interaction-audience matrix:
+
+### 6.1 Component Audience & Timeout Matrix
+
+| View Class | Module | Audience Policy | Default Timeout | Feature Gate Re-verified | Delivery Mode |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `NotesPaginationView` | `icbot/features/notes.py` | **Guild-Shared** (`owner_id=0` default; invoker-only if `owner_id > 0`) | `180s` | `"academics"` | Public |
+| `ExamPaginationView` | `icbot/features/exams.py` | **Invoker-Only** (`owner_id` + `guild_id`) | `180s` | `"academics"` | Public (guild/public rows) or Ephemeral (`allow_private=True`) |
+| `ExamClearConfirmView` | `icbot/features/exams.py` | **Initiating Admin Only** (`owner_id` + `guild_id` + live `is_admin_or_allowed`) | `60s` | `"academics"` | Ephemeral |
+| `JobPaginationView` | `icbot/features/jobs.py` | **Invoker-Only** (`owner_id` + `guild_id`) | `180s` | `"careers"` | Public (may reflect personal `use_my_preferences` filter) |
+| `ResumeReviewPaginationView` | `icbot/features/resume.py` | **Invoker-Only** (`user_id` + `guild_id`) | `180s` | `"careers"` | Ephemeral |
+| `ResumeConfirmView` | `icbot/features/resume.py` | **Invoker-Only** (`user_id` + `guild_id`) | `120s` | `"careers"` | Ephemeral |
+| `HelpPaginationView` | `icbot/features/help.py` | **Invoker-Only** when `author_id` set (Shared when `author_id=None`) | `180s` | `None` (Core) | Public |
+| `GettingStartedView` | `icbot/features/help.py` | **Invoker-Only** when `author_id` set (Shared when `author_id=None`) | `180s` | `None` (Core) | Public |
+| `LeaderboardView` | `icbot/features/lc_leaderboard.py` | **Invoker-Only** (`owner_id` + `guild_id`) | `180s` | `"economy"` | Public |
+| `GuildSetupView` | `icbot/features/admin.py` | **Admin-Only** (`guild_id` + live `can_manage_guild`) | `300s` | `None` (Core) | Ephemeral |
+| `AdminMarketConfirmView` | `icbot/features/invest.py` | **Initiating Admin Only** (`admin_user_id` + `guild_id` + live `is_admin_or_allowed`) | `60s` | `"market"` | Ephemeral |
+| `BlackjackView` / `BlackjackTerminalView` | `icbot/casino/blackjack_views.py` | **Player-Locked** (`(guild_id, user_id)` + `asyncio.Lock`) | `120s` / `60s` | `"casino"` | Public (atomic bankroll forfeit on timeout) |
+
+### 6.2 Deliberate Shared-Interaction Exception List (`SHARED_INTERACTION_EXCEPTIONS`)
+
+Shared navigation on a public message is permitted **only** when every page is 100% public, non-personalized, and safe for any member of the same server:
+
+1. **`NotesPaginationView` (`owner_id == 0`, `shared_guild_navigation=True`)**:
+   - Displays public course resource links from the server's academic catalog and configured open repositories. Any member of the same `guild_id` may flip pages while the `"academics"` feature remains enabled. Cross-guild clicks are rejected.
+2. **`HelpPaginationView` and `GettingStartedView` (only when instantiated with `author_id=None`)**:
+   - Render static public command documentation and onboarding instructions containing zero user-specific data. (When invoked via `/ic help` or `/ic getting-started`, `author_id=interaction.user.id` is passed so the invoking user owns their session without page-flip contention.)
+
+### 6.3 Interaction State & Error-Handling Invariants
+
+1. **Boundary Button Disabling**: `prev_button` is disabled on page `0` (and on empty/1-page datasets); `next_button` is disabled on `total_pages - 1`.
+2. **Mid-Session Feature & Permission Re-verification**: Every component click re-resolves effective guild settings (`resolve_live_view_settings`) to verify that the underlying module (`"academics"`, `"careers"`, `"economy"`, `"market"`) has not been disabled and that required admin permissions (`can_manage_guild`, `is_admin_or_allowed`) have not been revoked after the view was rendered.
+3. **Single Ephemeral Denial & Zero Double Acknowledgments**: Unauthorized, cross-guild, disabled-feature, or post-timeout clicks receive exactly one ephemeral denial via `send_ephemeral_denial`. `BasePaginationView` tracks `_last_checked_interaction_id` so `interaction_check` and button callbacks never double-acknowledge the same interaction.
+4. **Resilience to Deleted Messages & Discord HTTP `403`/`404`/`429`**: `safe_edit_view_message` and `safe_timeout_disable` catch `discord.Forbidden` (`403`), `discord.NotFound` (`404`), `discord.HTTPException` (`429`/5xx), and `RuntimeError` so expired tokens, deleted messages, or rate limits never surface unhandled tracebacks.

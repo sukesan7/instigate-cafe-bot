@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import sqlite3
 import time
 from typing import Any, Literal
@@ -11,7 +10,7 @@ from discord import app_commands
 
 from icbot.app import ic
 from icbot.config import Settings
-from icbot.container import get_container, resolve_guild_settings
+from icbot.container import extract_guild_id, get_container, resolve_guild_settings
 from icbot.embeds import (
     EMBED_KIND_JOBS,
     empty_state_embed,
@@ -28,6 +27,7 @@ from icbot.registry import guard_feature
 from icbot.services.jobs.classification import canonicalize_company_name, canonicalize_title
 from icbot.services.jobs.models import JobFilterCriteria, JobPosting
 from icbot.services.jobs.rules import DISCIPLINE_PRESETS, DeterministicRuleEngine
+from icbot.ui import DEFAULT_PAGINATOR_TIMEOUT_SECONDS, BasePaginationView, compute_page_slice
 
 _rule_engine = DeterministicRuleEngine()
 _JOBS_PER_PAGE = 5
@@ -83,7 +83,7 @@ def _format_https_apply_link(company_label: str, url: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-class JobPaginationView(discord.ui.View):
+class JobPaginationView(BasePaginationView):
     """Interactive pagination view for browsing cached job board postings."""
 
     def __init__(
@@ -98,9 +98,9 @@ class JobPaginationView(discord.ui.View):
         query: str = "",
         location_filter: str = "",
         owner_id: int = 0,
+        guild_id: int = 0,
+        timeout: float = DEFAULT_PAGINATOR_TIMEOUT_SECONDS,
     ) -> None:
-        super().__init__(timeout=180)
-        self.settings = settings
         self.postings = postings
         self.preset_name = preset_name
         self.total_matched = total_matched
@@ -108,32 +108,25 @@ class JobPaginationView(discord.ui.View):
         self.is_degraded = is_degraded
         self.query = query
         self.location_filter = location_filter
-        self.owner_id = int(owner_id)
-        self.current_page = 0
         self.per_page = _JOBS_PER_PAGE
-        self.total_pages = max(1, (len(postings) + self.per_page - 1) // self.per_page)
-        self.message: discord.WebhookMessage | discord.Message | None = None
-        self._sync_buttons()
-
-    def _sync_buttons(self) -> None:
-        self.prev_button.disabled = self.current_page <= 0
-        self.next_button.disabled = self.current_page >= self.total_pages - 1
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        user_id = getattr(getattr(interaction, "user", None), "id", None)
-        if self.owner_id and int(user_id or 0) != self.owner_id:
-            await interaction.response.send_message(
-                "❌ Only the user who ran `/ic jobs` can navigate these pages.",
-                ephemeral=True,
-            )
-            return False
-        return True
+        slice_info = compute_page_slice(postings, 0, self.per_page)
+        super().__init__(
+            settings=settings,
+            total_pages=slice_info.total_pages,
+            current_page=0,
+            owner_id=owner_id,
+            guild_id=guild_id,
+            feature_key="careers",
+            timeout=timeout,
+            expired_message="⏳ This job board view has expired. Run `/ic jobs` again.",
+            guild_mismatch_message="❌ Command context mismatch.",
+            owner_mismatch_message="❌ Only the user who ran `/ic jobs` can navigate these pages.",
+        )
 
     def build_current_embed(self) -> discord.Embed:
         preset_obj = DISCIPLINE_PRESETS.get(self.preset_name, DISCIPLINE_PRESETS["tech_swe"])
-        start_idx = self.current_page * self.per_page
-        end_idx = start_idx + self.per_page
-        page_items = self.postings[start_idx:end_idx]
+        slice_info = compute_page_slice(self.postings, self.current_page, self.per_page)
+        page_items = list(slice_info.items)
 
         filter_badges = [
             f"🎯 **Preset**: `{preset_obj.label}`",
@@ -206,29 +199,6 @@ class JobPaginationView(discord.ui.View):
             )
         )
         return embed
-
-    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await self.interaction_check(interaction):
-            return
-        self.current_page = max(0, self.current_page - 1)
-        self._sync_buttons()
-        await interaction.response.edit_message(embed=self.build_current_embed(), view=self)
-
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if not await self.interaction_check(interaction):
-            return
-        self.current_page = min(self.total_pages - 1, self.current_page + 1)
-        self._sync_buttons()
-        await interaction.response.edit_message(embed=self.build_current_embed(), view=self)
-
-    async def on_timeout(self) -> None:
-        self.prev_button.disabled = True
-        self.next_button.disabled = True
-        if self.message:
-            with contextlib.suppress(discord.DiscordException, AttributeError):
-                await self.message.edit(view=self)
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +428,7 @@ async def jobs_cmd(
         query=query or "",
         location_filter=location or "",
         owner_id=interaction.user.id,
+        guild_id=extract_guild_id(interaction) or 0,
     )
 
     first_embed = view.build_current_embed()

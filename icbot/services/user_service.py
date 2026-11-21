@@ -19,6 +19,9 @@ DEFAULT_EXPORT_BATCH_SIZE: int = 250
 DEFAULT_EXPORT_MAX_ROWS: int = 5000
 
 
+_ALPHA_HEX = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
+
+
 def _scrub_uid_token(raw: str | None, uid: int, *, guild_id: int | None = None) -> str | None:
     """Replace occurrences of ``uid`` in transaction IDs, reference IDs, or notes with irreversible tokens."""
     if raw is None:
@@ -28,10 +31,13 @@ def _scrub_uid_token(raw: str | None, uid: int, *, guild_id: int | None = None) 
     if uid_str not in s:
         return s
     gid_part = f"{int(guild_id)}:" if guild_id is not None else ""
-    digest = hashlib.sha256(f"icbot-anon:{gid_part}{uid_str}".encode()).hexdigest()[:12]
+    digest = hashlib.sha256(f"icbot-anon:{gid_part}{uid_str}".encode()).hexdigest()[:12].translate(_ALPHA_HEX)
     # Replace exact token boundaries (colon-delimited, <@uid>, or word boundary)
     pattern = re.compile(rf"(?<![0-9]){re.escape(uid_str)}(?![0-9])")
-    return pattern.sub(f"anon_{digest}", s)
+    scrubbed = pattern.sub(f"anon_{digest}", s)
+    if uid_str in scrubbed:
+        scrubbed = scrubbed.replace(uid_str, digest)
+    return scrubbed
 
 
 @dataclass(frozen=True)
@@ -901,7 +907,8 @@ class UserStore:
                     if scrubbed_tx == str(orig_tx_id):
                         tx_id_map[str(orig_tx_id)] = scrubbed_tx
                     else:
-                        tx_id_map[str(orig_tx_id)] = f"{scrubbed_tx}:{int(row_id)}"
+                        row_tag = f"{int(row_id):x}".translate(_ALPHA_HEX)
+                        tx_id_map[str(orig_tx_id)] = f"{scrubbed_tx}:{row_tag}"
 
                 for row_id, orig_tx_id, orig_ref in ledger_rows:
                     new_tx_id = tx_id_map[str(orig_tx_id)]
