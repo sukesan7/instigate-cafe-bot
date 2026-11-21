@@ -77,6 +77,11 @@ async def roulette_cmd(
     bet_type: str,
     number: str | None = None,
 ):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "casino"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)

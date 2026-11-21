@@ -165,13 +165,12 @@ uv run python tools/backup_db.py --restore /backups/staging_$(date +%Y%m%d).db -
 
 ---
 
-## 6. Beta Gate Sign-Off & Recommendation
+## 6. Offline Acceptance Sign-Off & Live Staging Boundary
 
-- **Total Scenarios Evaluated:** 27
-- **Total Scenarios Passed:** 27 (100%)
-- **Critical (P0) Open Defects:** 0
-- **High (P1) Open Defects:** 0
-- **Medium (P2) Open Defects:** 0
-- **Low (P3) Open Defects:** 0
-- **Decision:** **GO FOR CONTROLLED BETA (Phase 13B)**
+- **Total Offline Scenarios Evaluated:** 27 (executed via `tools/run_staging_acceptance.py` with mocked Discord interactions and synthetic SQLite databases)
+- **Total Offline Scenarios Passed:** 27 (100% offline simulation)
+- **Critical (P0) Open Offline Defects:** 0
+- **High (P1) Open Offline Defects:** 0
+- **Live Discord Gateway & Real Cohort Staging Status:** **Not Yet Verified (Pending Manual Owner-Run Execution)** — In accordance with `AGENTS.md`, no live Discord Gateway connection or real external API call is executed during automated testing. Section 5.3 must be executed manually by the project owner in an isolated staging guild before public beta certification.
+- **Decision:** **GO FOR OWNER-RUN LIVE STAGING (Phase 13B)**
 

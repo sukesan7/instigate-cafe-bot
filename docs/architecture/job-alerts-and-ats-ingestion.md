@@ -225,7 +225,7 @@ Automated unit tests benchmark the matching engine against ground-truth labels:
 - **Regression Guard**: All legacy tech tests run unmodified under the `tech_swe` preset.
 
 ### 8.5 User Job Preferences & Ephemeral Preview UX
-- **User Job Preferences**: Stored locally in SQLite table `user_job_preferences` (user ID, preset, career levels, disciplines, keywords, excluded words, locations, remote preference). Zero external profiling or third-party telemetry calls.
+- **User Job Preferences (`user_job_preferences`)**: Stored locally in plaintext SQLite table `user_job_preferences` (keyed by Discord `user_id` with intentional portable cross-guild scope on the same bot instance; stores preset, career levels, disciplines, keywords, excluded words, locations, remote preference). Application-level encryption is not performed; encryption at rest depends on the host operator's disk/volume configuration. Zero external profiling or third-party telemetry calls.
 - **`/ic job_preview` Command**: Allows users and server admins to test job filters against recent listings or arbitrary job titles before configuring alerts, providing an ephemeral embed with full trace inspection (`PASS`/`FAIL` per rule) and explanation.
 
 ---

@@ -759,6 +759,11 @@ async def audit_cmd(interaction: discord.Interaction):
     name="llm_stop", description="Stop the LLM from functioning (pauses chatbot and resume tools)."
 )
 async def llm_stop_cmd(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     if not is_admin_or_allowed(interaction, settings):
         await interaction.response.send_message(
@@ -785,6 +790,11 @@ async def llm_stop_cmd(interaction: discord.Interaction):
 
 @admin.command(name="llm_start", description="Re-enable the LLM features.")
 async def llm_start_cmd(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     if not is_admin_or_allowed(interaction, settings):
         await interaction.response.send_message(

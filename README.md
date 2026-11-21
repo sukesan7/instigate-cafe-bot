@@ -24,8 +24,8 @@ A modular, student-focused Discord bot combining academic study tools, tech job 
 - **What it is NOT:**
   - **Not a universal multi-campus bot:** Default study guides and course notes focus on Toronto Metropolitan University (TMU) STEM curricula. Adding new institutions requires implementing a campus adapter (see [Provider Guide](docs/providers.md)).
   - **Not a financial or investment platform:** All stock quotes, trades, and casino bets are purely educational simulations using virtual campus tokens. Real money transactions are neither supported nor possible.
-  - **Not an automated compliance tool:** While engineered for data minimization and Right-to-be-Forgotten deletion, hosting operators remain responsible for their community's privacy policies.
-  - **Not an always-listening microphone:** The bot does not eavesdrop on channel chat. Message content is processed only when explicitly invoked via slash commands or direct `@mentions`.
+  - **Not an automated compliance tool:** While engineered for data minimization and operator-run Right-to-be-Forgotten deletion/anonymization, hosting operators remain responsible for their community's legal privacy policies, host disk encryption, and upstream third-party API agreements.
+  - **Not a persistent chat logger:** The application does not record or store channel chat messages to local disk or SQLite, and **no automatic channel-history collection occurs by default** (`LLM_CHANNEL_HISTORY_ENABLED=false`). Message content is processed only when explicitly invoked via slash commands or, when the operator enables `LLM_ENABLED=true`, via direct `@mentions` (which read surrounding channel context in memory only if the operator also explicitly opts into `LLM_CHANNEL_HISTORY_ENABLED=true`).
 
 ---
 
@@ -84,8 +84,8 @@ All user-facing commands reside under the root group **`/ic`** across 17 modular
 |---|---|---|
 | **Admin (11)** | `/ic admin setup`, `/ic admin config`, `/ic admin features`, `/ic admin roles`, `/ic admin set`, `/ic admin move`, `/ic admin audit`, `/ic admin sync_catalog`, `/ic admin weekroll`, `/ic admin llm_start`, `/ic admin llm_stop` | Server configuration, feature toggles, role management, audit logs, and AI killswitch |
 | **Academics (9)** | `/ic notes`, `/ic prof`, `/ic grades`, `/ic exam add`, `/ic exam remove`, `/ic exam list`, `/ic exam clear`, `/ic exam export`, `/ic exam import` | Course study notes, RateMyProfessors ratings, grade distributions, and shared exam schedules |
-| **Careers (5)** | `/ic jobs`, `/ic job_preferences`, `/ic job_preview`, `/ic job_subscribe`, `/ic resume` | ATS job matching (Greenhouse, Lever, Workday) and memory-only AI resume critique |
-| **Economy & Casino (7)** | `/ic dailyclaim`, `/ic profile`, `/ic leaderboard`, `/ic casino blackjack`, `/ic casino roulette`, `/ic casino slots`, `/ic casino payouts` | Daily allowances, net worth leaderboards, and provably fair math engines |
+| **Careers (5)** | `/ic jobs`, `/ic job_preferences`, `/ic job_preview`, `/ic job_subscribe`, `/ic resume` | ATS job matching (Greenhouse, Lever, Workday) and memory-only AI resume critique (not stored on local bot disk/SQLite; Discord and Gemini API terms apply) |
+| **Economy & Casino (7)** | `/ic dailyclaim`, `/ic profile`, `/ic leaderboard`, `/ic casino blackjack`, `/ic casino roulette`, `/ic casino slots`, `/ic casino payouts` | Daily allowances, net worth leaderboards, and unit-tested PRNG game engines with deterministic payout tables |
 | **Fun-Stock Market ICSE (10)** | `/ic icse market`, `/ic icse stock`, `/ic icse quote`, `/ic icse buy`, `/ic icse sell`, `/ic icse short`, `/ic icse cover`, `/ic icse portfolio`, `/ic icse trades`, `/ic icse history` | Virtual equity exchange with long/short trading and real-time market data |
 | **Info & Diagnostics (6)** | `/ic botinfo`, `/ic serverinfo`, `/ic status`, `/ic help`, `/ic report`, `/ic getting-started` | System diagnostics, component readiness, redaction test, and onboarding guides |
 | **Sports (5)** | `/ic sports nba`, `/ic sports nfl`, `/ic sports mma`, `/ic sports ufc`, `/ic sports boxing` | Upcoming game schedules, betting odds, and sports news headlines |
@@ -192,6 +192,7 @@ Server administrators can configure modules directly inside Discord without touc
 - [Staging Acceptance & Fault-Injection Plan](docs/staging-acceptance-and-fault-injection.md)
 - [Production Hosting & Recovery Runbook](docs/production-hosting-and-recovery.md)
 - [Private Alpha & Public Beta Readiness Gates](docs/alpha-beta-readiness.md)
+- [Release Claims & Verification Evidence Matrix](docs/release-evidence.md)
 - [Portfolio Presentation & Launch Assets](docs/launch-assets.md)
 - [Usability Review & Archetype Audit Report](docs/usability_review.md)
 - [Contributing Guidelines](CONTRIBUTING.md)

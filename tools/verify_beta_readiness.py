@@ -534,7 +534,7 @@ class BetaReadinessVerifier:
         print(f" SUMMARY: {passed_count}/{total} Gates Passed (100% Offline)")
         if failed_count == 0:
             print(
-                " \033[92mALL 8 RELEASE GATES PASSED — v1.0.0-rc1 RELEASE CANDIDATE CERTIFIED (GO FOR BETA)\033[0m"
+                " \033[92mALL 8 OFFLINE SIMULATED RELEASE GATES PASSED — v1.0.0-rc1 READY FOR OWNER-RUN STAGING\033[0m"
             )
         else:
             print(f" \033[91mFAILURE: {failed_count} release gates failed\033[0m")

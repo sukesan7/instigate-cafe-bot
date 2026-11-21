@@ -12,6 +12,7 @@ from icbot.config import Settings
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import sanitize_text
 from icbot.permissions import can_manage_guild
+from icbot.registry import guard_feature
 from icbot.services.jobs.classification import canonicalize_company_name, canonicalize_title
 from icbot.services.jobs.models import JobFilterCriteria, JobPosting
 from icbot.services.jobs.rules import DISCIPLINE_PRESETS, DeterministicRuleEngine
@@ -65,6 +66,7 @@ class JobPaginationView(discord.ui.View):
         is_degraded: bool = False,
         query: str = "",
         location_filter: str = "",
+        owner_id: int = 0,
     ) -> None:
         super().__init__(timeout=180)
         self.settings = settings
@@ -75,6 +77,7 @@ class JobPaginationView(discord.ui.View):
         self.is_degraded = is_degraded
         self.query = query
         self.location_filter = location_filter
+        self.owner_id = int(owner_id)
         self.current_page = 0
         self.per_page = _JOBS_PER_PAGE
         self.total_pages = max(1, (len(postings) + self.per_page - 1) // self.per_page)
@@ -84,6 +87,16 @@ class JobPaginationView(discord.ui.View):
     def _sync_buttons(self) -> None:
         self.prev_button.disabled = self.current_page <= 0
         self.next_button.disabled = self.current_page >= self.total_pages - 1
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        user_id = getattr(getattr(interaction, "user", None), "id", None)
+        if self.owner_id and int(user_id or 0) != self.owner_id:
+            await interaction.response.send_message(
+                "❌ Only the user who ran `/ic jobs` can navigate these pages.",
+                ephemeral=True,
+            )
+            return False
+        return True
 
     def build_current_embed(self) -> discord.Embed:
         preset_obj = DISCIPLINE_PRESETS.get(self.preset_name, DISCIPLINE_PRESETS["tech_swe"])
@@ -138,12 +151,16 @@ class JobPaginationView(discord.ui.View):
 
     @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await self.interaction_check(interaction):
+            return
         self.current_page = max(0, self.current_page - 1)
         self._sync_buttons()
         await interaction.response.edit_message(embed=self.build_current_embed(), view=self)
 
     @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await self.interaction_check(interaction):
+            return
         self.current_page = min(self.total_pages - 1, self.current_page + 1)
         self._sync_buttons()
         await interaction.response.edit_message(embed=self.build_current_embed(), view=self)
@@ -177,6 +194,8 @@ async def jobs_cmd(
     location: str | None = None,
     use_my_preferences: bool = False,
 ):
+    if not await guard_feature(interaction, "careers"):
+        return
     await interaction.response.defer(thinking=True)
 
     bot = interaction.client
@@ -332,6 +351,7 @@ async def jobs_cmd(
         is_degraded=is_degraded,
         query=query or "",
         location_filter=location or "",
+        owner_id=interaction.user.id,
     )
 
     first_embed = view.build_current_embed()
@@ -374,6 +394,8 @@ async def job_subscribe_cmd(
     preset: str = "tech_swe",
     role: discord.Role | None = None,
 ):
+    if not await guard_feature(interaction, "careers"):
+        return
     await interaction.response.defer(ephemeral=True)
 
     bot = interaction.client
@@ -528,6 +550,8 @@ async def job_preferences_cmd(
     remote_only: bool | None = None,
     clear: bool = False,
 ):
+    if not await guard_feature(interaction, "careers"):
+        return
     await interaction.response.defer(ephemeral=True)
 
     bot = interaction.client
@@ -592,10 +616,11 @@ async def job_preferences_cmd(
             f"• **Locations**: `{loc_display}`\n"
             f"• **Keywords**: `{kw_display}`\n"
             f"• **Remote Only**: `{remote_display}`\n\n"
-            f"*These preferences are private to you and apply when using `/ic jobs use_my_preferences:True`.*"
+            "*These preferences are keyed to your Discord user ID (portable across servers on this bot instance) "
+            "and apply when using `/ic jobs use_my_preferences:True`.*"
         ),
     )
-    embed.set_footer(text="Instigate Cafe Bot • Local Encrypted Storage")
+    embed.set_footer(text="Instigate Cafe Bot • Local SQLite Storage (Plaintext on Host Disk)")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -636,6 +661,8 @@ async def job_preview_cmd(
     preset: str = "tech_swe",
     require_early_career: bool = True,
 ):
+    if not await guard_feature(interaction, "careers"):
+        return
     await interaction.response.defer(ephemeral=True)
 
     bot = interaction.client

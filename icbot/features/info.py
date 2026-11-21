@@ -113,9 +113,9 @@ async def botinfo(interaction: discord.Interaction):
         ("Integration Readiness", "\n".join(cap_lines) or "Standard offline features active", False),
         (
             "🔒 Data Privacy & User Rights",
-            "• **Data Minimization:** No personal chat messages are retained long-term.\n"
-            "• **Ephemeral Resumes:** Resumes are processed in memory and never stored on disk or database.\n"
-            "• **Data Deletion:** Contact a server administrator or operator to purge stored virtual economy data.",
+            "• **Data Minimization:** No channel chat history is written to local disk or SQLite; automatic channel-history collection is off by default (`LLM_CHANNEL_HISTORY_ENABLED=false`).\n"
+            "• **Ephemeral Resumes:** Resumes are processed in memory and not stored on disk or SQLite by this bot (Discord CDN and Google Gemini API retention policies apply when AI review is submitted).\n"
+            "• **Data Deletion:** Contact a server administrator or host operator to export or purge stored virtual economy and profile data.",
             False,
         ),
     ]

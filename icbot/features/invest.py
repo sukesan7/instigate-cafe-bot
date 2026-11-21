@@ -123,6 +123,13 @@ def _chunk_lines(lines: Iterable[str], n: int) -> list[str]:
 
 @icse.command(name="market", description="Show the current Instigate Cafe Stock Exchange.")
 async def market(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
     rows = await st.list_stocks(active_only=True)
@@ -161,6 +168,13 @@ async def market(interaction: discord.Interaction):
 @icse.command(name="quote", description="Show a single stock quote.")
 @app_commands.describe(symbol="Example: IC, CAFE, ROBO")
 async def quote(interaction: discord.Interaction, symbol: str):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
     try:
@@ -189,6 +203,13 @@ async def quote(interaction: discord.Interaction, symbol: str):
 @icse.command(name="portfolio", description="Show your market portfolio.")
 @app_commands.describe(user="Optional: view another user's portfolio")
 async def portfolio(interaction: discord.Interaction, user: discord.User | None = None):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
+    if not await guard_feature(interaction, "market"):
+        return
     target = user or interaction.user
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
@@ -232,6 +253,11 @@ async def portfolio(interaction: discord.Interaction, user: discord.User | None 
 @icse.command(name="buy", description="Buy a stock (long).")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def buy(interaction: discord.Interaction, symbol: str, qty: int):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "market"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
@@ -261,6 +287,11 @@ async def buy(interaction: discord.Interaction, symbol: str, qty: int):
 @icse.command(name="sell", description="Sell a long position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def sell(interaction: discord.Interaction, symbol: str, qty: int):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "market"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
@@ -292,6 +323,11 @@ async def sell(interaction: discord.Interaction, symbol: str, qty: int):
 @icse.command(name="short", description="Open/increase a short position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def short(interaction: discord.Interaction, symbol: str, qty: int):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "market"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
@@ -324,6 +360,11 @@ async def short(interaction: discord.Interaction, symbol: str, qty: int):
 @icse.command(name="cover", description="Cover (close) a short position.")
 @app_commands.describe(symbol="Stock symbol", qty="Number of shares")
 async def cover(interaction: discord.Interaction, symbol: str, qty: int):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "market"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
@@ -358,6 +399,13 @@ async def cover(interaction: discord.Interaction, symbol: str, qty: int):
 @icse.command(name="trades", description="Show recent market trades.")
 @app_commands.describe(limit="Max 25", user="Optional: show another user's trades")
 async def trades(interaction: discord.Interaction, limit: int = 10, user: discord.User | None = None):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
+    if not await guard_feature(interaction, "market"):
+        return
     target = user or interaction.user
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
@@ -387,6 +435,13 @@ async def trades(interaction: discord.Interaction, limit: int = 10, user: discor
 @icse.command(name="history", description="Show recent admin price updates for ICSE stocks.")
 @app_commands.describe(limit="Max 25", symbol="Optional symbol filter")
 async def history(interaction: discord.Interaction, limit: int = 10, symbol: str | None = None):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
     try:
@@ -427,6 +482,11 @@ async def history(interaction: discord.Interaction, limit: int = 10, symbol: str
 @admin.command(name="move", description="Admin: move a stock by +/- delta.")
 @app_commands.describe(symbol="Example: IC", change="Examples: +10, -5", reason="Optional reason")
 async def admin_move(interaction: discord.Interaction, symbol: str, change: str, reason: str | None = None):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "market"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
@@ -469,6 +529,11 @@ async def admin_move(interaction: discord.Interaction, symbol: str, change: str,
 @admin.command(name="set", description="Admin: set a stock to an exact price.")
 @app_commands.describe(symbol="Example: IC", value="New price (>=1)", reason="Optional reason")
 async def admin_set(interaction: discord.Interaction, symbol: str, value: int, reason: str | None = None):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "market"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
@@ -506,6 +571,11 @@ async def admin_set(interaction: discord.Interaction, symbol: str, value: int, r
     reset_to_default="Reset guild catalog overrides back to synthetic defaults (requires confirmation)"
 )
 async def sync_catalog_cmd(interaction: discord.Interaction, reset_to_default: bool = False):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "market"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
@@ -549,6 +619,11 @@ async def sync_catalog_cmd(interaction: discord.Interaction, reset_to_default: b
 @admin.command(name="weekroll", description="Admin: reset weekly change baseline to current prices.")
 @app_commands.describe(note="Optional note")
 async def weekroll_cmd(interaction: discord.Interaction, note: str | None = None):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "market"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
@@ -565,6 +640,13 @@ async def weekroll_cmd(interaction: discord.Interaction, note: str | None = None
 
 @icse.command(name="stock", description="Show the current primary stock price and history.")
 async def stock(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
+    if not await guard_feature(interaction, "market"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     st = _store(interaction, settings)
 

@@ -59,11 +59,13 @@ These visual representations demonstrate the four core pillars of the bot runnin
 │                                                                              │
 │  ⚠️ Third-Party AI Privacy Disclosure:                                       │
 │  • Transmission: Submitting forwards your document to Google Gemini API.     │
-│  • Confidentiality: Processing follows Google Cloud / Gemini API terms.      │
-│  • Zero Local Retention: The bot NEVER persists your resume file, personal   │
-│    information, or feedback to any local database or disk.                   │
+│  • Third-Party & Discord Retention: Processing follows the operator's        │
+│    Google Cloud / Gemini API terms; uploaded attachments also transit        │
+│    Discord's platform under Discord's Privacy Policy.                        │
+│  • Zero Local Bot Retention: This bot does not persist your resume file,     │
+│    personal information, or feedback to its local SQLite database or disk.   │
 │  • Ephemeral Delivery: Feedback is delivered ephemerally (visible only to    │
-│    you) and purged from server memory immediately after delivery.            │
+│    you) and purged from bot process memory immediately after delivery.       │
 │                                                                              │
 │  Please select your preferred review method:                                 │
 ├──────────────────────────────────────────────────────────────────────────────┤
@@ -149,14 +151,14 @@ Over the past several weeks, I led a ground-up modernization effort focusing on 
 • Decoupled Architecture: Refactored into clean domain layers (Academics, Careers, Virtual Economy, Transit Alerts) orchestrated by a central ServiceContainer.
 • ACID Economy Transactions: Re-engineered the virtual stock exchange and economy to use SQLite Write-Ahead Logging (WAL) with strict double-entry ledger settlement, eliminating race conditions and double-spending.
 • Resilient Provider Adapters: Wrapped 6 external APIs (RateMyProfessors, Metrolinx GO, TTC Fediverse, ATS job engines, Yahoo Finance, Gemini) with exponential-backoff circuit breakers and outage dampeners for graceful degradation during upstream downtime.
-• Privacy-First Career Review: Implemented zero-disk ephemeral resume reviews with mandatory consent barriers, accompanied by GDPR-compliant Right-to-be-Forgotten data deletion.
+• Privacy-First Career Review: Implemented zero-disk ephemeral resume reviews with mandatory consent barriers, accompanied by operator-executed Right-to-be-Forgotten data export and deletion/anonymization utilities.
 • Multi-Guild Isolation: Built true multi-tenancy allowing distinct university clubs to configure independent command profiles (e.g. engineering study hubs vs. finance trading societies) with zero cross-guild data bleed.
 
 📊 By the Numbers:
-• 646 automated tests passing offline in under 14 seconds (100% test isolation with zero live network calls).
-• Sub-2.5ms average interaction response latency, comfortably within Discord's 3-second interaction token deadline.
-• Zero credentials, tokens, or private data leaks across 233 tracked files, verified by an automated publication scanner.
-• 8/8 release gates certified for v1.0.0-rc1.
+• 646+ automated tests passing offline in under 18 seconds (100% test isolation with zero live network calls).
+• Sub-2.5ms average local handler dispatch latency in offline benchmarks, deferring interactions promptly before Discord's 3-second interaction token deadline.
+• Zero credentials, tokens, or private data leaks across tracked files, verified by an automated publication scanner.
+• 8/8 offline simulated release gates verified for v1.0.0-rc1.
 
 The project is packaged for self-hosting via Python 3.12/uv, Docker Compose, and systemd.
 

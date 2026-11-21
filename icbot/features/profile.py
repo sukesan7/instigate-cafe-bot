@@ -24,6 +24,11 @@ log = logging.getLogger(__name__)
 @ic.command(name="profile", description="View your (or another user's) profile.")
 @app_commands.describe(user="User to view (defaults to you)")
 async def profile_cmd(interaction: discord.Interaction, user: discord.User | None = None):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "economy"):
         return
     await interaction.response.defer(thinking=True)
@@ -122,6 +127,11 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
 
 @ic.command(name="dailyclaim", description="Claim your daily $100 reward.")
 async def daily_cmd(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "economy"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)

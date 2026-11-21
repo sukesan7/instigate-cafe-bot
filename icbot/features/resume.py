@@ -462,9 +462,9 @@ class ResumeConfirmView(discord.ui.View):
             f"{role_label}\n"
             "⚠️ **Third-Party AI Privacy Disclosure**:\n"
             "• **Transmission**: Submitting will forward your document to **Google Gemini** for automated review.\n"
-            "• **Confidentiality**: Processing and data retention depend on the server operator's Google Cloud / Gemini API terms.\n"
-            "• **Zero Local Retention**: The bot does **not** persist your resume file, personal information, or feedback to any database or disk.\n"
-            "• **Ephemeral Privacy**: Feedback is delivered ephemerally and is visible only to you.\n\n"
+            "• **Third-Party & Discord Retention**: Processing and data retention by Google depend on the server operator's Google Cloud / Gemini API terms; uploaded command attachments and ephemeral reply payloads also transit Discord's platform under Discord's Privacy Policy.\n"
+            "• **Zero Local Retention (This Application)**: This application does **not** persist your resume file, personal information, or feedback to its local SQLite database or host disk.\n"
+            "• **Ephemeral Delivery**: Feedback is delivered as an ephemeral Discord message visible only to you.\n\n"
             "Please confirm whether you want to proceed with AI analysis or view the offline checklist instead."
         )
         return system_embed(

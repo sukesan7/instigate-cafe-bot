@@ -66,7 +66,7 @@ THEME_PRESETS: dict[str, ThemePreset] = {
     "campus_generic": ThemePreset(
         name="campus_generic",
         display_name="Campus Assistant",
-        accent_color=0x2563EB,  # Accessible Royal Blue (WCAG AA compliant)
+        accent_color=0x2563EB,  # Royal Blue (within relative luminance range heuristic)
         footer_text="Campus Utility",
         logo_url="",
         stock_exchange_name="Campus Stock Exchange",
@@ -156,11 +156,13 @@ def calculate_luminance(color_int: int) -> float:
 
 
 def is_accessible_accent(color_int: int) -> bool:
-    """Check if an accent color maintains readability across Discord light and dark themes.
+    """Check if an embed sidebar accent color falls within the relative luminance heuristic range.
 
     Discord dark theme background is approximately #2B2D31 (L ~ 0.03).
     Discord light theme background is #FFFFFF (L = 1.0).
-    An accent color is considered legible if its relative luminance is between 0.03 and 0.95.
+    This check enforces a relative luminance heuristic bound (0.03 <= L <= 0.95) so
+    embed sidebar accents avoid near-black or near-white extremes; it is not a
+    measured WCAG AA text contrast ratio certification.
     """
     lum = calculate_luminance(color_int)
     return 0.03 <= lum <= 0.95

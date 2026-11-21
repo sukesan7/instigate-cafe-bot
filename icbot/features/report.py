@@ -7,6 +7,7 @@ import discord
 
 from icbot.app import ic
 from icbot.container import get_container, resolve_guild_settings
+from icbot.registry import guard_feature
 from icbot.tasks.market_daily_report import (
     build_market_report_embed,
     resolve_market_report_tickers,
@@ -23,6 +24,8 @@ def _now_stamp(tz_name: str, *, now_unix: float | None = None) -> str:
 
 @ic.command(name="report", description="Generate the market report right now.")
 async def report_cmd(interaction: discord.Interaction):
+    if not await guard_feature(interaction, "market"):
+        return
     # Always public (not ephemeral) so everyone sees the same data.
     await interaction.response.defer(thinking=True)
 

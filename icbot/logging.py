@@ -74,6 +74,8 @@ class RedactingLogFilter(logging.Filter):
     def _redact_obj(self, obj: Any) -> Any:
         if isinstance(obj, str):
             return redact_secrets(obj, self.secrets)
+        if isinstance(obj, BaseException):
+            return redact_secrets(str(obj), self.secrets)
         if isinstance(obj, dict):
             return {k: self._redact_obj(v) for k, v in obj.items()}
         if isinstance(obj, tuple):
@@ -83,11 +85,17 @@ class RedactingLogFilter(logging.Filter):
         return obj
 
     def filter(self, record: logging.LogRecord) -> bool:
+        record._redaction_secrets = self.secrets
         if isinstance(record.msg, str):
             record.msg = redact_secrets(record.msg, self.secrets)
+        elif isinstance(record.msg, BaseException):
+            record.msg = redact_secrets(str(record.msg), self.secrets)
 
         if record.args:
             record.args = self._redact_obj(record.args)
+
+        if record.exc_text:
+            record.exc_text = redact_secrets(record.exc_text, self.secrets)
 
         # Ensure correlation ID is present on the record
         if not hasattr(record, "correlation_id") or not record.correlation_id:
@@ -117,7 +125,10 @@ class StructuredLogFormatter(logging.Formatter):
 
         tag_str = f"[{' '.join(prefix_parts)}] " if prefix_parts else ""
         original_msg = super().format(record)
-        return f"{tag_str}{original_msg}"
+        secrets = getattr(record, "_redaction_secrets", ())
+        if record.exc_text:
+            record.exc_text = redact_secrets(record.exc_text, secrets)
+        return f"{tag_str}{redact_secrets(original_msg, secrets)}"
 
 
 def log_event(

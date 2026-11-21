@@ -8,7 +8,7 @@ The Instigate Cafe Bot was originally engineered for a specific university commu
 1. **Zero Server-Specific Assumptions in Logic**: Bot business logic, database models, game engines, and task pollers do not assume hardcoded community names, stock symbols, or campus labels.
 2. **Preserve Instigate Cafe as Default**: The default configuration skin remains `instigate_cafe` with signature purple accent (`0xA64DFF`) and community branding, ensuring existing server setups and integrations continue without regression.
 3. **Configuration-Driven Presentation**: Display names, embed colors, currency names, stock exchange titles, and footers are driven by process configuration (`Settings`) and dynamically adapted per guild via SQLite (`guild_settings`).
-4. **Visual Accessibility & WCAG Compliance**: Theme presets enforce relative luminance bounds to guarantee legibility across both Discord Dark (`#2B2D31`) and Light (`#FFFFFF`) themes.
+4. **Visual Accessibility & Relative Luminance Heuristics**: Theme presets compute W3C WCAG 2.1 relative luminance and enforce a bounded luminance heuristic ($0.03 \le L \le 0.95$) so embed sidebar accent bars avoid near-black or near-white extremes across Discord Dark (`#2B2D31`) and Light (`#FFFFFF`) themes. (Note: this is an embed accent luminance range heuristic, not a measured WCAG AA text contrast ratio certification.)
 5. **Defensive Embed Boundaries**: Embed builders strictly enforce Discord's payload limits (title, description, fields, total length) and sanitize untrusted text against mass pings (`@everyone`, `@here`) and mention injections.
 
 ---
@@ -78,11 +78,11 @@ where each sRGB component $C \in \{R, G, B\} / 255$ is linearized:
 
 $$C_{\text{lin}} = \begin{cases} \frac{C}{12.92} & \text{if } C \le 0.04045 \\ \left(\frac{C + 0.055}{1.055}\right)^{2.4} & \text{otherwise} \end{cases}$$
 
-### Contrast Validation Rule
-An accent color is validated by `is_accessible_accent(color_int)`:
-- Extreme black ($L < 0.03$) is invisible against dark theme cards.
-- Pure white ($L > 0.95$) washes out against light theme backgrounds.
-- Configured colors with relative luminance outside $[0.03, 0.95]$ generate non-fatal configuration warnings during validation.
+### Relative Luminance Heuristic Rule
+An embed sidebar accent color is checked by `is_accessible_accent(color_int)`:
+- Extreme black ($L < 0.03$) blends into dark theme cards (`#2B2D31`, $L \approx 0.03$).
+- Near-white ($L > 0.95$) washes out against light theme backgrounds (`#FFFFFF`, $L = 1.0$).
+- Configured colors with relative luminance outside $[0.03, 0.95]$ generate non-fatal configuration warnings during validation. Because Discord renders `embed.color` as a sidebar stripe rather than a text background, this check is a relative luminance heuristic rather than a WCAG 2.1 AA ($4.5:1$ / $3:1$) contrast ratio certification.
 
 ---
 

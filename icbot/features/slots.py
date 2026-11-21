@@ -15,6 +15,11 @@ from icbot.services.casino_service import InvalidWagerError
 @casino.command(name="slots", description="Spin the slot machine!")
 @app_commands.describe(bet="Bet amount (integer)")
 async def slots_cmd(interaction: discord.Interaction, bet: int = 10):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
     if not await guard_feature(interaction, "casino"):
         return
     settings = await resolve_guild_settings(interaction.client, interaction)
@@ -96,6 +101,13 @@ async def slots_cmd(interaction: discord.Interaction, bet: int = 10):
 
 @casino.command(name="payouts", description="Show the slot machine payout table.")
 async def slots_payouts_cmd(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ This command must be used within a server.", ephemeral=True
+        )
+        return
+    if not await guard_feature(interaction, "casino"):
+        return
     settings = await resolve_guild_settings(interaction.client, interaction)
     table = payout_table()
 

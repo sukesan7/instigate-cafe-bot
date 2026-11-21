@@ -11,9 +11,10 @@
 ## 1. Core Principles & Data Minimization
 
 The Instigate Cafe Bot operates on **data minimization** principles:
-- **No Persistent Message Eavesdropping:** The bot does **not** record, log, or persist arbitrary channel messages or private chat history to disk or SQLite. When the `@mention` LLM assistant is explicitly enabled (`LLM_ENABLED=true` and `LLM_CHANNEL_HISTORY_ENABLED=true`), recent surrounding messages (bounded by `LLM_MAX_MESSAGES`) are read into transient memory only for the duration of that single Gemini API request.
+- **No Persistent Message Storage & No Automatic Channel-History Collection by Default:** The bot does **not** record, log, or persist arbitrary channel messages or private chat history to local disk or SQLite. By default (`LLM_CHANNEL_HISTORY_ENABLED=false`), `@mention` invocations process only the mentioning message (and any directly replied-to message). Only if the server operator explicitly enables both `LLM_ENABLED=true` and `LLM_CHANNEL_HISTORY_ENABLED=true` does an `@mention` read recent surrounding channel messages (bounded by `LLM_MAX_MESSAGES`) into transient memory for the duration of that single Google Gemini API request.
 - **No Real-World Identity or Payment Collection:** The bot does not request or store real names (beyond public Discord `display_name`), email addresses, student ID numbers, passwords, phone numbers, or real financial account details.
-- **Local Data Sovereignty:** Self-hosted deployments retain all SQLite database state on the host's own disk volume (`/data`). Upstream maintainers have zero network access to self-hosted databases.
+- **Local Plaintext SQLite & Host Data Sovereignty:** Self-hosted deployments store all persistent state in a local plaintext SQLite 3 database on the host's own disk volume (`DB_PATH`, container default `/data/campus.db`). Application-level encryption is not performed; encryption at rest depends on the host operator's disk/volume configuration. Upstream maintainers have zero network access to self-hosted databases.
+- **Distinction Between Local Application Storage and Platform/Third-Party Retention:** Data marked as *"not stored by this application"* means the bot process never writes it to local disk, SQLite, or application logs. However, slash-command attachments and ephemeral reply payloads transit **Discord's infrastructure** under Discord's Privacy Policy, and opt-in AI requests transmit prompt or document bytes to **Google Gemini API** under the operator's Google Cloud / Google AI Studio data retention terms.
 
 ---
 
@@ -69,9 +70,10 @@ sequenceDiagram
 ```
 
 ### Privacy Safeguards:
-1. **Mandatory Pre-Transmission Consent (`ResumeConfirmView`):** Before reading or forwarding any resume bytes to Google Gemini, the bot presents an ephemeral consent barrier allowing the user to choose **"Submit for AI Review"**, **"View No-AI Checklist"**, or **"Cancel"**.
-2. **Zero Disk Storage:** Uploaded PDF/image attachments are processed entirely in transient RAM buffers. They are never written to disk, SQLite, or container layers.
-3. **Ephemeral Delivery:** Analysis responses are delivered as ephemeral Discord messages visible only to the uploading student.
+1. **Mandatory Pre-Transmission Consent (`ResumeConfirmView`):** Before reading or forwarding any resume bytes to Google Gemini, the bot presents an ephemeral consent barrier allowing the user to choose **"Submit for AI Review"**, **"View No-AI Checklist"**, or **"Cancel"** (unless the user explicitly passes `confirm:True` on `/ic resume`).
+2. **Zero Disk Storage by This Application:** Uploaded PDF/image attachments are processed entirely in transient RAM buffers by the bot process. They are never written to local disk, SQLite, or container filesystem layers.
+3. **Platform & Third-Party Retention Boundary:** Because users upload resume attachments through Discord slash commands and receive ephemeral embeds (or an ephemeral `.md` attachment if the review exceeds 3,900 characters), attachment bytes and responses transit Discord's CDN/API under Discord's retention policy. When AI review is confirmed, document bytes are transmitted over HTTPS to Google Gemini under the operator's Google Cloud / Gemini API terms.
+4. **Ephemeral Delivery:** Analysis responses are delivered as ephemeral Discord messages visible only to the uploading student.
 
 ---
 

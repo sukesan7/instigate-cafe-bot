@@ -47,30 +47,30 @@ Multi-guild compartmentalization is strictly enforced by architecture:
 
 ---
 
-## 3. The 8 Measurable Release Gates
+## 3. The 8 Measurable Release Gates (Offline Simulated Verification vs. Live Staging)
 
-Progression to public beta requires passing all 8 measurable release gates. Each gate has an automated, offline programmatic verification check implemented in [`tools/verify_beta_readiness.py`](file:///home/sukesan/dev/discord/campus-bot/tools/verify_beta_readiness.py).
+Progression to public beta requires passing all 8 measurable release gates. Each gate has an automated, **offline simulated** verification check implemented in [`tools/verify_beta_readiness.py`](file:///home/sukesan/dev/discord/campus-bot/tools/verify_beta_readiness.py) using mocked Discord interactions and synthetic SQLite databases. Passing these offline gates certifies **offline readiness for owner-run staging**, not completed live Discord gateway or human cohort beta certification.
 
-| Gate ID | Release Gate Name | Verification Method | Target Threshold | Evidence / Status |
+| Gate ID | Release Gate Name | Verification Method | Target Threshold | Offline Simulated Evidence / Live Staging Status |
 |---|---|---|---|---|
-| **GATE-1** | **Multi-Discipline Onboarding & Autonomous Setup** | Executes `/ic admin setup` and `/ic exam add` across CS and Business staging cohorts without developer assistance. | 100% autonomous completion, valid response embeds for both cohorts. | **PASS** (`19.2ms`) — Clean setup & exam insertion for `CPS209` and `FIN300`. |
-| **GATE-2** | **Multi-Guild Data & Economy Isolation** | Creates identical user ID (`303`) across Guild Alpha and Beta; grants balance in Alpha; queries both guilds. | Balance in Beta remains baseline ($1000); Alpha reflects grant ($1750); zero exam bleed. | **PASS** (`14.7ms`) — Strict partition confirmed; 0 data bleed. |
-| **GATE-3** | **Security, Clean Secret Scan & Log Redaction** | Runs `tools/scan_secrets.py --enforce-clean` and tests `RedactingLogFilter` on raw bot tokens and API keys. | Exit code 0, 0 tracked secrets, 100% token masking in logs/tracebacks. | **PASS** (`147.4ms`) — Clean scan across 230 tracked files; tokens redacted. |
-| **GATE-4** | **Financial Economy Integrity & ACID Settlement** | Sequences daily claims, casino wagers, payouts, stock trades, and 10 concurrent duplicate daily claims. | Exact ledger reconciliation, 0 balance drift, exactly 0 duplicate claim successes. | **PASS** (`20.2ms`) — Final balance $1200 reconciled; 0 duplicate claims granted. |
-| **GATE-5** | **Bounded Interactive Latency (< 2500ms)** | Dispatches interactive slash commands (`/ic botinfo`, `/ic profile`, `/ic exam list`) and measures response dispatch time. | Latency < 2500ms (Discord 3-second interaction token deadline). | **PASS** (`17.5ms`) — Max latency 2.35ms; deferral token dispatched early. |
-| **GATE-6** | **Predictable Provider Failure & Graceful Degradation** | Simulates complete external API blackout (Gemini / Metrolinx / mastodon offline) during `/ic notes`. | Zero unhandled tracebacks, user-friendly fallback guidance embed returned. | **PASS** (`13.9ms`) — Fallback guidance rendered; 0 unhandled exceptions. |
-| **GATE-7** | **Cost Controls, Quota Budgets & Feature Flags** | Boots guild in `student_core` profile and attempts casino/AI command execution; verifies academic commands. | Casino/AI commands cleanly blocked with explanation; academics active. | **PASS** (`15.1ms`) — `/ic casino` disabled; `/ic notes` functional. |
-| **GATE-8** | **Privacy Feedback & RTBF Data Deletion Compliance** | Verifies consent barrier on resume upload; executes `delete_user_data(anonymize_ledger=True)`. | Explicit consent view present; user purged; immutable audit ledger preserved. | **PASS** (`14.5ms`) — `ResumeConfirmView` verified; profile erased; ledger intact. |
+| **GATE-1** | **Multi-Discipline Onboarding & Autonomous Setup** | Executes `/ic admin setup` and `/ic exam add` across CS and Business staging cohorts without developer assistance. | 100% autonomous completion, valid response embeds for both cohorts. | **OFFLINE PASS** (`19.2ms`, mocked interactions) • **Live Discord Staging:** Pending owner-run staging. |
+| **GATE-2** | **Multi-Guild Data & Economy Isolation** | Creates identical user ID (`303`) across Guild Alpha and Beta; grants balance in Alpha; queries both guilds. | Balance in Beta remains baseline ($1000); Alpha reflects grant ($1750); zero exam bleed. | **OFFLINE PASS** (`14.7ms`, synthetic SQLite) • **Live Multi-Guild Bot:** Pending owner-run staging. |
+| **GATE-3** | **Security, Clean Secret Scan & Log Redaction** | Runs `tools/scan_secrets.py --enforce-clean` and tests `RedactingLogFilter` on raw bot tokens and API keys. | Exit code 0, 0 tracked secrets, 100% token masking in logs/tracebacks. | **OFFLINE PASS** (`147.4ms`) — Clean scan across tracked files; tokens redacted in messages and tracebacks. |
+| **GATE-4** | **Financial Economy Integrity & ACID Settlement** | Sequences daily claims, casino wagers, payouts, stock trades, and 10 concurrent duplicate daily claims. | Exact ledger reconciliation, 0 balance drift, exactly 0 duplicate claim successes. | **OFFLINE PASS** (`20.2ms`) — Final balance $1200 reconciled; 0 duplicate claims granted. |
+| **GATE-5** | **Bounded Interactive Latency (< 2500ms)** | Dispatches interactive slash commands (`/ic botinfo`, `/ic profile`, `/ic exam list`) and measures local handler dispatch time. | Local handler latency < 2500ms (Discord 3-second interaction token deadline). | **OFFLINE PASS** (`17.5ms` local handler; excludes real Discord HTTPS round-trip) • **Live Gateway RTT:** Pending owner-run staging. |
+| **GATE-6** | **Predictable Provider Failure & Graceful Degradation** | Simulates complete external API blackout (Gemini / Metrolinx / Mastodon offline) during `/ic notes`. | Zero unhandled tracebacks, user-friendly fallback guidance embed returned. | **OFFLINE PASS** (`13.9ms`) — Fallback guidance rendered; 0 unhandled exceptions. |
+| **GATE-7** | **Cost Controls, Quota Budgets & Feature Flags** | Boots guild in `student_core` profile and attempts casino/AI command execution; verifies academic commands. | Casino/AI commands cleanly blocked with explanation; academics active. | **OFFLINE PASS** (`15.1ms`) — `/ic casino` disabled; `/ic notes` functional. |
+| **GATE-8** | **Privacy Feedback & RTBF Data Deletion Compliance** | Verifies consent barrier on resume upload; executes `delete_user_data(anonymize_ledger=True)`. | Explicit consent view present; user purged; de-identified audit ledger preserved. | **OFFLINE PASS** (`14.5ms`) — `ResumeConfirmView` verified; profile erased; ledger de-identified. |
 
 ---
 
 ## 4. Privacy-Preserving Feedback & Right-to-be-Forgotten (RTBF)
 
 ### 4.1 Safe Feedback Ingestion
-During the Alpha and Beta phases, user feedback is collected exclusively through privacy-preserving channels:
-- **No Message Content Ingestion:** Discord message text, thread contents, and voice states are **never** logged, collected, or stored.
-- **No Career Document Persistence:** Resumes submitted via `/ic resume` are held strictly in memory during ephemeral review execution and immediately discarded. File attachments are never saved to SQLite, local disk, or external object storage.
-- **Structured Bug Reports:** Feedback submitted through `/ic feedback` or the support channel is limited to structured dropdown categories (e.g. `[Academic, Schedule, Economy, UI]`) and free-form comment text that passes through `RedactingLogFilter` to strip accidental tokens or contact information.
+During the Alpha and Beta phases, user feedback is collected through privacy-preserving boundaries:
+- **No Persistent Message Storage & No Automatic Channel-History Collection by Default:** Discord channel message text, thread contents, and voice states are **never** written to local disk or SQLite. By default (`LLM_CHANNEL_HISTORY_ENABLED=false`), no channel history is read; only when an operator explicitly enables both `LLM_ENABLED=true` and `LLM_CHANNEL_HISTORY_ENABLED=true` does an `@mention` read a bounded window (`LLM_MAX_MESSAGES`) of recent channel messages in memory for that single Gemini API request.
+- **No Local Career Document Persistence:** Resumes submitted via `/ic resume` are held strictly in transient process memory during ephemeral review execution and immediately discarded by the bot. File attachments are never saved to SQLite or local disk (note that uploaded command attachments transit Discord's CDN under Discord's Privacy Policy, and confirmed AI reviews transit Google Gemini under the operator's Google API terms).
+- **Sanitized Diagnostic Reports:** Diagnostic issue reports generated via `/ic status issue_report:True` pass through `redact_secrets` and `RedactingLogFilter` to strip tokens, authorization headers, and secret keys.
 
 ### 4.2 Right-to-be-Forgotten (Data Portability & Erasure Contract)
 Students and operators have programmatic data portability and erasure controls via [`UserStore`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/user_service.py):
@@ -163,7 +163,7 @@ In the event that an unforeseen critical defect is detected during Alpha/Beta ru
 
 ## 8. Conclusion & Recommendation
 
-All **8 Measurable Release Gates** have achieved verified **PASS** status under automated offline verification. The codebase satisfies all requirements of `AGENTS.md` and Phase 13 specifications.
+All **8 Measurable Release Gates** have achieved verified **OFFLINE PASS** status under automated offline simulation (`tools/verify_beta_readiness.py` and `pytest`). Live Discord gateway connections, real multi-guild slash-command synchronization, and human student cohort trials have **not** been executed automatically in compliance with `AGENTS.md`.
 
-**Final Release Recommendation:** **GO FOR CONTROLLED PRIVATE ALPHA & PUBLIC BETA (`v1.0.0-rc1`)**.
+**Final Release Recommendation:** **GO FOR OWNER-RUN LIVE STAGING & CONTROLLED PRIVATE ALPHA (`v1.0.0-rc1`)** *(see [`docs/release-evidence.md`](file:///home/sukesan/dev/discord/campus-bot/docs/release-evidence.md) for the complete mapping of offline-verified vs. owner-run staging claims)*.
 
