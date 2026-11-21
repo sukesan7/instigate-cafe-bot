@@ -1,7 +1,7 @@
 """Manual live diagnostic for Yahoo Finance cookie/crumb quote fetching.
 
 Not collected by pytest. Run manually when verifying live Yahoo Finance responses:
-    python3 scripts/manual/test_yf.py
+    python3 scripts/manual/probe_yf.py
 """
 
 from __future__ import annotations

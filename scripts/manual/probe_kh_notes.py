@@ -1,7 +1,7 @@
 """Manual live diagnostic for checking HTML/Notion links on notes.krishadmin.com.
 
 Not collected by pytest. Run manually when validating live site markup:
-    python3 scripts/manual/test_kh_notes.py
+    python3 scripts/manual/probe_kh_notes.py
 """
 
 from __future__ import annotations

@@ -44,7 +44,7 @@ Developer commands in [`Makefile`](../Makefile) enforce explicit offline overrid
 | **Tier 1: Static Only** | `uv run ruff check .`<br>`uv run ruff format --check .`<br>`uv run mypy .`<br>`uv run python tools/check_syntax.py`<br>`uv run python tools/check_docs.py` | Zero runtime execution, zero network calls, zero database mutations. |
 | **Tier 2: Offline Runtime** | `uv run pytest`<br>`uv run python tools/smoke_offline.py`<br>`uv run python tools/smoke_staging.py`<br>`uv run python tools/scan_secrets.py --enforce-clean` | Synthetic temp SQLite databases, fake Discord interactions, mocked HTTP routers, and hard-blocked outbound IPv4/IPv6 sockets. |
 | **Tier 3: Package Metadata Only** | `uv lock --check`<br>`uv run pip-audit --desc auto` | Contacts PyPI / OSV advisory metadata only. Never contacts Discord, Railway, or bot API providers. |
-| **Tier 4: Live / Restricted** | `uv run python main.py --allow-gateway`<br>`tools/purge_global_commands.py`<br>`git push` to deploy branches | Never executed in CI, pre-commit, or automated tests. Requires explicit human operator action. |
+| **Tier 4: Live / Restricted** | `uv run python main.py --allow-gateway`<br>`uv run python scripts/admin/purge_global_commands.py --execute ...`<br>`git push` to deploy branches | Never executed in CI, pre-commit, or automated tests. Requires explicit human operator action (`purge_global_commands.py` defaults to `--dry-run`). |
 
 ---
 
@@ -84,6 +84,17 @@ uv run pytest
 - **Schema migrations:** Test every schema change against synthetic temporary SQLite databases with a backward-compatible upgrade path and verified backup/restore (`tools/backup_db.py`); never silently migrate live databases.
 - **Economy & ledger atomicity:** Changes touching virtual balances, casino games, or ICSE trades must assert `BEGIN IMMEDIATE` atomicity and no duplicate settlement under concurrency.
 - **Dynamic registration checks:** Before removing an apparently unused module, verify dynamic `/ic` command registration in [`icbot/registry.py`](../icbot/registry.py), task specs in [`icbot/scheduler.py`](../icbot/scheduler.py), and CLI scripts under `tools/`.
+
+### 4.2 Tooling & Script Responsibilities (`tools/` vs. `scripts/`)
+Each offline script serves a distinct purpose and is intentionally kept separate:
+- `tools/smoke_offline.py` — Static AST parse across all Python files + zero-token, zero-network import & 53-command registration check (fast CI gate).
+- `tools/smoke_staging.py` — Offline lifecycle check exercising SQLite Schema v7 WAL migrations, `ServiceContainer`, `TaskSupervisor`, and clean shutdown (also used inside offline Docker `--network none` verification).
+- `tools/run_staging_acceptance.py` & `tools/verify_beta_readiness.py` — Synthetic fault-injection (27 scenarios) and 8-gate offline release-readiness harnesses imported by integration tests.
+- `tools/run_usability_audit.py` — 4-archetype synthetic UX benchmark imported by unit tests.
+- `tools/benchmark_db.py` & `tools/benchmark_profile.py` — Offline SQLite micro-benchmark and full-workload latency/memory profiler (`--json-out` writes to git-ignored `artifacts/`).
+- `tools/backup_db.py`, `tools/scan_secrets.py`, `tools/check_docs.py`, `tools/check_command_docs.py`, `tools/check_syntax.py` — Operator backup/restore, secret hygiene, doc/command drift, and syntax utilities.
+- `scripts/manual/probe_*.py` — Opt-in live network diagnostic probes (never collected by pytest; see [`scripts/manual/README.md`](../scripts/manual/README.md)).
+- `scripts/admin/purge_global_commands.py` — Destructive Discord slash-command purge utility (defaults to `--dry-run`; see [`scripts/admin/README.md`](../scripts/admin/README.md)).
 
 ---
 

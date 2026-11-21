@@ -15,6 +15,7 @@
 *.sqlite
 *.sqlite3
 *.db.bak
+*.db.bak.*
 ic_stock.db
 tmu_grades.db
 ic_stock-dev.db
@@ -28,8 +29,11 @@ lore.tmu_files.json
 lore.json
 
 # ==============================================================================
-# Local Reports, Scrapes, and Scratch Files
+# Local Reports, Benchmarks, Scrapes, and Scratch Files
 # ==============================================================================
+artifacts/
+benchmark_results*.json
+status_issue_report*.md
 distribution.png
 tmu_raw.html
 scratch/

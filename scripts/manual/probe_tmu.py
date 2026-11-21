@@ -2,7 +2,7 @@
 
 Not collected by pytest. Run manually inside an activated environment when
 debugging live tmu.grades.zone parsing:
-    python3 scripts/manual/test_tmu.py
+    python3 scripts/manual/probe_tmu.py
 """
 
 from __future__ import annotations

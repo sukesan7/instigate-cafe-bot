@@ -1,7 +1,7 @@
 """Manual live diagnostic for checking Vite SPA JS bundle links on jsprcrz.github.io/Notes/.
 
 Not collected by pytest. Run manually when validating live site markup:
-    python3 scripts/manual/test_notes.py
+    python3 scripts/manual/probe_notes.py
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Manual live diagnostic for RateMyProfessors GraphQL API connectivity.
 
 Not collected by pytest. Run manually when verifying live GraphQL responses:
-    python3 scripts/manual/test_rmp.py
+    python3 scripts/manual/probe_rmp.py
 """
 
 from __future__ import annotations

@@ -94,7 +94,7 @@ uv run python tools/run_staging_acceptance.py
 uv run python tools/verify_beta_readiness.py
 ```
 
-Manual live probes reside in [`scripts/manual/`](../scripts/manual/README.md), excluded from pytest discovery and guarded behind `if __name__ == "__main__":`.
+Manual opt-in live network probes (`probe_*.py`) reside in [`scripts/manual/`](../scripts/manual/README.md), excluded from pytest discovery and guarded behind `if __name__ == "__main__":`. Destructive administrative maintenance utilities live in [`scripts/admin/`](../scripts/admin/README.md) and default to `--dry-run`.
 
 ---
 

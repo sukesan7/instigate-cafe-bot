@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Renamed manual live network probes from `scripts/manual/test_*.py` to `scripts/manual/probe_*.py` to prevent accidental pytest collection, moved and hardened `tools/purge_global_commands.py` into `scripts/admin/purge_global_commands.py` (explicit `--dry-run` default, `--token-env` opt-in, target echo, `--confirm` protection, and token redaction), and expanded `.gitignore` for generated benchmark/diagnostic artifacts.
 - Removed internal agent workflow scaffolding (`AGENTS.md` and prompt-pack references in templates/docs) and consolidated durable contributor safety, migration, and deployment rules into [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md), [`docs/development.md`](docs/development.md), and [`docs/deployment.md`](docs/deployment.md).
 - Rebuilt [`README.md`](README.md) as a concise, restrained landing page for first-time GitHub visitors (featuring `assets/ic_logo.png`, compact real badges, 6-domain feature overview, representative verified slash commands, self-hosted vs. hosted clarity, TMU/campus scope notes, fresh-checkout Quick Start, and a reserved Screenshots section).
 - Added [`docs/screenshots-guide.md`](docs/screenshots-guide.md) defining the manual owner-run capture and PII/token redaction procedure prior to populating gallery screenshots.
