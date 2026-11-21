@@ -1,16 +1,28 @@
 from __future__ import annotations
 
 import contextlib
+import sqlite3
 import time
 from typing import Any, Literal
 
+import aiosqlite
 import discord
 from discord import app_commands
 
 from icbot.app import ic
 from icbot.config import Settings
 from icbot.container import get_container, resolve_guild_settings
-from icbot.embeds import sanitize_text
+from icbot.embeds import (
+    EMBED_KIND_JOBS,
+    empty_state_embed,
+    format_footer,
+    paginated_embed,
+    resolve_embed_color,
+    safe_http_url,
+    sanitize_text,
+    sanitize_untrusted_text,
+    system,
+)
 from icbot.permissions import can_manage_guild
 from icbot.registry import guard_feature
 from icbot.services.jobs.classification import canonicalize_company_name, canonicalize_title
@@ -45,6 +57,25 @@ def _format_age(ts: int | None, *, now: int | None = None) -> str:
     if delta < 86400:
         return f"{delta // 3600}h ago"
     return f"{delta // 86400}d ago"
+
+
+def _safe_https_job_url(url: str | None) -> str | None:
+    """Validate that an external ATS job posting URL strictly uses HTTPS."""
+    safe = safe_http_url(url)
+    if not safe or not safe.lower().startswith("https://"):
+        return None
+    return safe
+
+
+def _format_https_apply_link(company_label: str, url: str | None) -> str:
+    """Render a safe HTTPS Markdown apply link or meaningful fallback text without broken Markdown."""
+    valid_https = _safe_https_job_url(url)
+    if not valid_https:
+        return "Link unavailable"
+    clean_company = (
+        (sanitize_untrusted_text(company_label, 40) or "Employer").replace("[", "\\[").replace("]", "\\]")
+    )
+    return f"[Apply on {clean_company}]({valid_https})"
 
 
 # ---------------------------------------------------------------------------
@@ -104,17 +135,16 @@ class JobPaginationView(discord.ui.View):
         end_idx = start_idx + self.per_page
         page_items = self.postings[start_idx:end_idx]
 
-        color = 0x3498DB if not self.is_degraded else 0xF39C12
-        embed = discord.Embed(
-            title=f"💼 Campus Job Board • Page {self.current_page + 1}/{self.total_pages}",
-            color=color,
-        )
-
-        filter_badges = [f"🎯 **Preset**: `{preset_obj.label}`", f"📊 **Matches**: `{self.total_matched}`"]
+        filter_badges = [
+            f"🎯 **Preset**: `{preset_obj.label}`",
+            f"📊 **Matches**: `{self.total_matched}`",
+        ]
         if self.query:
-            filter_badges.append(f"🔍 **Query**: `{self.query}`")
+            filter_badges.append(f"🔍 **Query**: `{sanitize_untrusted_text(self.query, 60)}`")
         if self.location_filter:
-            filter_badges.append(f"📍 **Location**: `{self.location_filter}`")
+            filter_badges.append(f"📍 **Location**: `{sanitize_untrusted_text(self.location_filter, 60)}`")
+        if self.last_updated_str:
+            filter_badges.append(f"🕒 **Cached**: `{sanitize_untrusted_text(self.last_updated_str, 40)}`")
 
         header_lines = [" • ".join(filter_badges)]
         if self.is_degraded:
@@ -123,30 +153,58 @@ class JobPaginationView(discord.ui.View):
             )
         else:
             header_lines.append(
-                "ℹ️ *Displaying verified listings from Greenhouse, Lever, and Workday portals.*"
+                "ℹ️ *Displaying cached postings ingested from configured Greenhouse, Lever, and Workday feeds.*"
             )
 
-        embed.description = "\n\n".join(header_lines)
-
+        fields: list[tuple[str, str, bool]] = []
         for j in page_items:
-            clean_title = sanitize_text(j.title, 80) or "Job Role"
-            clean_company = sanitize_text(j.employer, 40) or "Employer"
-            clean_loc = sanitize_text(j.location, 50) or "Location Not Listed"
-            lvl = j.career_level.replace("_", " ").title() if j.career_level != "unknown" else "Early Career"
-            src_label = j.provider.capitalize()
+            clean_title = sanitize_untrusted_text(j.title, 80) or "Job Role"
+            clean_company = sanitize_untrusted_text(j.employer, 40) or "Employer"
+            clean_loc = sanitize_untrusted_text(j.location, 50) or "Location Not Listed"
+            lvl = (
+                sanitize_untrusted_text(j.career_level.replace("_", " ").title(), 40)
+                if j.career_level and j.career_level != "unknown"
+                else "Early Career"
+            )
+            src_raw = j.provider or j.source_key or "ATS"
+            src_clean = src_raw.split(":", 1)[0].capitalize() if ":" in src_raw else src_raw.capitalize()
+            src_label = sanitize_untrusted_text(src_clean, 40) or "ATS"
 
-            posted_part = f"<t:{j.posted_unix}:R>" if j.posted_unix and j.posted_unix > 0 else "Recently"
-            apply_link = f"[Apply on {clean_company}]({j.url})" if j.url else "No link available"
+            if j.posted_unix and int(j.posted_unix) > 0:
+                posted_part = f"<t:{int(j.posted_unix)}:R>"
+            else:
+                posted_part = "Date not listed"
+            apply_link = _format_https_apply_link(j.employer, j.url)
 
             field_title = f"{clean_title} — {clean_company}"
             field_val = (
                 f"📍 `{clean_loc}` • 🎓 `{lvl}` • 📡 `{src_label}`\n"
                 f"📅 Posted: {posted_part} • 🔗 {apply_link}"
             )
-            embed.add_field(name=field_title, value=field_val, inline=False)
+            fields.append((field_title, field_val, False))
 
-        footer_parts = [self.settings.embed_footer_text, f"Cached data: {self.last_updated_str}"]
-        embed.set_footer(text=" • ".join(p for p in footer_parts if p))
+        embed = paginated_embed(
+            self.settings,
+            title=f"💼 Campus Job Board • Page {self.current_page + 1}/{self.total_pages}",
+            description="\n\n".join(header_lines),
+            fields=fields,
+            page=self.current_page,
+            total_pages=self.total_pages,
+            kind=EMBED_KIND_JOBS,
+            status="warning" if self.is_degraded else "normal",
+            color=resolve_embed_color(
+                self.settings,
+                status="warning" if self.is_degraded else "normal",
+            ),
+        )
+        embed.set_footer(
+            text=format_footer(
+                self.settings,
+                "Jobs",
+                page=self.current_page + 1,
+                total_pages=self.total_pages,
+            )
+        )
         return embed
 
     @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
@@ -208,8 +266,29 @@ async def jobs_cmd(
     settings = await resolve_guild_settings(bot, interaction)
     container = get_container(bot)
     now_unix = int(container.clock())
+    is_degraded = bool(container.jobs_bad_sources or container.workday_bad_sources)
 
-    cols = await _table_columns(db, "job_seen")
+    try:
+        cols = await _table_columns(db, "job_seen")
+    except (sqlite3.Error, aiosqlite.Error, RuntimeError, ValueError, TypeError, AttributeError):
+        cols = []
+
+    if not cols:
+        empty_embed = empty_state_embed(
+            settings,
+            title="💼 Campus Job Board • No Cached Listings",
+            message=(
+                "⚠️ ATS provider feeds are currently rate-limited or unreachable and no cached postings are stored yet."
+                if is_degraded
+                else "No job postings have been cached in `job_seen` yet."
+            ),
+            suggestion="Wait for the next background ingestion cycle or verify ATS provider configuration.",
+            category="Jobs",
+            status="warning" if is_degraded else "normal",
+        )
+        empty_embed.set_footer(text=format_footer(settings, "Jobs"))
+        await interaction.followup.send(embed=empty_embed)
+        return
 
     col_title = _pick_first(cols, ["title", "job_title"])
     col_company = _pick_first(cols, ["company", "org", "employer", "source_label"])
@@ -242,7 +321,20 @@ async def jobs_cmd(
     """
     rows = await db.fetchall(q, (int(scan_n),))
     if not rows:
-        await interaction.followup.send("No jobs found in `job_seen` yet.")
+        empty_embed = empty_state_embed(
+            settings,
+            title="💼 Campus Job Board • No Cached Listings",
+            message=(
+                "⚠️ ATS provider feeds are cooling down or unreachable, and no cached postings are available in `job_seen` yet."
+                if is_degraded
+                else "No jobs found in `job_seen` yet."
+            ),
+            suggestion="Check back after the background poller completes an ingestion cycle.",
+            category="Jobs",
+            status="warning" if is_degraded else "normal",
+        )
+        empty_embed.set_footer(text=format_footer(settings, "Jobs"))
+        await interaction.followup.send(embed=empty_embed)
         return
 
     # User preferences resolution
@@ -331,16 +423,30 @@ async def jobs_cmd(
 
     preset_obj = DISCIPLINE_PRESETS.get(chosen_preset, DISCIPLINE_PRESETS["tech_swe"])
     if not matched_postings:
-        msg = (
-            f"No roles matched the current '{preset_obj.label}' filters in the most recent scan.\n"
-            "Try a different preset (e.g. `/ic jobs preset:all`), widen your location filter, or verify allowlists."
+        degraded_note = (
+            "\n⚠️ *Note: One or more ATS provider feeds are currently rate-limited or unreachable.*"
+            if is_degraded
+            else ""
         )
-        await interaction.followup.send(msg)
+        no_match_embed = empty_state_embed(
+            settings,
+            title="💼 Campus Job Board • No Matching Roles",
+            message=(
+                f"No cached roles matched the **{preset_obj.label}** filters in the most recent scan.{degraded_note}"
+            ),
+            suggestion=(
+                "Try a different preset (e.g. `/ic jobs preset:all`), widen your location filter, "
+                "or verify your saved `/ic job_preferences`."
+            ),
+            category="Jobs",
+            status="warning" if is_degraded else "normal",
+        )
+        no_match_embed.set_footer(text=format_footer(settings, "Jobs"))
+        await interaction.followup.send(embed=no_match_embed)
         return
 
-    # Check whether ATS sources are currently in cooldown/degraded
-    is_degraded = bool(container.jobs_bad_sources or container.workday_bad_sources)
-    last_updated_str = _format_age(latest_seen_ts, now=now_unix) if latest_seen_ts else "Recently"
+    # Only include a cache age badge when a valid timestamp was recorded (never invent 'Recently')
+    last_updated_str = _format_age(latest_seen_ts, now=now_unix) if latest_seen_ts > 0 else ""
 
     view = JobPaginationView(
         settings=settings,
@@ -448,25 +554,39 @@ async def job_subscribe_cmd(
             )
             return
 
-        embed = discord.Embed(
-            title="📋 Active Job Alert Subscriptions",
-            color=0x3498DB,
-            description=f"Server ID: `{guild_id}` • Subscribed Channels: `{len(subs)}`",
-        )
+        sub_fields: list[tuple[str, str, bool]] = []
         for s in subs:
-            p_obj = DISCIPLINE_PRESETS.get(s["preset"], DISCIPLINE_PRESETS["tech_swe"])
-            role_fmt = f"<@&{s['role_id']}>" if s.get("role_id") else "None"
+            p_key = str(s.get("preset") or "tech_swe")
+            p_obj = DISCIPLINE_PRESETS.get(p_key, DISCIPLINE_PRESETS["tech_swe"])
+            clean_preset_key = sanitize_untrusted_text(p_key, 40) or "tech_swe"
+            role_id_val = s.get("role_id")
+            role_fmt = f"<@&{int(role_id_val)}>" if role_id_val else "None"
             status_fmt = "✅ Enabled" if s.get("enabled", True) else "⏸️ Disabled"
-            embed.add_field(
-                name=f"Channel: #{getattr(bot.get_channel(s['channel_id']), 'name', s['channel_id'])}",
-                value=(
-                    f"• **Channel**: <#{s['channel_id']}>\n"
-                    f"• **Preset**: `{p_obj.label}` (`{s['preset']}`)\n"
-                    f"• **Alert Role**: {role_fmt}\n"
-                    f"• **Status**: {status_fmt}"
-                ),
-                inline=False,
+            ch_id = int(s["channel_id"])
+            ch_obj = bot.get_channel(ch_id) if hasattr(bot, "get_channel") else None
+            raw_ch_name = getattr(ch_obj, "name", None)
+            clean_ch_name = sanitize_untrusted_text(str(raw_ch_name), 60) if raw_ch_name else str(ch_id)
+            sub_fields.append(
+                (
+                    f"Channel: #{clean_ch_name}",
+                    (
+                        f"• **Channel**: <#{ch_id}>\n"
+                        f"• **Preset**: `{p_obj.label}` (`{clean_preset_key}`)\n"
+                        f"• **Alert Role**: {role_fmt}\n"
+                        f"• **Status**: {status_fmt}"
+                    ),
+                    False,
+                )
             )
+        embed = system(
+            settings,
+            title="📋 Active Job Alert Subscriptions",
+            summary=f"Server ID: `{guild_id}` • Subscribed Channels: `{len(subs)}`",
+            fields=sub_fields,
+            footer_hint="Jobs • Subscriptions",
+            status="normal",
+        )
+        embed.set_footer(text=format_footer(settings, "Jobs", "Subscriptions"))
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
 
@@ -560,6 +680,7 @@ async def job_preferences_cmd(
         await interaction.followup.send("❌ Database unavailable.", ephemeral=True)
         return
 
+    settings = await resolve_guild_settings(bot, interaction)
     user_id = interaction.user.id
 
     if clear:
@@ -601,26 +722,39 @@ async def job_preferences_cmd(
     else:
         prefix = "👤 **Your Current Job Preferences**\n\n"
 
-    p_key = existing.get("preset", "tech_swe")
+    p_key = str(existing.get("preset", "tech_swe"))
     p_obj = DISCIPLINE_PRESETS.get(p_key, DISCIPLINE_PRESETS["tech_swe"])
-    loc_display = ", ".join(existing.get("locations", [])) or "Any Location"
-    kw_display = ", ".join(existing.get("keywords_allow", [])) or "None"
+    clean_p_key = sanitize_untrusted_text(p_key, 40) or "tech_swe"
+    raw_locs = [
+        sanitize_untrusted_text(str(loc), 60).replace("`", "")
+        for loc in existing.get("locations", [])
+        if str(loc).strip()
+    ]
+    raw_kws = [
+        sanitize_untrusted_text(str(kw), 60).replace("`", "")
+        for kw in existing.get("keywords_allow", [])
+        if str(kw).strip()
+    ]
+    loc_display = ", ".join(loc for loc in raw_locs if loc) or "Any Location"
+    kw_display = ", ".join(kw for kw in raw_kws if kw) or "None"
     remote_display = "Yes (Remote Only)" if existing.get("remote_only") else "No (All Types)"
 
-    embed = discord.Embed(
+    embed = system(
+        settings,
         title="🔒 Private Job Search Preferences",
-        color=0x2ECC71 if is_update else 0x3498DB,
-        description=(
+        summary=(
             f"{prefix}"
-            f"• **Preset**: `{p_obj.label}` (`{p_key}`)\n"
+            f"• **Preset**: `{p_obj.label}` (`{clean_p_key}`)\n"
             f"• **Locations**: `{loc_display}`\n"
             f"• **Keywords**: `{kw_display}`\n"
             f"• **Remote Only**: `{remote_display}`\n\n"
             "*These preferences are keyed to your Discord user ID (portable across servers on this bot instance) "
             "and apply when using `/ic jobs use_my_preferences:True`.*"
         ),
+        footer_hint="Jobs • Local SQLite Storage (Plaintext on Host Disk)",
+        status="success" if is_update else "normal",
     )
-    embed.set_footer(text="Instigate Cafe Bot • Local SQLite Storage (Plaintext on Host Disk)")
+    embed.set_footer(text=format_footer(settings, "Jobs", "Local SQLite Storage (Plaintext on Host Disk)"))
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -703,40 +837,58 @@ async def job_preview_cmd(
 
     verdict_emoji = "✅" if decision.matched else "❌"
     verdict_text = "MATCHED (Eligible for announcement)" if decision.matched else "REJECTED (Filtered out)"
-    color = 0x2ECC71 if decision.matched else 0xE74C3C
 
-    embed = discord.Embed(
-        title=f"{verdict_emoji} Job Filter Preview: {verdict_text}",
-        color=color,
-        description=f"**Decision Summary:**\n`{decision.explanation}`",
-    )
-    embed.add_field(
-        name="Posting Under Test",
-        value=f"**Title:** {clean_title}\n**Employer:** {clean_employer}\n**Location:** {location}",
-        inline=False,
-    )
-    embed.add_field(
-        name="Extracted Metadata",
-        value=f"**Career Level:** `{decision.career_level}`\n**Disciplines:** `{', '.join(decision.disciplines) or 'None'}`",
-        inline=True,
-    )
-    embed.add_field(
-        name="Filter Preset",
-        value=f"**{preset_obj.label}** (`{preset_obj.key}`)\n*{preset_obj.description}*",
-        inline=True,
-    )
+    safe_title_display = sanitize_untrusted_text(clean_title, 120) or "Untitled Role"
+    safe_employer_display = sanitize_untrusted_text(clean_employer, 80) or "Employer"
+    safe_location_display = sanitize_untrusted_text(location, 80) or "Not Listed"
+    safe_explanation = sanitize_untrusted_text(decision.explanation, 300).replace("`", "")
 
     trace_lines = []
     for item in decision.trace:
         status_sym = "✅" if item.passed else "❌"
-        trace_lines.append(f"{status_sym} **`{item.rule}`**: {item.reason}")
+        safe_rule = sanitize_untrusted_text(item.rule, 50).replace("`", "")
+        safe_reason = sanitize_untrusted_text(item.reason, 180)
+        trace_lines.append(f"{status_sym} **`{safe_rule}`**: {safe_reason}")
 
-    embed.add_field(
-        name=f"Explainable Rule Trace ({len(decision.trace)} checks)",
-        value="\n".join(trace_lines)[:1024],
-        inline=False,
+    preview_fields: list[tuple[str, str, bool]] = [
+        (
+            "Posting Under Test",
+            (
+                f"**Title:** {safe_title_display}\n"
+                f"**Employer:** {safe_employer_display}\n"
+                f"**Location:** {safe_location_display}"
+            ),
+            False,
+        ),
+        (
+            "Extracted Metadata",
+            (
+                f"**Career Level:** `{sanitize_untrusted_text(decision.career_level, 40)}`\n"
+                f"**Disciplines:** `{sanitize_untrusted_text(', '.join(decision.disciplines) or 'None', 120)}`"
+            ),
+            True,
+        ),
+        (
+            "Filter Preset",
+            f"**{preset_obj.label}** (`{preset_obj.key}`)\n*{sanitize_text(preset_obj.description, 200)}*",
+            True,
+        ),
+        (
+            f"Explainable Rule Trace ({len(decision.trace)} checks)",
+            "\n".join(trace_lines) or "No rule trace available.",
+            False,
+        ),
+    ]
+
+    embed = system(
+        settings,
+        title=f"{verdict_emoji} Job Filter Preview: {verdict_text}",
+        summary=f"**Decision Summary:**\n`{safe_explanation}`",
+        fields=preview_fields,
+        footer_hint="Jobs • Deterministic Rule Engine Preview",
+        status="success" if decision.matched else "error",
     )
-    embed.set_footer(text="Instigate Cafe Bot • Deterministic Rule Engine Preview")
+    embed.set_footer(text=format_footer(settings, "Jobs", "Deterministic Rule Engine Preview"))
 
     await interaction.followup.send(embed=embed, ephemeral=True)
 

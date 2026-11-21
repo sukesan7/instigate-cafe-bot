@@ -6,7 +6,7 @@ from typing import Any
 import aiohttp
 import discord
 
-from icbot.container import get_container
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 from icbot.errors import format_exception_safe
 from icbot.services.alert_dedupe import (
@@ -121,6 +121,7 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
 
     guild = getattr(ch, "guild", None)
     guild_id = int(getattr(guild, "id", 0) or 0)
+    eff_settings = await resolve_guild_settings(bot, guild_id) if guild_id > 0 else settings
     dedupe_mgr = AlertDedupeManager(clock=container.clock)
     bootstrap_post = bool(getattr(settings, "btc_bootstrap_post", True))
 
@@ -205,7 +206,7 @@ async def poll_and_post_btc_watch(bot: discord.Client, *, raise_on_error: bool =
         ]
 
         embed = system_embed(
-            settings,
+            eff_settings,
             title=f"₿ {label} movement",
             summary=f"{headline_prefix} detected for **{mask_btc_address(addr)}**",
             fields=fields,

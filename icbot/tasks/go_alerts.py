@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import aiohttp
 import discord
 
-from icbot.container import get_container
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import go_alert as go_alert_embed
 from icbot.errors import format_exception_safe
 from icbot.services.alert_dedupe import (
@@ -335,6 +335,7 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
 
     guild = getattr(channel, "guild", None)
     guild_id = int(getattr(guild, "id", 0) or 0)
+    eff_settings = await resolve_guild_settings(bot, guild_id) if guild_id > 0 else settings
     dedupe_mgr = AlertDedupeManager(clock=container.clock)
 
     # Bootstrap behavior: optionally post ONE latest matching item, then checkpoint
@@ -346,7 +347,7 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
                     continue
                 level = "MAJOR" if major else "INFO"
                 embed = go_alert_embed(
-                    settings,
+                    eff_settings,
                     headline=m.subject_en or "GO Transit Alert",
                     details=m.body_en or None,
                     level=level,
@@ -392,7 +393,7 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
                     continue
                 level = "MAJOR" if major else "INFO"
                 embed = go_alert_embed(
-                    settings,
+                    eff_settings,
                     headline=m.subject_en or "GO Transit Alert",
                     details=m.body_en or None,
                     level=level,
@@ -438,7 +439,7 @@ async def poll_and_post_go_alerts(bot: discord.Client, *, raise_on_error: bool =
         )
         level = "MAJOR" if major else "INFO"
         embed = go_alert_embed(
-            settings,
+            eff_settings,
             headline=headline,
             details=m.body_en or None,
             level=level,

@@ -63,6 +63,7 @@ class RecordedMessage:
     ephemeral: bool = False
     view: Any = None
     file: Any = None
+    allowed_mentions: Any = None
 
 
 class FakeMessage:
@@ -140,6 +141,7 @@ class FakeTextChannel:
         embeds: list[discord.Embed] | None = None,
         view: Any = None,
         file: Any = None,
+        allowed_mentions: Any = None,
     ) -> FakeMessage:
         rec = RecordedMessage(
             content=str(content) if content is not None else None,
@@ -147,6 +149,7 @@ class FakeTextChannel:
             embeds=list(embeds or ([] if embed is None else [embed])),
             view=view,
             file=file,
+            allowed_mentions=allowed_mentions,
         )
         self.sent.append(rec)
         return FakeMessage(
@@ -198,6 +201,7 @@ class FakeResponse:
         ephemeral: bool = False,
         view: Any = None,
         file: Any = None,
+        allowed_mentions: Any = None,
     ) -> None:
         if self._done:
             raise discord.InteractionResponded(self._interaction)  # type: ignore[arg-type]
@@ -210,6 +214,7 @@ class FakeResponse:
             ephemeral=ephemeral,
             view=view,
             file=file,
+            allowed_mentions=allowed_mentions,
         )
         self.sent_messages.append(rec)
         self._interaction._sync_original_message(rec)
@@ -255,6 +260,7 @@ class FakeFollowup:
         view: Any = None,
         file: Any = None,
         wait: bool = False,
+        allowed_mentions: Any = None,
     ) -> FakeMessage:
         if not self._response.is_done():
             raise RuntimeError("Interaction followup.send() called before response.defer()/send_message()")
@@ -265,6 +271,7 @@ class FakeFollowup:
             ephemeral=ephemeral,
             view=view,
             file=file,
+            allowed_mentions=allowed_mentions,
         )
         self.messages.append(msg)
         self._response._interaction._sync_original_message(msg)

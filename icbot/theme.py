@@ -11,7 +11,34 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
+
+EmbedStatus = Literal["normal", "info", "success", "warning", "error", "disabled"]
+
+# Named semantic embed colors (all within the relative luminance heuristic range 0.03 <= L <= 0.95)
+SEMANTIC_COLORS: Mapping[str, int] = MappingProxyType(
+    {
+        "success": 0x2ECC71,
+        "warning": 0xF39C12,
+        "error": 0xE74C3C,
+        "disabled": 0x64748B,
+    }
+)
+
+
+def resolve_semantic_color(
+    accent_color: int,
+    status: EmbedStatus = "normal",
+    *,
+    override_color: int | None = None,
+) -> int:
+    """Resolve an embed's 24-bit RGB color from the active theme accent and semantic status."""
+    if override_color is not None:
+        return max(0, min(0xFFFFFF, int(override_color)))
+    st = str(status or "normal").strip().lower()
+    if st in SEMANTIC_COLORS:
+        return SEMANTIC_COLORS[st]
+    return max(0, min(0xFFFFFF, int(accent_color)))
 
 
 @dataclass(frozen=True)

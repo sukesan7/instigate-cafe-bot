@@ -266,15 +266,19 @@ async def safe_send_alert(
     embed: discord.Embed | None = None,
     content: str | None = None,
     fallback_text: str | None = None,
+    allowed_mentions: discord.AllowedMentions | None = None,
 ) -> tuple[bool, str]:
     """Safely send an alert to a Discord channel with permission checks and error handling.
 
+    Defaults to `discord.AllowedMentions.none()` unless an explicit `allowed_mentions`
+    exception (such as an admin-configured alert role) is passed.
     Returns (success: bool, status: str) where status indicates the outcome.
     """
     channel = await resolve_channel_safe(bot, channel_id)
     if channel is None:
         return False, "channel_not_found"
 
+    eff_mentions = allowed_mentions if allowed_mentions is not None else discord.AllowedMentions.none()
     guild = getattr(channel, "guild", None)
     me = getattr(guild, "me", None) or getattr(bot, "user", None)
     if me is not None and hasattr(channel, "permissions_for"):
@@ -289,14 +293,17 @@ async def safe_send_alert(
 
     try:
         if embed is not None:
-            await channel.send(content=content, embed=embed)  # type: ignore[call-arg]
+            await channel.send(content=content, embed=embed, allowed_mentions=eff_mentions)  # type: ignore[call-arg]
         else:
-            await channel.send(content=content or fallback_text or "")  # type: ignore[call-arg]
+            await channel.send(
+                content=content or fallback_text or "",
+                allowed_mentions=eff_mentions,
+            )  # type: ignore[call-arg]
         return True, "delivered"
     except discord.Forbidden:
         if embed is not None and fallback_text:
             try:
-                await channel.send(content=fallback_text)  # type: ignore[call-arg]
+                await channel.send(content=fallback_text, allowed_mentions=eff_mentions)  # type: ignore[call-arg]
                 return True, "delivered_plain"
             except discord.DiscordException:
                 return False, "permission_denied"

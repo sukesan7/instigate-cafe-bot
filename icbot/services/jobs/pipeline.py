@@ -12,7 +12,14 @@ import aiosqlite
 import discord
 
 from icbot.config import Settings
-from icbot.embeds import job_alert as job_alert_embed
+from icbot.container import resolve_guild_settings
+from icbot.embeds import (
+    alert_role_allowed_mentions,
+    safe_allowed_mentions,
+)
+from icbot.embeds import (
+    job_alert as job_alert_embed,
+)
 from icbot.errors import ProviderError
 from icbot.services.jobs.adapters import (
     GreenhouseAdapter,
@@ -438,6 +445,10 @@ class JobsIngestionPipeline:
                     self.metrics.record_discord_delivery_failure("missing_permissions", len(items))
                     continue
 
+            # Resolve per-guild effective settings and subscription role_id map once per channel
+            guild_settings_cache: dict[int, Settings] = {}
+            sub_role_cache: dict[tuple[int, int], int | None] = {}
+
             # Send batch capped by volume limit
             posts_sent = 0
             for item in items:
@@ -447,7 +458,52 @@ class JobsIngestionPipeline:
                 # Mark sending
                 await db.mark_job_outbox_sending([item["id"]])
 
-                eff_settings = cast(Settings, settings or getattr(bot, "settings", None) or Settings())
+                item_gid = int(item.get("guild_id") or 0)
+                if item_gid not in guild_settings_cache:
+                    if item_gid > 0:
+                        try:
+                            guild_settings_cache[item_gid] = await resolve_guild_settings(bot, item_gid)
+                        except (
+                            aiosqlite.Error,
+                            sqlite3.Error,
+                            RuntimeError,
+                            ValueError,
+                            TypeError,
+                            AttributeError,
+                        ):
+                            guild_settings_cache[item_gid] = cast(
+                                Settings, settings or getattr(bot, "settings", None) or Settings()
+                            )
+                    else:
+                        guild_settings_cache[item_gid] = cast(
+                            Settings, settings or getattr(bot, "settings", None) or Settings()
+                        )
+                eff_settings = guild_settings_cache[item_gid]
+
+                role_key = (item_gid, int(channel_id))
+                if role_key not in sub_role_cache:
+                    role_val: int | None = None
+                    if item.get("role_id"):
+                        role_val = int(item["role_id"])
+                    elif item_gid > 0 and hasattr(db, "get_guild_job_subscriptions"):
+                        try:
+                            subs = await db.get_guild_job_subscriptions(item_gid)
+                            for s in subs or []:
+                                if int(s.get("channel_id") or 0) == int(channel_id) and s.get("role_id"):
+                                    role_val = int(s["role_id"])
+                                    break
+                        except (
+                            aiosqlite.Error,
+                            sqlite3.Error,
+                            RuntimeError,
+                            ValueError,
+                            TypeError,
+                            AttributeError,
+                        ):
+                            role_val = None
+                    sub_role_cache[role_key] = role_val
+                configured_role_id = sub_role_cache[role_key]
+
                 embed = job_alert_embed(
                     eff_settings,
                     title=item["job_title"],
@@ -462,7 +518,14 @@ class JobsIngestionPipeline:
                 )
 
                 try:
-                    await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                    if configured_role_id and configured_role_id > 0:
+                        await channel.send(
+                            content=f"<@&{configured_role_id}>",
+                            embed=embed,
+                            allowed_mentions=alert_role_allowed_mentions(configured_role_id),
+                        )
+                    else:
+                        await channel.send(embed=embed, allowed_mentions=safe_allowed_mentions())
                     await db.mark_job_outbox_delivered(item["id"], now_ts)
                     await self.record_delivery(db, item["guild_id"], channel_id, item)
                     self.metrics.record_discord_delivery_success(1)

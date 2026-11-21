@@ -6,7 +6,7 @@ from typing import Any
 import aiohttp
 import discord
 
-from icbot.container import get_container
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 from icbot.errors import format_exception_safe
 from icbot.services.alert_dedupe import (
@@ -338,8 +338,13 @@ async def poll_and_post_market_watch(bot: discord.Client, *, raise_on_error: boo
     now_ts = int(container.clock())
     footer_text = format_financial_embed_footer("Yahoo Finance", now_ts, extra="Market Volatility Tracker")
 
+    guild = getattr(ch, "guild", None)
+    guild_id = int(getattr(guild, "id", 0) or 0)
+    eff_settings = await resolve_guild_settings(bot, guild_id) if guild_id > 0 else settings
+    dedupe_mgr = AlertDedupeManager(clock=container.clock)
+
     embed = system_embed(
-        settings,
+        eff_settings,
         title=title,
         summary=subtitle,
         fields=fields,
@@ -348,10 +353,6 @@ async def poll_and_post_market_watch(bot: discord.Client, *, raise_on_error: boo
 
     if debug:
         log.info("[MARKET] posting alert -> channel_id=%s", channel_id)
-
-    guild = getattr(ch, "guild", None)
-    guild_id = int(getattr(guild, "id", 0) or 0)
-    dedupe_mgr = AlertDedupeManager(clock=container.clock)
 
     plain_text = f"⚠️ Market Volatility | {market_state}\n" + "\n".join(alerts) + f"\n\n{FINANCIAL_DISCLAIMER}"
     ok, send_status = await safe_send_alert(bot, channel_id, embed=embed, fallback_text=plain_text)

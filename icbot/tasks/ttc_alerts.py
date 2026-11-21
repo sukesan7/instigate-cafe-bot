@@ -10,7 +10,7 @@ import aiohttp
 import aiosqlite
 import discord
 
-from icbot.container import get_container
+from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import ttc_alert as ttc_alert_embed
 from icbot.errors import format_exception_safe
 from icbot.services.alert_dedupe import (
@@ -223,6 +223,7 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
         items_oldest_first = list(reversed(items))
         guild = getattr(channel, "guild", None)
         guild_id = int(getattr(guild, "id", 0) or 0)
+        eff_settings = await resolve_guild_settings(bot, guild_id) if guild_id > 0 else settings
         dedupe_mgr = AlertDedupeManager(clock=container.clock)
 
         # If first run (no checkpoint) -> optionally post ONE latest matching status, then checkpoint
@@ -235,7 +236,7 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
                         continue
                     level = "MAJOR" if major else "INFO"
                     embed = ttc_alert_embed(
-                        settings,
+                        eff_settings,
                         headline=it.title or "TTC Notice",
                         details=it.summary or None,
                         url=it.link or None,
@@ -289,7 +290,7 @@ async def poll_and_post_ttc(bot: discord.Client, *, raise_on_error: bool = False
             )
             level = "MAJOR" if major else "INFO"
             embed = ttc_alert_embed(
-                settings,
+                eff_settings,
                 headline=headline,
                 details=it.summary or None,
                 url=it.link or None,

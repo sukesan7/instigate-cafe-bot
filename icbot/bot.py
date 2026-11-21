@@ -225,11 +225,13 @@ class CampusBot(commands.Bot):
         command_prefix: Any = "!",
         **options: Any,
     ) -> None:
+        default_allowed_mentions = options.pop("allowed_mentions", discord.AllowedMentions.none())
         super().__init__(
             command_prefix=command_prefix,
             help_command=None,
             intents=intents if intents is not None else build_intents(),
             tree_cls=_CafeCommandTree,
+            allowed_mentions=default_allowed_mentions,
             **options,
         )
         if services is not None:
