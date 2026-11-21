@@ -300,6 +300,7 @@ class ExamStore:
         created_by: int,
         channel_id: int = 0,
         reject_duplicate: bool = True,
+        is_admin: bool = False,
     ) -> ExamAddResult:
         """Atomically insert an exam and return its exact same-transaction ID plus overlap info."""
         gid = int(guild_id)
@@ -395,6 +396,12 @@ class ExamStore:
                 other = _row_to_exam(r, gid)
                 if created_exam.is_all_day or other.is_all_day:
                     continue
+                if (
+                    other.visibility == "private"
+                    and not is_admin
+                    and not (int(created_by) > 0 and other.created_by == int(created_by))
+                ):
+                    continue
                 o_start = other.start_ts
                 o_end = other.end_ts if other.end_ts is not None else (o_start + 3600)
                 if cand_start < o_end and o_start < cand_end:
@@ -418,6 +425,7 @@ class ExamStore:
         upcoming_only: bool = False,
         viewer_id: int = 0,
         is_admin: bool = False,
+        include_private: bool = True,
         now_ts: int | None = None,
     ) -> list[Exam]:
         """List guild exams sorted upcoming-first with course, term, and visibility filtering."""
@@ -432,12 +440,17 @@ class ExamStore:
         course_sub = str(course_filter or "").strip().lower()
         term_sub = str(term_filter or "").strip().lower()
         ref_now = int(now_ts if now_ts is not None else self._now())
+        viewer_int = int(viewer_id)
 
         filtered: list[Exam] = []
         for ex in all_exams:
             # Visibility guard
-            if ex.visibility == "private" and not is_admin and ex.created_by != int(viewer_id):
-                continue
+            if ex.visibility == "private":
+                if not include_private:
+                    continue
+                is_owner = viewer_int > 0 and ex.created_by > 0 and ex.created_by == viewer_int
+                if not (is_admin or is_owner):
+                    continue
             # Course filter
             if norm_course or course_sub:
                 key_match = bool(norm_course) and (
@@ -514,17 +527,50 @@ class ExamStore:
                 await tx.execute(f"DELETE FROM exams WHERE {where_sql}", params)
             return count
 
-    async def list_course_suggestions(self, guild_id: int, partial: str = "") -> list[tuple[str, str]]:
-        """Return up to 25 ``(course_code, label)`` autocomplete pairs from guild exams & catalog."""
+    async def list_course_suggestions(
+        self,
+        guild_id: int,
+        partial: str = "",
+        *,
+        viewer_id: int = 0,
+        is_admin: bool = False,
+        include_private: bool = False,
+    ) -> list[tuple[str, str]]:
+        """Return up to 25 ``(course_code, label)`` autocomplete pairs from guild exams & catalog.
+
+        By default (`include_private=False`), private exams are excluded so course autocomplete
+        never leaks sensitive accommodation or private assessment titles to unauthorized users.
+        """
         gid = int(guild_id)
         q = str(partial or "").strip().lower()
         q_norm = normalize_course_key(partial)
         seen: dict[str, str] = {}
 
-        exam_rows = await self.db.fetchall(
-            "SELECT DISTINCT course_code, course_name FROM exams WHERE guild_id = ? ORDER BY course_code ASC",
-            (gid,),
-        )
+        if include_private and is_admin:
+            exam_rows = await self.db.fetchall(
+                "SELECT DISTINCT course_code, course_name FROM exams WHERE guild_id = ? ORDER BY course_code ASC",
+                (gid,),
+            )
+        elif include_private and int(viewer_id) > 0:
+            exam_rows = await self.db.fetchall(
+                """
+                SELECT DISTINCT course_code, course_name
+                FROM exams
+                WHERE guild_id = ? AND (visibility != 'private' OR created_by = ?)
+                ORDER BY course_code ASC
+                """,
+                (gid, int(viewer_id)),
+            )
+        else:
+            exam_rows = await self.db.fetchall(
+                """
+                SELECT DISTINCT course_code, course_name
+                FROM exams
+                WHERE guild_id = ? AND visibility != 'private'
+                ORDER BY course_code ASC
+                """,
+                (gid,),
+            )
         for code, name in exam_rows:
             c = str(code or "").strip()
             n = str(name or "").strip()
@@ -993,8 +1039,17 @@ def _csv_safe_cell(val: str) -> str:
     return s
 
 
-def export_exams_csv(exams: Sequence[Exam], tz_name: str = "America/Toronto") -> str:
-    """Export exams to the documented CSV schema using ``tz_name``."""
+def export_exams_csv(
+    exams: Sequence[Exam],
+    tz_name: str = "America/Toronto",
+    *,
+    include_private: bool = False,
+) -> str:
+    """Export exams to the documented CSV schema using ``tz_name``.
+
+    By default (`include_private=False`), any exam with `visibility == 'private'`
+    is stripped so exported files are safe to share publicly without leaking private sittings.
+    """
     try:
         tz: ZoneInfo | Any = resolve_zone(tz_name)
     except ExamTimeValidationError:
@@ -1005,6 +1060,8 @@ def export_exams_csv(exams: Sequence[Exam], tz_name: str = "America/Toronto") ->
     writer.writerow(CSV_EXPORT_HEADERS)
 
     for ex in exams:
+        if ex.visibility == "private" and not include_private:
+            continue
         s_dt = datetime.fromtimestamp(ex.start_ts, tz)
         date_s = s_dt.strftime("%Y-%m-%d")
         start_s = "" if ex.is_all_day else s_dt.strftime("%H:%M")
@@ -1030,8 +1087,17 @@ def export_exams_csv(exams: Sequence[Exam], tz_name: str = "America/Toronto") ->
     return buf.getvalue()
 
 
-def export_exams_ics(exams: Sequence[Exam], tz_name: str = "America/Toronto") -> str:
-    """Export exams to a clean RFC 5545 VCALENDAR/VEVENT subset."""
+def export_exams_ics(
+    exams: Sequence[Exam],
+    tz_name: str = "America/Toronto",
+    *,
+    include_private: bool = False,
+) -> str:
+    """Export exams to a clean RFC 5545 VCALENDAR/VEVENT subset.
+
+    By default (`include_private=False`), any exam with `visibility == 'private'`
+    is stripped so exported calendar files cannot accidentally leak private sittings.
+    """
     try:
         tz: ZoneInfo | Any = resolve_zone(tz_name)
     except ExamTimeValidationError:
@@ -1044,6 +1110,8 @@ def export_exams_ics(exams: Sequence[Exam], tz_name: str = "America/Toronto") ->
         "CALSCALE:GREGORIAN",
     ]
     for ex in exams:
+        if ex.visibility == "private" and not include_private:
+            continue
         uid = ex.external_uid or f"icbot-exam-{ex.guild_id}-{ex.id}@campus-bot.invalid"
         summary = f"{ex.course_code} - {ex.course_name}".strip(" -")
         lines.append("BEGIN:VEVENT")
@@ -1109,12 +1177,15 @@ async def compute_due_exam_reminders(
         int(guild_id),
         upcoming_only=True,
         viewer_id=0,
-        is_admin=False,  # Exclude private exams from public channel reminders
+        is_admin=False,
+        include_private=False,  # Exclude private exams from public channel reminders
         now_ts=ref_now,
     )
 
     due: list[DueExamReminder] = []
     for ex in upcoming:
+        if ex.visibility == "private":
+            continue
         remaining_sec = ex.start_ts - ref_now
         if remaining_sec <= 0:
             continue

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import io
 from typing import Any, Literal
 
@@ -33,6 +34,17 @@ ExamItem = Exam
 
 _EXAMS_PER_PAGE = 10
 
+# Explicit Exam Data Visibility & Output-Channel Classification:
+# - "guild" / "public": Visible to all members of the owning guild_id. Allowed in
+#   public channel embeds (/ic exam list), guild-scoped CSV/ICS exports (/ic exam export),
+#   guild course autocomplete, and opt-in admin-configured reminder channels.
+# - "private": Restricted strictly to the exam creator (created_by == viewer_id > 0)
+#   and authorized guild admins within the same guild_id. Allowed ONLY in ephemeral
+#   interaction responses (ephemeral=True) bound to the authorized viewer. Must never
+#   appear in public embeds, default exports, public autocomplete, or reminder broadcasts.
+PUBLIC_EXAM_VISIBILITIES: frozenset[str] = frozenset({"guild", "public"})
+PRIVATE_EXAM_VISIBILITY = "private"
+
 
 async def _get_settings_and_db(interaction: discord.Interaction) -> tuple[Settings | None, Any | None]:
     bot = interaction.client
@@ -42,6 +54,54 @@ async def _get_settings_and_db(interaction: discord.Interaction) -> tuple[Settin
         return None, None
     settings = await resolve_guild_settings(bot, interaction)
     return settings, db
+
+
+def _require_active_guild_id(interaction: discord.Interaction) -> tuple[int | None, str | None]:
+    """Verify that the interaction comes from an active guild member context.
+
+    Prevents DM interactions (`interaction.guild is None`), non-member users, or
+    cross-guild member objects from falling back to a global `settings.guild_id`.
+    """
+    gid = extract_guild_id(interaction)
+    if gid is None or getattr(interaction, "guild", None) is None:
+        return None, "Error: `/ic exam` commands can only be used inside a Discord server channel."
+    user = getattr(interaction, "user", None)
+    if not isinstance(user, discord.Member):
+        return None, "Error: you must be a server member to access this server's exam schedule."
+    member_guild = getattr(user, "guild", None)
+    member_gid = getattr(member_guild, "id", None) if member_guild is not None else None
+    if isinstance(member_gid, int) and member_gid > 0 and int(member_gid) != int(gid):
+        return None, "Error: guild context mismatch."
+    return int(gid), None
+
+
+async def _send_ephemeral_error(interaction: discord.Interaction, message: str) -> None:
+    """Reliably send an ephemeral error message whether or not the interaction was already deferred."""
+    with contextlib.suppress(discord.HTTPException, discord.NotFound, discord.Forbidden, RuntimeError):
+        if not interaction.response.is_done():
+            await interaction.response.send_message(message, ephemeral=True)
+        else:
+            await interaction.followup.send(message, ephemeral=True)
+
+
+async def _safe_edit_interaction_message(
+    interaction: discord.Interaction,
+    *,
+    content: Any = None,
+    embed: discord.Embed | None = None,
+    view: discord.ui.View | None = None,
+) -> bool:
+    """Edit an interaction's message without crashing on deleted messages or Discord HTTP errors."""
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(content=content, embed=embed, view=view)
+        elif hasattr(interaction, "edit_original_response"):
+            await interaction.edit_original_response(content=content, embed=embed, view=view)
+        elif getattr(interaction, "message", None) is not None:
+            await interaction.message.edit(content=content, embed=embed, view=view)  # type: ignore[union-attr]
+        return True
+    except (discord.HTTPException, discord.NotFound, discord.Forbidden, RuntimeError):
+        return False
 
 
 def _parse_date_time(
@@ -122,16 +182,23 @@ def build_exam_schedule_embed(
     page: int = 0,
     total_pages: int = 1,
     filter_summary: str = "",
+    allow_private: bool = False,
 ) -> discord.Embed:
-    """Build a Discord-limit-safe exam schedule embed for the given page."""
+    """Build a Discord-limit-safe exam schedule embed for the given page.
+
+    Defense-in-depth invariant: when `allow_private=False` (any public response),
+    exams with `visibility == 'private'` are stripped before rendering so private
+    exam fields can never be serialized into a public embed.
+    """
+    safe_exams = [ex for ex in exams if allow_private or ex.visibility != PRIVATE_EXAM_VISIBILITY]
     start = page * _EXAMS_PER_PAGE
-    shown = exams[start : start + _EXAMS_PER_PAGE]
+    shown = safe_exams[start : start + _EXAMS_PER_PAGE]
     fields = [_exam_field(x, tz_name) for x in shown]
     summary = "Configured exams (upcoming first)."
     if filter_summary:
         summary += f" {filter_summary}"
     if total_pages > 1:
-        summary += f" Showing {start + 1}–{start + len(shown)} of {len(exams)}."
+        summary += f" Showing {start + 1}–{start + len(shown)} of {len(safe_exams)}."
 
     footer_hint = f"Exams • Page {page + 1}/{total_pages}" if total_pages > 1 else "Exams"
     return system(
@@ -154,19 +221,51 @@ class ExamPaginationView(discord.ui.View):
         exams: list[Exam],
         tz_name: str,
         filter_summary: str = "",
+        owner_id: int = 0,
+        guild_id: int = 0,
+        allow_private: bool = False,
     ) -> None:
         super().__init__(timeout=180)
         self.settings = settings
-        self.exams = exams
+        self.allow_private = bool(allow_private)
+        self.exams = [ex for ex in exams if self.allow_private or ex.visibility != PRIVATE_EXAM_VISIBILITY]
         self.tz_name = tz_name
         self.filter_summary = filter_summary
+        self.owner_id = int(owner_id)
+        self.guild_id = int(guild_id)
         self.current_page = 0
-        self.total_pages = max(1, (len(exams) + _EXAMS_PER_PAGE - 1) // _EXAMS_PER_PAGE)
+        self.total_pages = max(1, (len(self.exams) + _EXAMS_PER_PAGE - 1) // _EXAMS_PER_PAGE)
+        self.message: Any | None = None
+        self._timed_out = False
         self._sync_buttons()
 
     def _sync_buttons(self) -> None:
+        if self._timed_out:
+            self.prev_button.disabled = True
+            self.next_button.disabled = True
+            return
         self.prev_button.disabled = self.current_page <= 0
         self.next_button.disabled = self.current_page >= self.total_pages - 1
+
+    def _check_actor(self, interaction: discord.Interaction) -> str | None:
+        if self._timed_out:
+            return "Error: this exam schedule view has expired. Run `/ic exam list` again."
+        gid, guild_err = _require_active_guild_id(interaction)
+        if guild_err is not None or gid is None:
+            return guild_err or "Error: guild context mismatch."
+        if self.guild_id and int(gid) != int(self.guild_id):
+            return "Error: guild context mismatch."
+        user_id = getattr(getattr(interaction, "user", None), "id", None)
+        if self.owner_id and int(user_id or 0) != int(self.owner_id):
+            return "Error: only the user who requested this exam schedule may change pages."
+        return None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        err = self._check_actor(interaction)
+        if err is not None:
+            await _send_ephemeral_error(interaction, err)
+            return False
+        return True
 
     def current_embed(self) -> discord.Embed:
         return build_exam_schedule_embed(
@@ -176,19 +275,42 @@ class ExamPaginationView(discord.ui.View):
             page=self.current_page,
             total_pages=self.total_pages,
             filter_summary=self.filter_summary,
+            allow_private=self.allow_private,
         )
+
+    async def on_timeout(self) -> None:
+        self._timed_out = True
+        self._sync_buttons()
+        self.stop()
+        if self.message is not None:
+            with contextlib.suppress(
+                discord.HTTPException,
+                discord.NotFound,
+                discord.Forbidden,
+                AttributeError,
+                RuntimeError,
+            ):
+                await self.message.edit(view=self)
 
     @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        err = self._check_actor(interaction)
+        if err is not None:
+            await _send_ephemeral_error(interaction, err)
+            return
         self.current_page = max(0, self.current_page - 1)
         self._sync_buttons()
-        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+        await _safe_edit_interaction_message(interaction, embed=self.current_embed(), view=self)
 
     @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        err = self._check_actor(interaction)
+        if err is not None:
+            await _send_ephemeral_error(interaction, err)
+            return
         self.current_page = min(self.total_pages - 1, self.current_page + 1)
         self._sync_buttons()
-        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+        await _safe_edit_interaction_message(interaction, embed=self.current_embed(), view=self)
 
 
 class ExamClearConfirmView(discord.ui.View):
@@ -215,31 +337,57 @@ class ExamClearConfirmView(discord.ui.View):
         self.term_filter = term_filter
         self.confirmed = False
         self.cancelled = False
+        self.message: Any | None = None
+        self._timed_out = False
 
     def _disable_all(self) -> None:
         self.confirm_button.disabled = True
         self.cancel_button.disabled = True
 
     def _check_actor(self, interaction: discord.Interaction) -> str | None:
-        if interaction.user.id != self.owner_id:
+        if self._timed_out:
+            return "Error: this confirmation prompt has expired. Run `/ic exam clear` again."
+        user_id = getattr(getattr(interaction, "user", None), "id", None)
+        if int(user_id or 0) != self.owner_id:
             return "Error: only the administrator who initiated this clear action may confirm it."
-        actor_gid = extract_guild_id(interaction) or int(getattr(self.settings, "guild_id", 0) or 0)
-        if actor_gid != self.guild_id:
+        gid, guild_err = _require_active_guild_id(interaction)
+        if guild_err is not None or gid is None:
+            return guild_err or "Error: guild context mismatch."
+        if int(gid) != self.guild_id:
             return "Error: guild context mismatch."
         if not is_admin_or_allowed(interaction, self.settings):
             return "Error: you no longer have permission to modify exams."
         return None
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        err = self._check_actor(interaction)
+        if err is not None:
+            await _send_ephemeral_error(interaction, err)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        self._timed_out = True
+        self._disable_all()
+        self.stop()
+        if self.message is not None:
+            with contextlib.suppress(
+                discord.HTTPException,
+                discord.NotFound,
+                discord.Forbidden,
+                AttributeError,
+                RuntimeError,
+            ):
+                await self.message.edit(view=self)
+
     @discord.ui.button(label="Confirm Clear", style=discord.ButtonStyle.danger)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         err = self._check_actor(interaction)
         if err:
-            await interaction.response.send_message(err, ephemeral=True)
+            await _send_ephemeral_error(interaction, err)
             return
         if self.confirmed or self.cancelled:
-            await interaction.response.send_message(
-                "This confirmation has already been processed.", ephemeral=True
-            )
+            await _send_ephemeral_error(interaction, "This confirmation has already been processed.")
             return
 
         store = ExamStore(self.db, clock=get_container(interaction.client).clock)
@@ -250,10 +398,12 @@ class ExamClearConfirmView(discord.ui.View):
         )
         self.confirmed = True
         self._disable_all()
+        self.stop()
         scope_note = f" matching term `{self.term_filter}`" if self.term_filter else ""
         if self.preserve_manual:
             scope_note += " (manual exams preserved)"
-        await interaction.response.edit_message(
+        await _safe_edit_interaction_message(
+            interaction,
             content=f"Cleared all exams for this server{scope_note} ({deleted} removed).",
             embed=None,
             view=self,
@@ -263,11 +413,16 @@ class ExamClearConfirmView(discord.ui.View):
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         err = self._check_actor(interaction)
         if err:
-            await interaction.response.send_message(err, ephemeral=True)
+            await _send_ephemeral_error(interaction, err)
+            return
+        if self.confirmed or self.cancelled:
+            await _send_ephemeral_error(interaction, "This confirmation has already been processed.")
             return
         self.cancelled = True
         self._disable_all()
-        await interaction.response.edit_message(
+        self.stop()
+        await _safe_edit_interaction_message(
+            interaction,
             content="Cancelled exam clear. No exams were removed.",
             embed=None,
             view=self,
@@ -278,15 +433,20 @@ async def _exam_course_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> list[app_commands.Choice[str]]:
-    """Provide server-scoped autocomplete choices from existing exams and manual catalog courses."""
+    """Provide server-scoped autocomplete choices from existing public/guild exams and manual catalog courses."""
+    gid, guild_err = _require_active_guild_id(interaction)
+    if guild_err is not None or gid is None:
+        return []
     bot = interaction.client
     db = getattr(bot, "db", None)
     if db is None:
         return []
-    settings = getattr(bot, "settings", None)
-    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
     store = ExamStore(db)
-    suggestions = await store.list_course_suggestions(gid, current)
+    suggestions = await store.list_course_suggestions(
+        gid,
+        current,
+        include_private=False,
+    )
     return [app_commands.Choice(name=label[:100], value=code[:100]) for code, label in suggestions[:25]]
 
 
@@ -295,6 +455,7 @@ async def _exam_course_autocomplete(
     course="Optional course code or title filter",
     term="Optional academic term filter (e.g., Fall 2026)",
     upcoming_only="Show only upcoming exams (hide past exams)",
+    include_private="Include your private exams or admin-visible private exams (makes response ephemeral)",
 )
 @app_commands.autocomplete(course=_exam_course_autocomplete)
 async def exams_cmd(
@@ -302,18 +463,27 @@ async def exams_cmd(
     course: str | None = None,
     term: str | None = None,
     upcoming_only: bool = False,
+    include_private: bool = True,
 ) -> None:
-    await interaction.response.defer(thinking=True)
+    gid, guild_err = _require_active_guild_id(interaction)
+    if guild_err is not None or gid is None:
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        await interaction.followup.send(
+            guild_err or "Error: `/ic exam list` can only be used inside a server.",
+            ephemeral=True,
+        )
+        return
 
     settings, db = await _get_settings_and_db(interaction)
     if settings is None or db is None:
+        await interaction.response.defer(thinking=True, ephemeral=True)
         await interaction.followup.send("Error: bot not initialized (missing settings/db).", ephemeral=True)
         return
 
     tz_name = str(getattr(settings, "exams_tz", "America/Toronto") or "America/Toronto")
-    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
     container = get_container(interaction.client)
     store = ExamStore(db, clock=container.clock)
+    viewer_is_admin = is_admin_or_allowed(interaction, settings)
 
     exams = await store.list_exams(
         gid,
@@ -321,9 +491,16 @@ async def exams_cmd(
         term_filter=term,
         upcoming_only=bool(upcoming_only),
         viewer_id=interaction.user.id,
-        is_admin=is_admin_or_allowed(interaction, settings),
+        is_admin=viewer_is_admin,
+        include_private=bool(include_private),
         now_ts=int(container.clock()),
     )
+
+    # Decide ephemeral status BEFORE interaction.response.defer because Discord
+    # does not permit changing response audience safely after deferring.
+    has_private_exams = any(ex.visibility == PRIVATE_EXAM_VISIBILITY for ex in exams)
+    response_ephemeral = bool(has_private_exams)
+    await interaction.response.defer(thinking=True, ephemeral=response_ephemeral)
 
     filter_parts: list[str] = []
     if course and course.strip():
@@ -347,7 +524,7 @@ async def exams_cmd(
             footer_hint="Exams",
             subtitle=f"Timezone: {tz_name}",
         )
-        await interaction.followup.send(embed=e)
+        await interaction.followup.send(embed=e, ephemeral=response_ephemeral)
         return
 
     total_pages = max(1, (len(exams) + _EXAMS_PER_PAGE - 1) // _EXAMS_PER_PAGE)
@@ -357,8 +534,17 @@ async def exams_cmd(
             exams=exams,
             tz_name=tz_name,
             filter_summary=filter_summary,
+            owner_id=interaction.user.id,
+            guild_id=gid,
+            allow_private=response_ephemeral,
         )
-        await interaction.followup.send(embed=view.current_embed(), view=view)
+        sent_msg = await interaction.followup.send(
+            embed=view.current_embed(),
+            view=view,
+            ephemeral=response_ephemeral,
+            wait=True,
+        )
+        view.message = sent_msg
         return
 
     e = build_exam_schedule_embed(
@@ -368,8 +554,9 @@ async def exams_cmd(
         page=0,
         total_pages=1,
         filter_summary=filter_summary,
+        allow_private=response_ephemeral,
     )
-    await interaction.followup.send(embed=e)
+    await interaction.followup.send(embed=e, ephemeral=response_ephemeral)
 
 
 @exam.command(name="add", description="(Admin) Add an exam to the schedule.")
@@ -407,6 +594,14 @@ async def exams_add_cmd(
         return
     await interaction.response.defer(thinking=True, ephemeral=True)
 
+    gid, guild_err = _require_active_guild_id(interaction)
+    if guild_err is not None or gid is None:
+        await interaction.followup.send(
+            guild_err or "Error: `/ic exam add` can only be used inside a server.",
+            ephemeral=True,
+        )
+        return
+
     settings, db = await _get_settings_and_db(interaction)
     if settings is None or db is None:
         await interaction.followup.send("Error: bot not initialized (missing settings/db).", ephemeral=True)
@@ -417,7 +612,6 @@ async def exams_add_cmd(
         return
 
     tz_name = str(getattr(settings, "exams_tz", "America/Toronto") or "America/Toronto")
-    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
     is_all_day = bool(all_day) or str(start_time or "").strip().lower() in ("all-day", "allday")
 
     try:
@@ -474,6 +668,7 @@ async def exams_add_cmd(
             created_by=interaction.user.id,
             channel_id=channel_id,
             reject_duplicate=True,
+            is_admin=True,
         )
     except ValueError as exc:
         await interaction.followup.send(f"Error: {exc}", ephemeral=True)
@@ -518,6 +713,14 @@ async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> No
         return
     await interaction.response.defer(thinking=True, ephemeral=True)
 
+    gid, guild_err = _require_active_guild_id(interaction)
+    if guild_err is not None or gid is None:
+        await interaction.followup.send(
+            guild_err or "Error: `/ic exam remove` can only be used inside a server.",
+            ephemeral=True,
+        )
+        return
+
     settings, db = await _get_settings_and_db(interaction)
     if settings is None or db is None:
         await interaction.followup.send("Error: bot not initialized (missing settings/db).", ephemeral=True)
@@ -527,7 +730,6 @@ async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> No
         await interaction.followup.send("Error: you do not have permission to modify exams.", ephemeral=True)
         return
 
-    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
     store = ExamStore(db, clock=get_container(interaction.client).clock)
     removed = await store.remove_exam(gid, int(exam_id))
     if removed is None:
@@ -550,6 +752,14 @@ async def exams_clear_cmd(
         return
     await interaction.response.defer(thinking=True, ephemeral=True)
 
+    gid, guild_err = _require_active_guild_id(interaction)
+    if guild_err is not None or gid is None:
+        await interaction.followup.send(
+            guild_err or "Error: `/ic exam clear` can only be used inside a server.",
+            ephemeral=True,
+        )
+        return
+
     settings, db = await _get_settings_and_db(interaction)
     if settings is None or db is None:
         await interaction.followup.send("Error: bot not initialized (missing settings/db).", ephemeral=True)
@@ -559,13 +769,13 @@ async def exams_clear_cmd(
         await interaction.followup.send("Error: you do not have permission to modify exams.", ephemeral=True)
         return
 
-    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
     store = ExamStore(db, clock=get_container(interaction.client).clock)
     matching = await store.list_exams(
         gid,
         term_filter=term,
         viewer_id=interaction.user.id,
         is_admin=True,
+        include_private=True,
     )
     if preserve_manual:
         matching = [e for e in matching if e.source != "manual"]
@@ -595,7 +805,8 @@ async def exams_clear_cmd(
         ),
         footer_hint="Destructive Action Confirmation",
     )
-    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    sent_msg = await interaction.followup.send(embed=embed, view=view, ephemeral=True, wait=True)
+    view.message = sent_msg
 
 
 @exam.command(name="import", description="(Admin) Import exams from a CSV or ICS file/snippet (offline).")
@@ -615,6 +826,14 @@ async def exams_import_cmd(
     if not await guard_feature(interaction, "academics"):
         return
     await interaction.response.defer(thinking=True, ephemeral=True)
+
+    gid, guild_err = _require_active_guild_id(interaction)
+    if guild_err is not None or gid is None:
+        await interaction.followup.send(
+            guild_err or "Error: `/ic exam import` can only be used inside a server.",
+            ephemeral=True,
+        )
+        return
 
     settings, db = await _get_settings_and_db(interaction)
     if settings is None or db is None:
@@ -644,7 +863,6 @@ async def exams_import_cmd(
         return
 
     tz_name = str(getattr(settings, "exams_tz", "America/Toronto") or "America/Toronto")
-    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
     channel_id = int(getattr(interaction, "channel_id", 0) or 0)
 
     try:
@@ -694,6 +912,7 @@ async def exams_import_cmd(
     course="Optional course filter",
     term="Optional academic term filter",
     upcoming_only="Export only upcoming exams",
+    include_private="Include your private exams or admin-visible private exams (default: False)",
 )
 @app_commands.autocomplete(course=_exam_course_autocomplete)
 async def exams_export_cmd(
@@ -702,10 +921,19 @@ async def exams_export_cmd(
     course: str | None = None,
     term: str | None = None,
     upcoming_only: bool = False,
+    include_private: bool = False,
 ) -> None:
     if not await guard_feature(interaction, "academics"):
         return
     await interaction.response.defer(thinking=True, ephemeral=True)
+
+    gid, guild_err = _require_active_guild_id(interaction)
+    if guild_err is not None or gid is None:
+        await interaction.followup.send(
+            guild_err or "Error: `/ic exam export` can only be used inside a server.",
+            ephemeral=True,
+        )
+        return
 
     settings, db = await _get_settings_and_db(interaction)
     if settings is None or db is None:
@@ -713,9 +941,9 @@ async def exams_export_cmd(
         return
 
     tz_name = str(getattr(settings, "exams_tz", "America/Toronto") or "America/Toronto")
-    gid = extract_guild_id(interaction) or int(getattr(settings, "guild_id", 0) or 0)
     container = get_container(interaction.client)
     store = ExamStore(db, clock=container.clock)
+    allow_private_export = bool(include_private)
 
     exams = await store.list_exams(
         gid,
@@ -724,6 +952,7 @@ async def exams_export_cmd(
         upcoming_only=bool(upcoming_only),
         viewer_id=interaction.user.id,
         is_admin=is_admin_or_allowed(interaction, settings),
+        include_private=allow_private_export,
         now_ts=int(container.clock()),
     )
     if not exams:
@@ -731,10 +960,10 @@ async def exams_export_cmd(
         return
 
     if fmt == "csv":
-        content = export_exams_csv(exams, tz_name=tz_name)
+        content = export_exams_csv(exams, tz_name=tz_name, include_private=allow_private_export)
         filename = f"exams_{gid}.csv"
     else:
-        content = export_exams_ics(exams, tz_name=tz_name)
+        content = export_exams_ics(exams, tz_name=tz_name, include_private=allow_private_export)
         filename = f"exams_{gid}.ics"
 
     buf = io.BytesIO(content.encode("utf-8"))
