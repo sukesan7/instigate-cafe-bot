@@ -164,6 +164,31 @@ def _is_valid_snowflake(val: int, *, allow_zero: bool = True) -> bool:
     return lower <= val <= MAX_SNOWFLAKE
 
 
+def _is_memory_sqlite_path(raw: str) -> bool:
+    s = (raw or "").strip()
+    return s == ":memory:" or s.startswith("file::memory:") or "mode=memory" in s
+
+
+def normalize_sqlite_path(raw: str, *, allow_empty: bool = False) -> str:
+    """Normalize a configured SQLite database file path while preserving special memory URIs."""
+    s = (raw or "").strip()
+    if not s:
+        if allow_empty:
+            return ""
+        raise ConfigValidationError("SQLite database path must not be empty.")
+    if "\x00" in s:
+        raise ConfigValidationError("SQLite database path must not contain null bytes.")
+    if _is_memory_sqlite_path(s):
+        return s
+    if s in (".", "./", "..", "../") or s.endswith(("/", "\\")):
+        raise ConfigValidationError(f"SQLite database path must point to a file, not a directory: {raw!r}")
+    expanded = os.path.expanduser(s)
+    normed = os.path.normpath(expanded)
+    if normed in ("", "."):
+        raise ConfigValidationError(f"SQLite database path must point to a file, not a directory: {raw!r}")
+    return normed
+
+
 # ---------------------------------------------------------------------------
 # Sub-configuration dataclasses (immutable domain groups)
 # ---------------------------------------------------------------------------
@@ -1215,10 +1240,28 @@ class Settings:
             )
 
         # Storage paths
-        if not (self.db_path or "").strip():
+        raw_db_path = (self.db_path or "").strip()
+        if not raw_db_path:
             _err("db_path", "db_path must not be empty.")
-        if not (self.grades_db_path or "").strip():
-            _err("grades_db_path", "grades_db_path must not be empty.")
+        else:
+            try:
+                norm_db = normalize_sqlite_path(raw_db_path, allow_empty=False)
+                if not _is_memory_sqlite_path(norm_db) and os.path.isdir(norm_db):
+                    _err("db_path", f"db_path points to an existing directory: {raw_db_path!r}")
+            except ConfigValidationError as exc:
+                _err("db_path", str(exc))
+
+        raw_grades_path = (self.grades_db_path or "").strip()
+        if raw_grades_path:
+            try:
+                norm_grades = normalize_sqlite_path(raw_grades_path, allow_empty=True)
+                if norm_grades and not _is_memory_sqlite_path(norm_grades) and os.path.isdir(norm_grades):
+                    _err(
+                        "grades_db_path",
+                        f"grades_db_path points to an existing directory: {raw_grades_path!r}",
+                    )
+            except ConfigValidationError as exc:
+                _err("grades_db_path", str(exc))
 
         # Bounds
         for fname, bounds in POLL_INTERVAL_BOUNDS.items():
@@ -1715,8 +1758,39 @@ class Settings:
         )
         btc_watch_debug = _parse_bool_field("BTC_WATCH_DEBUG", "btc_watch_debug", False)
 
-        db_path = _env("DB_PATH", "ic_stock.db").strip() or "ic_stock.db"
-        grades_db_path = _env("GRADES_DB_PATH", "tmu_grades.db").strip() or "tmu_grades.db"
+        db_env_raw = _env("DB_PATH", "").strip()
+        legacy_sqlite_raw = _env("SQLITE_PATH", "").strip()
+        if db_env_raw:
+            raw_db_choice = db_env_raw
+        elif legacy_sqlite_raw:
+            warnings.warn(
+                "SQLITE_PATH is deprecated and scheduled for removal in v1.1.0; use DB_PATH instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            raw_db_choice = legacy_sqlite_raw
+        else:
+            raw_db_choice = "ic_stock.db"
+
+        try:
+            db_path = normalize_sqlite_path(raw_db_choice, allow_empty=False)
+        except ConfigValidationError as exc:
+            raw_issues.append(ValidationIssue("db_path", str(exc), "error"))
+            db_path = raw_db_choice
+
+        if "GRADES_DB_PATH" in env:
+            grades_raw = str(env.get("GRADES_DB_PATH") or "").strip()
+        else:
+            grades_raw = "tmu_grades.db"
+
+        if grades_raw:
+            try:
+                grades_db_path = normalize_sqlite_path(grades_raw, allow_empty=True)
+            except ConfigValidationError as exc:
+                raw_issues.append(ValidationIssue("grades_db_path", str(exc), "error"))
+                grades_db_path = grades_raw
+        else:
+            grades_db_path = ""
         exams_tz = _env("EXAMS_TZ", "America/Toronto").strip() or "America/Toronto"
         notes_sites = _to_str_list(_env("NOTES_SITES", ""))
         lore_path = _env("LORE_PATH", "").strip()

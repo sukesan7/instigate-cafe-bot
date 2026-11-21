@@ -260,11 +260,18 @@ class ServiceContainer:
 
     @property
     def grades_cache(self) -> Any:
-        """Lazy grades course cache store backed by shared database."""
+        """Lazy grades course cache store backed by shared database or configured grades_db_path."""
         if self._grades_cache is None:
             from icbot.features.grades import GradesCacheStore
 
-            target_db = self.db if self.db is not None else self.settings.grades_db_path
+            target_db: Database | str
+            if self.db is not None:
+                target_db = self.db
+            else:
+                g_path = (self.settings.grades_db_path or "").strip() or (
+                    self.settings.db_path or "ic_stock.db"
+                ).strip()
+                target_db = g_path
             self._grades_cache = GradesCacheStore(target_db)
         return self._grades_cache
 
@@ -292,12 +299,15 @@ class ServiceContainer:
         if self._academic_registry is None:
             from icbot.academics.providers import build_default_academic_registry
 
+            eff_grades_path = (self.settings.grades_db_path or "").strip() or (
+                self.settings.db_path or "ic_stock.db"
+            ).strip()
             self._academic_registry = build_default_academic_registry(
                 catalog=self.academic_catalog,
                 notes_cache=self.notes_cache,
                 provider_cache=self.academic_cache,
                 grades_store=self.grades_cache if self.db is not None else None,
-                grades_db_path=self.settings.grades_db_path,
+                grades_db_path=eff_grades_path,
             )
         return self._academic_registry
 

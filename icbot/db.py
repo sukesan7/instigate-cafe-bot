@@ -18,6 +18,66 @@ import aiosqlite
 _current_tx: contextvars.ContextVar[Transaction | None] = contextvars.ContextVar("_current_tx", default=None)
 
 
+class DatabasePathError(sqlite3.OperationalError):
+    """Raised when a configured SQLite database file path or parent directory is invalid or unwritable."""
+
+
+def _is_memory_path(path: str) -> bool:
+    s = (path or "").strip()
+    return s == ":memory:" or s.startswith("file::memory:") or "mode=memory" in s
+
+
+def prepare_sqlite_path(path: str, *, ensure_parent: bool = True) -> str:
+    """Normalize and validate a SQLite file path, ensuring a writable parent directory with 0o700 permissions.
+
+    Raises:
+        DatabasePathError: If the path is empty, points to a directory, or its parent directory is unwritable.
+         Permissive fallback to another directory is strictly forbidden.
+    """
+    s = (path or "").strip()
+    if not s or "\x00" in s:
+        raise DatabasePathError("Database path must not be empty or contain null bytes.")
+    if _is_memory_path(s):
+        return s
+    if s in (".", "./", "..", "../") or s.endswith(("/", "\\")):
+        raise DatabasePathError(f"Database path must point to a file, not a directory: {path!r}")
+
+    expanded = os.path.expanduser(s)
+    normed = os.path.normpath(expanded)
+    if normed in ("", "."):
+        raise DatabasePathError(f"Database path must point to a file, not a directory: {path!r}")
+
+    target = Path(normed)
+    if target.exists() and target.is_dir():
+        raise DatabasePathError(f"Database path points to an existing directory: {normed!r}")
+
+    if not ensure_parent:
+        return normed
+
+    parent = target.parent if str(target.parent) not in ("", ".") else Path.cwd()
+    if parent.exists() and not parent.is_dir():
+        raise DatabasePathError(f"Database parent path is not a directory: {str(parent)!r}")
+
+    if not parent.exists():
+        try:
+            parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        except OSError as exc:
+            raise DatabasePathError(
+                f"Cannot create database parent directory {str(parent)!r} for DB_PATH={normed!r}: {exc}"
+            ) from exc
+
+    if target.exists() and not os.access(target, os.R_OK | os.W_OK):
+        raise DatabasePathError(
+            f"Database file {normed!r} is not readable and writable by UID {os.getuid()}."
+        )
+    if not os.access(parent, os.W_OK | os.X_OK):
+        raise DatabasePathError(
+            f"Database parent directory {str(parent)!r} is not writable by UID {os.getuid()} "
+            f"(required for SQLite and WAL journal files at {normed!r})."
+        )
+    return normed
+
+
 class MigrationError(Exception):
     """Base exception for schema migration failures."""
 
@@ -845,7 +905,7 @@ class Database:
     """Thread-safe SQLite database manager with WAL configuration and transactional unit-of-work."""
 
     def __init__(self, path: str):
-        self.path = path
+        self.path = prepare_sqlite_path(path, ensure_parent=False)
         self._lock = asyncio.Lock()
         self._conn: aiosqlite.Connection | None = None
         self._closed = False
@@ -859,13 +919,14 @@ class Database:
         if self._closed:
             raise RuntimeError(f"Database({self.path}) is closed.")
         if self._conn is None:
+            self.path = prepare_sqlite_path(self.path, ensure_parent=True)
             # Connect with autocommit mode (isolation_level=None) so Python doesn't inject
             # implicit BEGIN statements behind our back, allowing strict BEGIN/BEGIN IMMEDIATE control.
             conn = await aiosqlite.connect(self.path, isolation_level=None)
             try:
                 await conn.execute("PRAGMA foreign_keys = ON;")
                 await conn.execute("PRAGMA busy_timeout = 5000;")
-                if self.path != ":memory:" and not self.path.startswith("file::memory:"):
+                if not _is_memory_path(self.path):
                     await conn.execute("PRAGMA journal_mode = WAL;")
                     await conn.execute("PRAGMA synchronous = NORMAL;")
                 self._conn = conn
