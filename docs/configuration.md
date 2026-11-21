@@ -46,7 +46,7 @@ The Instigate Cafe Bot uses strict runtime configuration validation via the `Set
 
 | Environment Variable | Settings Field | Type | Default | Description & Appearance | Example |
 |---|---|---|---|---|---|
-| `THEME_PRESET` | `theme_preset` | string | `instigate_cafe` | Active visual preset (`instigate_cafe`, `tmu_bold`, `emerald_mint`, `cyber_neon`, `nordic_frost`). | `instigate_cafe` |
+| `THEME_PRESET` | `theme_preset` | string | `instigate_cafe` | Active visual preset (`instigate_cafe`, `campus_generic`, `student_clean`, `toronto_tmu`, `emerald_academic`). | `instigate_cafe` |
 | `BOT_DISPLAY_NAME` | `bot_display_name` | string | `InstigateAI` | Display name rendered in embed headers and notifications. | `CampusBot` |
 | `EMBED_LOGO_URL` | `embed_logo_url` | string | *(preset)* | HTTPS URL to logo avatar displayed in rich embed headers. | `https://example.com/logo.png` |
 | `EMBED_ACCENT_COLOR` | `embed_accent_color` | color/int | `0xA64DFF` | Hex color code (`#RRGGBB` or `0xRRGGBB`) for embed borders. | `#A64DFF` |
@@ -232,4 +232,4 @@ Server administrators can customize guild-specific behavior directly inside Disc
   - **Academics & Locale:** `campus_id`, `rmp_university`, `exams_tz`.
   - **Feature Modules:** Applying profiles (`default`, `student_core`, `toronto_tmu`, `community_full`) or enabling/disabling individual modules.
   - **RBAC (`ALLOWED_ROLE_IDS` / `/ic admin roles`):** Grants bot-management permissions to designated roles without requiring Discord `Administrator`.
-  - **Branding & Visual Themes:** Built-in presets (`instigate_cafe`, `tmu_bold`, `emerald_mint`, `cyber_neon`, `nordic_frost`) or custom accent hex validated via [`icbot/theme.py`](../icbot/theme.py)'s W3C relative luminance range heuristic ($0.03 \le L \le 0.95$; see [UI Style Contract](ui-style.md)).
+  - **Branding & Visual Themes:** Built-in presets (`instigate_cafe`, `campus_generic`, `student_clean`, `toronto_tmu`, `emerald_academic`) or custom accent hex validated via [`icbot/theme.py`](../icbot/theme.py)'s W3C relative luminance range heuristic ($0.03 \le L \le 0.95$; see [UI Style Contract](ui-style.md)).
