@@ -17,7 +17,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: campus-bot:0.2.4
+      args:
+        APP_VERSION: ${APP_VERSION:-1.0.0-rc1}
+    image: campus-bot:${APP_VERSION:-1.0.0-rc1}
     container_name: campus-bot
     restart: unless-stopped
 
@@ -26,7 +28,8 @@ services:
       - .env
 
     environment:
-      - SQLITE_PATH=/data/campus.db
+      - DB_PATH=/data/campus.db
+      - GRADES_DB_PATH=/data/tmu_grades.db
       - ICBOT_ALLOW_GATEWAY=true
       - PYTHONUNBUFFERED=1
 

@@ -37,6 +37,11 @@ RUN uv sync --frozen --no-dev
 # ------------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm AS runtime
 
+ARG APP_VERSION="1.0.0-rc1"
+LABEL org.opencontainers.image.title="campus-bot" \
+      org.opencontainers.image.description="Instigate Cafe Bot — Campus utility, transit alerts, job alerts, and community simulation Discord bot" \
+      org.opencontainers.image.version="${APP_VERSION}"
+
 # Install runtime SQLite3 CLI for backup and healthcheck diagnostics
 RUN apt-get update && \
     apt-get install -y --no-install-recommends sqlite3 ca-certificates tzdata && \
@@ -54,21 +59,25 @@ COPY --chown=campusbot:campusbot icbot /app/icbot
 COPY --chown=campusbot:campusbot tools /app/tools
 COPY --chown=campusbot:campusbot main.py /app/main.py
 
-# Create persistent state directory with campusbot ownership
-RUN mkdir -p /data && chown -R campusbot:campusbot /data
+# Create persistent state directory with campusbot ownership and strict 0700 permissions
+RUN mkdir -p /data && chown -R campusbot:campusbot /data && chmod 0700 /data
 
 # Outbound networking only: Discord connects via outgoing websocket/HTTPS; no EXPOSE ports needed
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    SQLITE_PATH="/data/campus.db" \
+    APP_VERSION="${APP_VERSION}" \
+    DB_PATH="/data/campus.db" \
+    GRADES_DB_PATH="/data/tmu_grades.db" \
     ICBOT_ALLOW_GATEWAY="true"
 
 USER campusbot
 
-# Healthcheck ensures Python runtime and configuration loader execute cleanly
+# Honest local readiness contract (no live Discord token or outbound network required):
+# Verifies strict configuration validation, storage path resolution, and parent directory writeability.
+# Note: Proves local container & storage readiness, not live Discord gateway WebSocket connectivity.
 HEALTHCHECK --interval=60s --timeout=10s --start-period=15s --retries=3 \
-    CMD python3 -c "import icbot; from icbot.config import Settings; Settings.from_env()" || exit 1
+    CMD python3 -c "from icbot.config import Settings; from icbot.db import prepare_sqlite_path; s = Settings.load_validated(); prepare_sqlite_path(s.db_path, ensure_parent=True)" || exit 1
 
 # Process signal handling: Discord.py cleanly cancels tasks and closes DB on SIGTERM
 STOPSIGNAL SIGTERM
