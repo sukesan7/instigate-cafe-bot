@@ -1,7 +1,7 @@
 # Instigate Cafe Bot — External Provider Specifications & Integration Guide
 
 **Document Version:** 2.0.0 (Phase 12 Provider Specification)  
-**Architecture Contract:** [`icbot/services/provider_protocol.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/provider_protocol.py)  
+**Architecture Contract:** [`icbot/academics/providers.py`](../icbot/academics/providers.py) & [`icbot/services/http_transport.py`](../icbot/services/http_transport.py)  
 **Security Invariants:** Strict SSRF URL validation, circuit breaker dampening, exponential backoff with jitter, zero credential leakage in logs, and deterministic offline mocking.
 
 ---
@@ -12,7 +12,7 @@ The Instigate Cafe Bot integrates with external web services for transit alerts,
 
 1. **Decoupled Contracts:** External calls implement either `ProviderProtocol` or `AcademicProviderProtocol`, returning structured `ProviderResult` containers with standardized status codes (`ok`, `empty`, `error`, `circuit_open`).
 2. **Circuit Breakers & Dampening:** Upstream provider outages trigger circuit breakers that pause requests and dampen log noise via `ProviderOutageTracker` (1st failure at WARNING, repeated failures at DEBUG).
-3. **SSRF Defense:** All external URLs fetched by academic tools must pass host whitelist and protocol validation in [`icbot/academics/url_safety.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/academics/url_safety.py).
+3. **SSRF Defense:** All external URLs fetched by academic tools must pass host whitelist and protocol validation in [`icbot/academics/url_safety.py`](../icbot/academics/url_safety.py).
 4. **Honest Scope Notice:** Default course notes and academic tools currently focus on Toronto Metropolitan University (TMU / Ryerson) STEM curricula. The bot does **not** claim automated coverage for all North American universities out of the box, but provides a clean extension interface for other institutions.
 
 ---
@@ -55,8 +55,7 @@ Create a new provider module in `icbot/academics/providers/` implementing `Acade
 ```python
 from __future__ import annotations
 import aiohttp
-from icbot.academics.models import Campus, CourseNotesResult, ResourceLink
-from icbot.services.provider_protocol import ProviderResult
+from icbot.academics.models import Campus, ProviderResult, ResourceLink
 
 class UniversityNotesProvider:
     name: str = "uwaterloo_cs"
@@ -77,13 +76,13 @@ class UniversityNotesProvider:
 ```
 
 ### Step 2: Enforce URL Safety & SSRF Whitelisting
-Before returning any hyperlinks to the user or querying external endpoints, validate them using `validate_and_sanitize_url`:
+Before returning any hyperlinks to the user or querying external endpoints, validate them using `validate_fetch_url`:
 
 ```python
-from icbot.academics.url_safety import validate_and_sanitize_url
+from icbot.academics.url_safety import validate_fetch_url
 
-safe_url = validate_and_sanitize_url(raw_url, allowed_schemes={"https"})
-if safe_url is None:
+val = validate_fetch_url(raw_url)
+if not val.ok:
     return ProviderResult.empty(reason="URL rejected by SSRF guard")
 ```
 

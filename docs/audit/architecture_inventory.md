@@ -29,51 +29,51 @@
 
 ## 2. Command Traceability Matrix (`app_commands`)
 
-All slash commands register onto the root group `/ic` defined in [`icbot/app.py:4`](file:///home/sukesan/dev/discord/campus-bot/icbot/app.py#L4). The bot defines 5 nested subgroups (`casino`, `icse`, `admin`, `exam`, `sports`) and 42 distinct executable command paths.
+All slash commands register onto the root group `/ic` defined in [`icbot/app.py:4`](../../icbot/app.py#L4). The bot defines 5 nested subgroups (`casino`, `icse`, `admin`, `exam`, `sports`) and 42 distinct executable command paths.
 
 | # | Slash Command Path | Group / Subgroup | Callback Symbol | Location (`file:line`) | Permission / Guard | Discord Views Attached | SQLite Tables Accessed | External Network / Services |
 | :- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | `/ic admin llm_stop` | `admin` | `llm_stop_cmd` | [`icbot/features/admin.py:8`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/admin.py#L8) | `is_admin_or_allowed` | None | `meta` | None |
-| 2 | `/ic admin llm_start` | `admin` | `llm_start_cmd` | [`icbot/features/admin.py:25`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/admin.py#L25) | `is_admin_or_allowed` | None | `meta` | None |
-| 3 | `/ic admin move` | `admin` | `move` | [`icbot/features/invest.py:329`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L329) | `is_admin_or_allowed` | None | `fun_stocks`, `fun_stock_events` | None |
-| 4 | `/ic admin set` | `admin` | `set_cmd` | [`icbot/features/invest.py:362`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L362) | `is_admin_or_allowed` | None | `fun_stocks`, `fun_stock_events` | None |
-| 5 | `/ic admin sync_catalog` | `admin` | `sync_catalog` | [`icbot/features/invest.py:388`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L388) | `is_admin_or_allowed` | None | `fun_stocks` | None |
-| 6 | `/ic admin weekroll` | `admin` | `weekroll` | [`icbot/features/invest.py:406`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L406) | `is_admin_or_allowed` | None | `fun_stocks`, `fun_market_weeks` | None |
-| 7 | `/ic botinfo` | `ic` (root) | `botinfo` | [`icbot/features/info.py:55`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/info.py#L55) | Channel gate (`main.py:62`) | None | None | None (reads local logo) |
-| 8 | `/ic casino blackjack` | `casino` | `blackjack` | [`icbot/features/blackjack.py:718`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/blackjack.py#L718) | Channel gate (`main.py:62`) | `BlackjackView`, `BlackjackTerminalView` | `users`, `blackjack_users` | None |
-| 9 | `/ic casino payouts` | `casino` | `slots_payouts_cmd` | [`icbot/features/slots.py:95`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/slots.py#L95) | Channel gate (`main.py:62`) | None | None | None |
-| 10 | `/ic casino roulette` | `casino` | `roulette_cmd` | [`icbot/features/roulette.py:67`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/roulette.py#L67) | Channel gate (`main.py:62`) | None | `users` | None |
-| 11 | `/ic casino slots` | `casino` | `slots_cmd` | [`icbot/features/slots.py:24`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/slots.py#L24) | Channel gate (`main.py:62`) | None | `users` | None |
-| 12 | `/ic dailyclaim` | `ic` (root) | `daily_cmd` | [`icbot/features/profile.py:129`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/profile.py#L129) | Channel gate (`main.py:62`) | None | `users` | None |
-| 13 | `/ic exam add` | `exam` | `exam_add` | [`icbot/features/exams.py:174`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/exams.py#L174) | `is_admin_or_allowed` | None | `exams` | None |
-| 14 | `/ic exam clear` | `exam` | `exam_clear` | [`icbot/features/exams.py:275`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/exams.py#L275) | `is_admin_or_allowed` | None | `exams` | None |
-| 15 | `/ic exam list` | `exam` | `exam_list` | [`icbot/features/exams.py:130`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/exams.py#L130) | Channel gate (`main.py:62`) | None | `exams` | None |
-| 16 | `/ic exam remove` | `exam` | `exam_remove` | [`icbot/features/exams.py:252`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/exams.py#L252) | `is_admin_or_allowed` | None | `exams` | None |
-| 17 | `/ic grades` | `ic` (root) | `grades_command` | [`icbot/features/grades.py:183`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/grades.py#L183) | Channel gate (`main.py:62`) | None | `course_cache` (`tmu_grades.db`) | `https://tmu.grades.zone` (GET HTML) |
-| 18 | `/ic help` | `ic` (root) | `ic_help` | [`icbot/features/help.py:116`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/help.py#L116) | Channel gate (`main.py:62`) | `HelpPaginationView` | None | None |
-| 19 | `/ic icse buy` | `icse` | `buy` | [`icbot/features/invest.py:158`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L158) | Channel gate (`main.py:62`) | None | `users`, `fun_stocks`, `fun_positions`, `fun_trades` | None |
-| 20 | `/ic icse cover` | `icse` | `cover_cmd` | [`icbot/features/invest.py:233`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L233) | Channel gate (`main.py:62`) | None | `users`, `fun_stocks`, `fun_positions`, `fun_trades` | None |
-| 21 | `/ic icse history` | `icse` | `history_cmd` | [`icbot/features/invest.py:291`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L291) | Channel gate (`main.py:62`) | None | `fun_stocks`, `fun_stock_events` | None |
-| 22 | `/ic icse market` | `icse` | `market` | [`icbot/features/invest.py:64`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L64) | Channel gate (`main.py:62`) | None | `fun_stocks` | None |
-| 23 | `/ic icse portfolio` | `icse` | `portfolio` | [`icbot/features/invest.py:115`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L115) | Channel gate (`main.py:62`) | None | `users`, `fun_stocks`, `fun_positions` | None |
-| 24 | `/ic icse quote` | `icse` | `quote` | [`icbot/features/invest.py:95`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L95) | Channel gate (`main.py:62`) | None | `fun_stocks` | None |
-| 25 | `/ic icse sell` | `icse` | `sell` | [`icbot/features/invest.py:182`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L182) | Channel gate (`main.py:62`) | None | `users`, `fun_stocks`, `fun_positions`, `fun_trades` | None |
-| 26 | `/ic icse short` | `icse` | `short_cmd` | [`icbot/features/invest.py:208`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L208) | Channel gate (`main.py:62`) | None | `users`, `fun_stocks`, `fun_positions`, `fun_trades` | None |
-| 27 | `/ic icse stock` | `icse` | `stock` | [`icbot/features/invest.py:419`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L419) | Channel gate (`main.py:62`) | None | `meta` (`stock_value`), `stock_events` | None |
-| 28 | `/ic icse trades` | `icse` | `trades_cmd` | [`icbot/features/invest.py:260`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L260) | Channel gate (`main.py:62`) | None | `fun_trades` | None |
-| 29 | `/ic jobs` | `ic` (root) | `jobs_cmd` | [`icbot/features/jobs.py:56`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/jobs.py#L56) | Channel gate (`main.py:62`) | None | `job_seen` | None |
-| 30 | `/ic leaderboard` | `ic` (root) | `leaderboard_root` | [`icbot/features/lc_leaderboard.py:176`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/lc_leaderboard.py#L176) | Channel gate (`main.py:62`) | `LeaderboardView` | `users`, `fun_stocks`, `fun_positions` | None |
-| 31 | `/ic notes` | `ic` (root) | `notes_cmd` | [`icbot/features/notes.py:122`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/notes.py#L122) | Channel gate (`main.py:62`) | None | In-memory cache `_NOTES_CACHE` | Configured `NOTES_SITES` SPA endpoints (GET) |
-| 32 | `/ic prof` | `ic` (root) | `prof_cmd` | [`icbot/features/prof.py:187`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/prof.py#L187) | Channel gate (`main.py:62`) | None | None | RateMyProfessors GraphQL (`https://www.ratemyprofessors.com/graphql`) |
-| 33 | `/ic profile` | `ic` (root) | `profile_cmd` | [`icbot/features/profile.py:32`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/profile.py#L32) | Channel gate (`main.py:62`) | None | `users`, `fun_positions`, `blackjack_users` | None |
-| 34 | `/ic report` | `ic` (root) | `report_cmd` | [`icbot/features/report.py:22`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/report.py#L22) | Channel gate (`main.py:62`) | None | `fun_stocks`, `meta` | Yahoo Finance Quote API, Alternative.me Fear & Greed API |
-| 35 | `/ic resume` | `ic` (root) | `resume_cmd` | [`icbot/features/resume.py:144`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/resume.py#L144) | Cooldown (1/1800s) + Killswitch | None | None | Google Gemini REST API (`generateContent`) |
-| 36 | `/ic serverinfo` | `ic` (root) | `serverinfo` | [`icbot/features/info.py:9`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/info.py#L9) | Channel gate (`main.py:62`) | None | None | None |
-| 37 | `/ic sports boxing` | `sports` | `boxing` | [`icbot/features/sports.py:236`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/sports.py#L236) | Channel gate (`main.py:62`) | None | In-memory cache `_RSS_CACHE` | OddsAPI (`api.the-odds-api.com`), ESPN Boxing RSS |
-| 38 | `/ic sports mma` | `sports` | `mma` | [`icbot/features/sports.py:226`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/sports.py#L226) | Channel gate (`main.py:62`) | None | In-memory cache `_RSS_CACHE` | OddsAPI (`api.the-odds-api.com`), ESPN MMA RSS |
-| 39 | `/ic sports nba` | `sports` | `nba` | [`icbot/features/sports.py:216`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/sports.py#L216) | Channel gate (`main.py:62`) | None | In-memory cache `_RSS_CACHE` | OddsAPI (`api.the-odds-api.com`), ESPN NBA RSS |
-| 40 | `/ic sports nfl` | `sports` | `nfl` | [`icbot/features/sports.py:221`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/sports.py#L221) | Channel gate (`main.py:62`) | None | In-memory cache `_RSS_CACHE` | OddsAPI (`api.the-odds-api.com`), ESPN NFL RSS |
-| 41 | `/ic sports ufc` | `sports` | `ufc` | [`icbot/features/sports.py:231`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/sports.py#L231) | Channel gate (`main.py:62`) | None | In-memory cache `_RSS_CACHE` | OddsAPI (`api.the-odds-api.com`), ESPN MMA RSS |
+| 1 | `/ic admin llm_stop` | `admin` | `llm_stop_cmd` | [`icbot/features/admin.py:8`](../../icbot/features/admin.py#L8) | `is_admin_or_allowed` | None | `meta` | None |
+| 2 | `/ic admin llm_start` | `admin` | `llm_start_cmd` | [`icbot/features/admin.py:25`](../../icbot/features/admin.py#L25) | `is_admin_or_allowed` | None | `meta` | None |
+| 3 | `/ic admin move` | `admin` | `move` | [`icbot/features/invest.py:329`](../../icbot/features/invest.py#L329) | `is_admin_or_allowed` | None | `fun_stocks`, `fun_stock_events` | None |
+| 4 | `/ic admin set` | `admin` | `set_cmd` | [`icbot/features/invest.py:362`](../../icbot/features/invest.py#L362) | `is_admin_or_allowed` | None | `fun_stocks`, `fun_stock_events` | None |
+| 5 | `/ic admin sync_catalog` | `admin` | `sync_catalog` | [`icbot/features/invest.py:388`](../../icbot/features/invest.py#L388) | `is_admin_or_allowed` | None | `fun_stocks` | None |
+| 6 | `/ic admin weekroll` | `admin` | `weekroll` | [`icbot/features/invest.py:406`](../../icbot/features/invest.py#L406) | `is_admin_or_allowed` | None | `fun_stocks`, `fun_market_weeks` | None |
+| 7 | `/ic botinfo` | `ic` (root) | `botinfo` | [`icbot/features/info.py:55`](../../icbot/features/info.py#L55) | Channel gate (`main.py:62`) | None | None | None (reads local logo) |
+| 8 | `/ic casino blackjack` | `casino` | `blackjack` | [`icbot/features/blackjack.py:718`](../../icbot/features/blackjack.py#L718) | Channel gate (`main.py:62`) | `BlackjackView`, `BlackjackTerminalView` | `users`, `blackjack_users` | None |
+| 9 | `/ic casino payouts` | `casino` | `slots_payouts_cmd` | [`icbot/features/slots.py:95`](../../icbot/features/slots.py#L95) | Channel gate (`main.py:62`) | None | None | None |
+| 10 | `/ic casino roulette` | `casino` | `roulette_cmd` | [`icbot/features/roulette.py:67`](../../icbot/features/roulette.py#L67) | Channel gate (`main.py:62`) | None | `users` | None |
+| 11 | `/ic casino slots` | `casino` | `slots_cmd` | [`icbot/features/slots.py:24`](../../icbot/features/slots.py#L24) | Channel gate (`main.py:62`) | None | `users` | None |
+| 12 | `/ic dailyclaim` | `ic` (root) | `daily_cmd` | [`icbot/features/profile.py:129`](../../icbot/features/profile.py#L129) | Channel gate (`main.py:62`) | None | `users` | None |
+| 13 | `/ic exam add` | `exam` | `exam_add` | [`icbot/features/exams.py:174`](../../icbot/features/exams.py#L174) | `is_admin_or_allowed` | None | `exams` | None |
+| 14 | `/ic exam clear` | `exam` | `exam_clear` | [`icbot/features/exams.py:275`](../../icbot/features/exams.py#L275) | `is_admin_or_allowed` | None | `exams` | None |
+| 15 | `/ic exam list` | `exam` | `exam_list` | [`icbot/features/exams.py:130`](../../icbot/features/exams.py#L130) | Channel gate (`main.py:62`) | None | `exams` | None |
+| 16 | `/ic exam remove` | `exam` | `exam_remove` | [`icbot/features/exams.py:252`](../../icbot/features/exams.py#L252) | `is_admin_or_allowed` | None | `exams` | None |
+| 17 | `/ic grades` | `ic` (root) | `grades_command` | [`icbot/features/grades.py:183`](../../icbot/features/grades.py#L183) | Channel gate (`main.py:62`) | None | `course_cache` (`tmu_grades.db`) | `https://tmu.grades.zone` (GET HTML) |
+| 18 | `/ic help` | `ic` (root) | `ic_help` | [`icbot/features/help.py:116`](../../icbot/features/help.py#L116) | Channel gate (`main.py:62`) | `HelpPaginationView` | None | None |
+| 19 | `/ic icse buy` | `icse` | `buy` | [`icbot/features/invest.py:158`](../../icbot/features/invest.py#L158) | Channel gate (`main.py:62`) | None | `users`, `fun_stocks`, `fun_positions`, `fun_trades` | None |
+| 20 | `/ic icse cover` | `icse` | `cover_cmd` | [`icbot/features/invest.py:233`](../../icbot/features/invest.py#L233) | Channel gate (`main.py:62`) | None | `users`, `fun_stocks`, `fun_positions`, `fun_trades` | None |
+| 21 | `/ic icse history` | `icse` | `history_cmd` | [`icbot/features/invest.py:291`](../../icbot/features/invest.py#L291) | Channel gate (`main.py:62`) | None | `fun_stocks`, `fun_stock_events` | None |
+| 22 | `/ic icse market` | `icse` | `market` | [`icbot/features/invest.py:64`](../../icbot/features/invest.py#L64) | Channel gate (`main.py:62`) | None | `fun_stocks` | None |
+| 23 | `/ic icse portfolio` | `icse` | `portfolio` | [`icbot/features/invest.py:115`](../../icbot/features/invest.py#L115) | Channel gate (`main.py:62`) | None | `users`, `fun_stocks`, `fun_positions` | None |
+| 24 | `/ic icse quote` | `icse` | `quote` | [`icbot/features/invest.py:95`](../../icbot/features/invest.py#L95) | Channel gate (`main.py:62`) | None | `fun_stocks` | None |
+| 25 | `/ic icse sell` | `icse` | `sell` | [`icbot/features/invest.py:182`](../../icbot/features/invest.py#L182) | Channel gate (`main.py:62`) | None | `users`, `fun_stocks`, `fun_positions`, `fun_trades` | None |
+| 26 | `/ic icse short` | `icse` | `short_cmd` | [`icbot/features/invest.py:208`](../../icbot/features/invest.py#L208) | Channel gate (`main.py:62`) | None | `users`, `fun_stocks`, `fun_positions`, `fun_trades` | None |
+| 27 | `/ic icse stock` | `icse` | `stock` | [`icbot/features/invest.py:419`](../../icbot/features/invest.py#L419) | Channel gate (`main.py:62`) | None | `meta` (`stock_value`), `stock_events` | None |
+| 28 | `/ic icse trades` | `icse` | `trades_cmd` | [`icbot/features/invest.py:260`](../../icbot/features/invest.py#L260) | Channel gate (`main.py:62`) | None | `fun_trades` | None |
+| 29 | `/ic jobs` | `ic` (root) | `jobs_cmd` | [`icbot/features/jobs.py:56`](../../icbot/features/jobs.py#L56) | Channel gate (`main.py:62`) | None | `job_seen` | None |
+| 30 | `/ic leaderboard` | `ic` (root) | `leaderboard_root` | [`icbot/features/lc_leaderboard.py:176`](../../icbot/features/lc_leaderboard.py#L176) | Channel gate (`main.py:62`) | `LeaderboardView` | `users`, `fun_stocks`, `fun_positions` | None |
+| 31 | `/ic notes` | `ic` (root) | `notes_cmd` | [`icbot/features/notes.py:122`](../../icbot/features/notes.py#L122) | Channel gate (`main.py:62`) | None | In-memory cache `_NOTES_CACHE` | Configured `NOTES_SITES` SPA endpoints (GET) |
+| 32 | `/ic prof` | `ic` (root) | `prof_cmd` | [`icbot/features/prof.py:187`](../../icbot/features/prof.py#L187) | Channel gate (`main.py:62`) | None | None | RateMyProfessors GraphQL (`https://www.ratemyprofessors.com/graphql`) |
+| 33 | `/ic profile` | `ic` (root) | `profile_cmd` | [`icbot/features/profile.py:32`](../../icbot/features/profile.py#L32) | Channel gate (`main.py:62`) | None | `users`, `fun_positions`, `blackjack_users` | None |
+| 34 | `/ic report` | `ic` (root) | `report_cmd` | [`icbot/features/report.py:22`](../../icbot/features/report.py#L22) | Channel gate (`main.py:62`) | None | `fun_stocks`, `meta` | Yahoo Finance Quote API, Alternative.me Fear & Greed API |
+| 35 | `/ic resume` | `ic` (root) | `resume_cmd` | [`icbot/features/resume.py:144`](../../icbot/features/resume.py#L144) | Cooldown (1/1800s) + Killswitch | None | None | Google Gemini REST API (`generateContent`) |
+| 36 | `/ic serverinfo` | `ic` (root) | `serverinfo` | [`icbot/features/info.py:9`](../../icbot/features/info.py#L9) | Channel gate (`main.py:62`) | None | None | None |
+| 37 | `/ic sports boxing` | `sports` | `boxing` | [`icbot/features/sports.py:236`](../../icbot/features/sports.py#L236) | Channel gate (`main.py:62`) | None | In-memory cache `_RSS_CACHE` | OddsAPI (`api.the-odds-api.com`), ESPN Boxing RSS |
+| 38 | `/ic sports mma` | `sports` | `mma` | [`icbot/features/sports.py:226`](../../icbot/features/sports.py#L226) | Channel gate (`main.py:62`) | None | In-memory cache `_RSS_CACHE` | OddsAPI (`api.the-odds-api.com`), ESPN MMA RSS |
+| 39 | `/ic sports nba` | `sports` | `nba` | [`icbot/features/sports.py:216`](../../icbot/features/sports.py#L216) | Channel gate (`main.py:62`) | None | In-memory cache `_RSS_CACHE` | OddsAPI (`api.the-odds-api.com`), ESPN NBA RSS |
+| 40 | `/ic sports nfl` | `sports` | `nfl` | [`icbot/features/sports.py:221`](../../icbot/features/sports.py#L221) | Channel gate (`main.py:62`) | None | In-memory cache `_RSS_CACHE` | OddsAPI (`api.the-odds-api.com`), ESPN NFL RSS |
+| 41 | `/ic sports ufc` | `sports` | `ufc` | [`icbot/features/sports.py:231`](../../icbot/features/sports.py#L231) | Channel gate (`main.py:62`) | None | In-memory cache `_RSS_CACHE` | OddsAPI (`api.the-odds-api.com`), ESPN MMA RSS |
 
 ---
 
@@ -81,19 +81,19 @@ All slash commands register onto the root group `/ic` defined in [`icbot/app.py:
 
 ### 3.1 Import Sequence & Module Execution Trace
 When `main.py` is imported or executed, the following top-level side effects occur immediately:
-1. **Dynamic Command Registration Side Effects ([`main.py:22-38`](file:///home/sukesan/dev/discord/campus-bot/main.py#L22-L38)):**
+1. **Dynamic Command Registration Side Effects ([`main.py:22-38`](../../main.py#L22-L38)):**
    - 17 feature modules are explicitly imported with `# noqa: F401`.
-   - Each module executes module-level decorators (`@ic.command`, `@casino.command`, `@admin.command`, `@exam.command`, `@sports.command`, `@icse.command`), mutating the `Group` command trees in [`icbot/app.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/app.py).
+   - Each module executes module-level decorators (`@ic.command`, `@casino.command`, `@admin.command`, `@exam.command`, `@sports.command`, `@icse.command`), mutating the `Group` command trees in [`icbot/app.py`](../../icbot/app.py).
    - Removing any feature import silently drops the corresponding slash command from registration.
-2. **Environment & File I/O Side Effects ([`main.py:40-42`](file:///home/sukesan/dev/discord/campus-bot/main.py#L40-L42)):**
+2. **Environment & File I/O Side Effects ([`main.py:40-42`](../../main.py#L40-L42)):**
    - `load_dotenv(override=True)` unconditionally reads `.env` from disk and overwrites existing process environment variables in `os.environ`.
    - `Settings.from_env()` is called, reading process environment variables into a frozen dataclass instance.
    - `Database(settings.db_path)` is instantiated, storing the database path string.
 3. **Heavy C-Extension & Scientific Library Loading:**
-   - [`icbot/features/grades.py:10-11`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/grades.py#L10-L11) imports `matplotlib.pyplot` and `numpy`.
+   - [`icbot/features/grades.py:10-11`](../../icbot/features/grades.py#L10-L11) imports `matplotlib.pyplot` and `numpy`.
    - Matplotlib initializes GUI font caches and backend machinery at import time, introducing substantial memory overhead (~40-70MB) even when `/ic grades` is never called.
    - Line 121 sets global matplotlib style: `plt.style.use('dark_background')`, mutating global state.
-4. **Discord Client & Tree Handler Binding ([`main.py:44-100`](file:///home/sukesan/dev/discord/campus-bot/main.py#L44-L100)):**
+4. **Discord Client & Tree Handler Binding ([`main.py:44-100`](../../main.py#L44-L100)):**
    - Instantiates `discord.Intents` with `guilds=True`, `messages=True`, `message_content=True`.
    - Instantiates `commands.Bot(command_prefix="!", intents=intents)`.
    - Binds `@bot.tree.interaction_check` to `_ic_tree_interaction_check`.
@@ -101,13 +101,13 @@ When `main.py` is imported or executed, the following top-level side effects occ
    - Binds `@bot.event` to `on_ready` and `on_message`.
 
 ### 3.2 In-Memory Global Caches and Shared State
-- **Notes Scrape Cache ([`icbot/features/notes.py:19`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/notes.py#L19)):** Module-global tuple `_NOTES_CACHE = (0.0, {})` with 6-hour TTL (`_CACHE_TTL_SECONDS = 21600`).
-- **Sports RSS Cache ([`icbot/features/sports.py:37`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/sports.py#L37)):** Module-global dict `_RSS_CACHE = {}` with 10-minute TTL (`_RSS_TTL_SECONDS = 600`).
+- **Notes Scrape Cache ([`icbot/features/notes.py:19`](../../icbot/features/notes.py#L19)):** Module-global tuple `_NOTES_CACHE = (0.0, {})` with 6-hour TTL (`_CACHE_TTL_SECONDS = 21600`).
+- **Sports RSS Cache ([`icbot/features/sports.py:37`](../../icbot/features/sports.py#L37)):** Module-global dict `_RSS_CACHE = {}` with 10-minute TTL (`_RSS_TTL_SECONDS = 600`).
 - **Persistent HTTP Sessions & Crumb Caches:**
-  - [`icbot/services/yahoo_quotes.py:30-38`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/yahoo_quotes.py#L30-L38): Global `_SESSION`, `_SESSION_LOCK`, `_CRUMB`, `_CRUMB_EXP_TS`, `_CRUMB_LOCK`.
-  - [`icbot/services/btc_esplora.py:19-21`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/btc_esplora.py#L19-L21): Global `_SESSION`, `_LOCK`.
-  - [`icbot/services/crypto_fng.py:16-18`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/crypto_fng.py#L16-L18): Global `_SESSION`, `_LOCK`.
-- **Bot Dynamic Attributes (Attached in [`main.py:300-310`](file:///home/sukesan/dev/discord/campus-bot/main.py#L300-L310)):**
+  - [`icbot/services/yahoo_quotes.py:30-38`](../../icbot/services/yahoo_quotes.py#L30-L38): Global `_SESSION`, `_SESSION_LOCK`, `_CRUMB`, `_CRUMB_EXP_TS`, `_CRUMB_LOCK`.
+  - [`icbot/services/btc_esplora.py:19-21`](../../icbot/services/btc_esplora.py#L19-L21): Global `_SESSION`, `_LOCK`.
+  - [`icbot/services/crypto_fng.py:16-18`](../../icbot/services/crypto_fng.py#L16-L18): Global `_SESSION`, `_LOCK`.
+- **Bot Dynamic Attributes (Attached in [`main.py:300-310`](../../main.py#L300-L310)):**
   - `bot.settings = settings`
   - `bot.db = db`
   - `bot._llm_killed = True / False` (persisted to `meta` table)
@@ -142,19 +142,19 @@ flowchart TD
 ```
 
 ### 4.1 Gate Implementations
-1. **Tree-Wide Channel Gate ([`main.py:62-96`](file:///home/sukesan/dev/discord/campus-bot/main.py#L62-L96)):**
+1. **Tree-Wide Channel Gate ([`main.py:62-96`](../../main.py#L62-L96)):**
    - Intercepts all interactions via `@bot.tree.interaction_check`.
    - Regular users are strictly quarantined to `USER_COMMAND_CHANNEL_ID` if configured.
    - Bypasses check if interaction is in Direct Messages or not an `/ic` command.
-2. **Role & Admin Validator ([`icbot/permissions.py:15-28`](file:///home/sukesan/dev/discord/campus-bot/icbot/permissions.py#L15-L28)):**
+2. **Role & Admin Validator ([`icbot/permissions.py:15-28`](../../icbot/permissions.py#L15-L28)):**
    - Returns `True` if `member.guild_permissions.administrator` is set.
    - Returns `True` if any member role matches IDs in `settings.allowed_role_ids`.
    - Returns `False` otherwise.
 3. **Command-Level Admin Enforcement:**
    - Explicit inline validation calling `is_admin_or_allowed`:
-     - [`icbot/features/admin.py:9, 26`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/admin.py#L9) (`llm_stop`, `llm_start`)
-     - [`icbot/features/invest.py:330, 363, 389, 407`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/invest.py#L330) (`move`, `set`, `sync_catalog`, `weekroll`)
-     - [`icbot/features/exams.py:175, 253, 276`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/exams.py#L175) (`exam add`, `exam remove`, `exam clear`)
+     - [`icbot/features/admin.py:9, 26`](../../icbot/features/admin.py#L9) (`llm_stop`, `llm_start`)
+     - [`icbot/features/invest.py:330, 363, 389, 407`](../../icbot/features/invest.py#L330) (`move`, `set`, `sync_catalog`, `weekroll`)
+     - [`icbot/features/exams.py:175, 253, 276`](../../icbot/features/exams.py#L175) (`exam add`, `exam remove`, `exam clear`)
 
 ---
 
@@ -162,16 +162,16 @@ flowchart TD
 
 | View Class Name | Source Location | Buttons / UI Components | Timeout | State & Memory Management | Expiration / Timeout Behavior |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `BlackjackView` | [`icbot/features/blackjack.py:400`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/blackjack.py#L400) | `Hit` (primary), `Stand` (secondary), `Double Down` (primary), `Split` (primary), `Forfeit` (danger) | 300s (5m) (`INACTIVITY_SECONDS`) | Bound to `BJSession` via `SessionManager`. Locked with `asyncio.Lock`. | Triggers `_forfeit_now()`, player auto-loses bet to prevent abandonment abuse. |
-| `BlackjackTerminalView` | [`icbot/features/blackjack.py:245`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/blackjack.py#L245) | `Play Again ($bet)` (success), `Double Bet ($2x)` (primary) | 900s (15m) (`TERMINAL_VIEW_TIMEOUT_SECONDS`) | Carries `bet`, `user_id`, `guild_id`. | Disables all child buttons; edits original message to persist disabled state. |
-| `HelpPaginationView` | [`icbot/features/help.py:68`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/help.py#L68) | `◀ Previous` (secondary), `Next ▶` (primary) | 180s (3m) | Stores `current_page`, `total_pages`, `settings`. Dynamically disables at boundaries. | Standard View timeout (no custom disable hook implemented). |
-| `LeaderboardView` | [`icbot/features/lc_leaderboard.py:32`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/lc_leaderboard.py#L32) | `Prev` (secondary), `Next` (secondary) | 300s (5m) (`VIEW_TIMEOUT_SECONDS`) | Locked with `asyncio.Lock`. Restricts button clicks to `owner_id`. | `on_timeout()` iterates children, sets `child.disabled = True`, and edits message. |
+| `BlackjackView` | [`icbot/features/blackjack.py:400`](../../icbot/features/blackjack.py#L400) | `Hit` (primary), `Stand` (secondary), `Double Down` (primary), `Split` (primary), `Forfeit` (danger) | 300s (5m) (`INACTIVITY_SECONDS`) | Bound to `BJSession` via `SessionManager`. Locked with `asyncio.Lock`. | Triggers `_forfeit_now()`, player auto-loses bet to prevent abandonment abuse. |
+| `BlackjackTerminalView` | [`icbot/features/blackjack.py:245`](../../icbot/features/blackjack.py#L245) | `Play Again ($bet)` (success), `Double Bet ($2x)` (primary) | 900s (15m) (`TERMINAL_VIEW_TIMEOUT_SECONDS`) | Carries `bet`, `user_id`, `guild_id`. | Disables all child buttons; edits original message to persist disabled state. |
+| `HelpPaginationView` | [`icbot/features/help.py:68`](../../icbot/features/help.py#L68) | `◀ Previous` (secondary), `Next ▶` (primary) | 180s (3m) | Stores `current_page`, `total_pages`, `settings`. Dynamically disables at boundaries. | Standard View timeout (no custom disable hook implemented). |
+| `LeaderboardView` | [`icbot/features/lc_leaderboard.py:32`](../../icbot/features/lc_leaderboard.py#L32) | `Prev` (secondary), `Next` (secondary) | 300s (5m) (`VIEW_TIMEOUT_SECONDS`) | Locked with `asyncio.Lock`. Restricts button clicks to `owner_id`. | `on_timeout()` iterates children, sets `child.disabled = True`, and edits message. |
 
 ---
 
 ## 6. Background Asyncio Tasks & Polling Loops
 
-All background tasks are initiated once during [`main.py:on_ready`](file:///home/sukesan/dev/discord/campus-bot/main.py#L296) using guarded startup flags (`bot._<task>_started = True`).
+All background tasks are initiated once during [`main.py:on_ready`](../../main.py#L296) using guarded startup flags (`bot._<task>_started = True`).
 
 ```mermaid
 flowchart TD
@@ -190,52 +190,52 @@ flowchart TD
 ```
 
 ### Detailed Loop Specifications
-1. **TTC Transit Poller ([`main.py:125-134`](file:///home/sukesan/dev/discord/campus-bot/main.py#L125-L134)):**
+1. **TTC Transit Poller ([`main.py:125-134`](../../main.py#L125-L134)):**
    - **Target Channel:** `settings.ttc_alerts_channel_id`
-   - **Poller Method:** `poll_and_post_ttc(bot)` ([`icbot/tasks/ttc_alerts.py:82`](file:///home/sukesan/dev/discord/campus-bot/icbot/tasks/ttc_alerts.py#L82))
+   - **Poller Method:** `poll_and_post_ttc(bot)` ([`icbot/tasks/ttc_alerts.py:82`](../../icbot/tasks/ttc_alerts.py#L82))
    - **Interval:** `max(30, settings.ttc_poll_seconds)` (Default: 120s)
    - **Checkpoint State:** `meta.ttc_account_id`, `meta.ttc_last_status_id`
    - **External Service:** Mastodon API (`/api/v2/search`, `/api/v1/accounts/{id}/statuses`)
-2. **GO Transit Poller ([`main.py:138-147`](file:///home/sukesan/dev/discord/campus-bot/main.py#L138-L147)):**
+2. **GO Transit Poller ([`main.py:138-147`](../../main.py#L138-L147)):**
    - **Target Channel:** `settings.go_alerts_channel_id` (fallback: `ttc_alerts_channel_id`)
-   - **Poller Method:** `poll_and_post_go_alerts(bot)` ([`icbot/tasks/go_alerts.py:173`](file:///home/sukesan/dev/discord/campus-bot/icbot/tasks/go_alerts.py#L173))
+   - **Poller Method:** `poll_and_post_go_alerts(bot)` ([`icbot/tasks/go_alerts.py:173`](../../icbot/tasks/go_alerts.py#L173))
    - **Interval:** `max(60, settings.go_poll_seconds)` (Default: 180s)
    - **Checkpoint State:** `meta.go_last_servicealert_code`
    - **External Service:** Metrolinx Open Data API (`/ServiceUpdate/ServiceAlert/All`)
-3. **Greenhouse/Lever Job Alerts ([`main.py:148-175`](file:///home/sukesan/dev/discord/campus-bot/main.py#L148-L175)):**
+3. **Greenhouse/Lever Job Alerts ([`main.py:148-175`](../../main.py#L148-L175)):**
    - **Target Channel:** `settings.job_alerts_channel_id` (fallback: `jobs_channel_id`)
-   - **Poller Method:** `poll_and_post_jobs(bot)` ([`icbot/tasks/job_alerts.py:400`](file:///home/sukesan/dev/discord/campus-bot/icbot/tasks/job_alerts.py#L400))
+   - **Poller Method:** `poll_and_post_jobs(bot)` ([`icbot/tasks/job_alerts.py:400`](../../icbot/tasks/job_alerts.py#L400))
    - **Interval:** `max(60, settings.jobs_poll_seconds)` (Default: 600s)
    - **Checkpoint State:** Table `job_seen` (composite primary key `source, external_id`)
    - **External Service:** Greenhouse Boards API, Lever Postings API
-4. **Workday Job Alerts ([`main.py:177-204`](file:///home/sukesan/dev/discord/campus-bot/main.py#L177-L204)):**
+4. **Workday Job Alerts ([`main.py:177-204`](../../main.py#L177-L204)):**
    - **Target Channel:** Same as above
-   - **Poller Method:** `poll_and_post_workday_jobs(bot)` ([`icbot/tasks/jobs_workday_alerts.py:71`](file:///home/sukesan/dev/discord/campus-bot/icbot/tasks/jobs_workday_alerts.py#L71))
+   - **Poller Method:** `poll_and_post_workday_jobs(bot)` ([`icbot/tasks/jobs_workday_alerts.py:71`](../../icbot/tasks/jobs_workday_alerts.py#L71))
    - **Interval:** `max(60, settings.workday_poll_seconds or jobs_poll_seconds)` (Default: 600s)
    - **Checkpoint State:** Tables `job_seen`, `workday_cxs_cache`
    - **External Service:** Scrapes/discovers Workday CXS endpoints (`https://{host}/wday/cxs/{tenant}/{site}/jobs`)
-5. **Real-Market Volatility Watcher ([`main.py:207-216`](file:///home/sukesan/dev/discord/campus-bot/main.py#L207-L216)):**
+5. **Real-Market Volatility Watcher ([`main.py:207-216`](../../main.py#L207-L216)):**
    - **Target Channel:** `settings.market_watch_channel_id` (fallback: `stock_channel_id`)
-   - **Poller Method:** `poll_and_post_market_watch(bot)` ([`icbot/tasks/market_watch.py:92`](file:///home/sukesan/dev/discord/campus-bot/icbot/tasks/market_watch.py#L92))
+   - **Poller Method:** `poll_and_post_market_watch(bot)` ([`icbot/tasks/market_watch.py:92`](../../icbot/tasks/market_watch.py#L92))
    - **Interval:** `max(10, settings.market_watch_poll_seconds)` (Default: 60s in env, 300s code)
    - **Checkpoint State:** `meta.mw_vix_latched`, `meta.mw_last_vix_alert_ts`, `meta.mw_last_stock_alert_ts:{sym}`
    - **External Service:** Yahoo Finance Quote API (`^VIX`, `SPY`, `QQQ`, custom tickers)
-6. **Scheduled Daily Market Report ([`main.py:258-283`](file:///home/sukesan/dev/discord/campus-bot/main.py#L258-L283)):**
+6. **Scheduled Daily Market Report ([`main.py:258-283`](../../main.py#L258-L283)):**
    - **Target Channel:** `settings.market_daily_report_channel_id` (fallback: `stock_channel_id`)
-   - **Poller Method:** `post_daily_market_report(bot)` ([`icbot/tasks/market_daily_report.py:225`](file:///home/sukesan/dev/discord/campus-bot/icbot/tasks/market_daily_report.py#L225))
+   - **Poller Method:** `post_daily_market_report(bot)` ([`icbot/tasks/market_daily_report.py:225`](../../icbot/tasks/market_daily_report.py#L225))
    - **Schedule:** Calculated sleep until `market_daily_report_time` (Default: 16:30 in `market_daily_report_tz`)
    - **Side Effect:** Automatically adjusts fun stock prices based on real S&P 500 move via `_apply_sp500_move()`!
    - **Checkpoint State:** `meta.market_daily_report_last_date`, `meta.fun_auto_move_last_date`
    - **External Service:** Yahoo Finance, Alternative.me Fear & Greed API
-7. **Bitcoin Address Movement Watcher ([`main.py:284-293`](file:///home/sukesan/dev/discord/campus-bot/main.py#L284-L293)):**
+7. **Bitcoin Address Movement Watcher ([`main.py:284-293`](../../main.py#L284-L293)):**
    - **Target Channel:** `settings.btc_watch_channel_id`
-   - **Poller Method:** `poll_and_post_btc_watch(bot)` ([`icbot/tasks/btc_watch.py:69`](file:///home/sukesan/dev/discord/campus-bot/icbot/tasks/btc_watch.py#L69))
+   - **Poller Method:** `poll_and_post_btc_watch(bot)` ([`icbot/tasks/btc_watch.py:69`](../../icbot/tasks/btc_watch.py#L69))
    - **Interval:** `max(30, settings.btc_watch_poll_seconds)` (Default: 300s)
    - **Checkpoint State:** `meta.btc_last_tx:{addr}`, `meta.btc_last_alert_any`
    - **External Service:** Blockstream Esplora API (`https://blockstream.info/api/address/{addr}/txs`)
-8. **LLM Mention Handler ([`main.py:515-533`](file:///home/sukesan/dev/discord/campus-bot/main.py#L515-L533)):**
+8. **LLM Mention Handler ([`main.py:515-533`](../../main.py#L515-L533)):**
    - **Trigger:** On message mentioning `bot.user`
-   - **Handler:** `maybe_handle_llm_mention(bot, message)` ([`icbot/tasks/llm_assistant.py:476`](file:///home/sukesan/dev/discord/campus-bot/icbot/tasks/llm_assistant.py#L476))
+   - **Handler:** `maybe_handle_llm_mention(bot, message)` ([`icbot/tasks/llm_assistant.py:476`](../../icbot/tasks/llm_assistant.py#L476))
    - **Safety / State:** Checks `bot._llm_killed`, applies 3s per-channel cooldown, parses multimodal images, loads lore from `tools/lore.tmu_files.json`
    - **External Service:** Google Gemini Developer REST API (`models/gemini-*:generateContent`)
 
@@ -442,12 +442,12 @@ sequenceDiagram
 | *(unmapped)* | `ALPHAVANTAGE_API_KEY` | *(unused)* | *(none)* | `""` | **Orphaned Key**: Present in `.env.example:80`, unused anywhere in source! |
 
 ### 9.2 Direct `os.getenv` Bypasses Outside `Settings`
-1. [`icbot/features/info.py:58`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/info.py#L58): `os.getenv("LLM_MODEL", "gemini-3.1-flash-lite-preview")` — Bypasses `settings.gemini_model`.
-2. [`icbot/features/sports.py:62`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/sports.py#L62): `os.getenv("ODDS_API_KEY", "")` — Fallback if not on settings.
-3. [`icbot/features/sports.py:69`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/sports.py#L69): `os.getenv(f"SPORTS_RSS_{sport.upper()}", "")` — Dynamic per-sport RSS override keys.
-4. [`icbot/tasks/llm_assistant.py:36`](file:///home/sukesan/dev/discord/campus-bot/icbot/tasks/llm_assistant.py#L36): `os.getenv("LORE_PATH")` — Bypasses `Settings`.
-5. [`tools/lore_loader.py:22`](file:///home/sukesan/dev/discord/campus-bot/tools/lore_loader.py#L22): `os.getenv("LORE_PATH")` — Standalone tool helper.
-6. [`tools/purge_global_commands.py:6`](file:///home/sukesan/dev/discord/campus-bot/tools/purge_global_commands.py#L6): `os.getenv("DISCORD_TOKEN")` — Standalone purge tool.
+1. [`icbot/features/info.py:58`](../../icbot/features/info.py#L58): `os.getenv("LLM_MODEL", "gemini-3.1-flash-lite-preview")` — Bypasses `settings.gemini_model`.
+2. [`icbot/features/sports.py:62`](../../icbot/features/sports.py#L62): `os.getenv("ODDS_API_KEY", "")` — Fallback if not on settings.
+3. [`icbot/features/sports.py:69`](../../icbot/features/sports.py#L69): `os.getenv(f"SPORTS_RSS_{sport.upper()}", "")` — Dynamic per-sport RSS override keys.
+4. [`icbot/tasks/llm_assistant.py:36`](../../icbot/tasks/llm_assistant.py#L36): `os.getenv("LORE_PATH")` — Bypasses `Settings`.
+5. [`tools/lore_loader.py:22`](../../tools/lore_loader.py#L22): `os.getenv("LORE_PATH")` — Standalone tool helper.
+6. [`tools/purge_global_commands.py:6`](../../tools/purge_global_commands.py#L6): `os.getenv("DISCORD_TOKEN")` — Standalone purge tool.
 
 ---
 

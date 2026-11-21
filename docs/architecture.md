@@ -195,7 +195,7 @@ sequenceDiagram
 
 ## 5. Lifecycle Management and Clean Shutdown
 
-The application guarantees clean process lifecycle handling through [`CampusBot._cleanup_runtime()`](file:///home/sukesan/dev/discord/campus-bot/icbot/bot.py):
+The application guarantees clean process lifecycle handling through [`CampusBot._cleanup_runtime()`](../icbot/bot.py):
 1. **Signal Interception:** `SIGTERM` or `SIGINT` triggers `CampusBot.close()`.
 2. **Supervisor Cancellation:** All active background asyncio tasks are cancelled with `supervisor.stop_all()`.
 3. **HTTP Session Teardown:** Open `aiohttp.ClientSession` pools are drained and closed.

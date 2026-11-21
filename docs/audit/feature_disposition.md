@@ -97,7 +97,7 @@ Every module in `icbot/` has been traced for registration mechanisms, static/dyn
 
 ## 4. Database Schema Inventory & Data Protection Risk Assessment
 
-The bot currently maintains two distinct SQLite database files. The schema is inventoried below from code definitions in [`icbot/db.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/db.py) and [`icbot/features/grades.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/grades.py).
+The bot currently maintains two distinct SQLite database files. The schema is inventoried below from code definitions in [`icbot/db.py`](../../icbot/db.py) and [`icbot/features/grades.py`](../../icbot/features/grades.py).
 
 ### 4.1 Database 1: `ic_stock.db` (Configured via `DB_PATH`)
 ```mermaid
@@ -240,12 +240,12 @@ This checklist documents delicate legacy runtime behaviors that must be preserve
 
 ### 5.1 Slash Command Parity & Signature Mismatches
 - [ ] **`/ic exam` vs `/ic exams` Mismatch:**
-  - *Reality:* App command group registered as `/ic exam` ([`icbot/app.py:10`](file:///home/sukesan/dev/discord/campus-bot/icbot/app.py#L10)) with subcommands: `list`, `add`, `remove`, `clear`.
+  - *Reality:* App command group registered as `/ic exam` ([`icbot/app.py:10`](../../icbot/app.py#L10)) with subcommands: `list`, `add`, `remove`, `clear`.
   - *Documentation:* `README.md:55` advertises `/ic exams`.
   - *Preservation Action:* Retain `/ic exam <subcommand>` and add a top-level alias `/ic exams` mapping to `/ic exam list` for backward compatibility.
 - [ ] **`/ic dailyclaim` vs `/ic daily` Mismatch:**
-  - *Reality:* Command is registered as `/ic dailyclaim` ([`icbot/features/profile.py:128`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/profile.py#L128)).
-  - *Internal Text:* [`icbot/features/profile.py:98`](file:///home/sukesan/dev/discord/campus-bot/icbot/features/profile.py#L98) instructs users: `"✅ Available now! Use /ic daily"`.
+  - *Reality:* Command is registered as `/ic dailyclaim` ([`icbot/features/profile.py:128`](../../icbot/features/profile.py#L128)).
+  - *Internal Text:* [`icbot/features/profile.py:98`](../../icbot/features/profile.py#L98) instructs users: `"✅ Available now! Use /ic daily"`.
   - *Preservation Action:* Add `/ic daily` command alias pointing to `daily_cmd`.
 - [ ] **Admin-Only Commands:**
   - Exactly 6 command routes require admin permissions:
@@ -330,7 +330,7 @@ The following candidate modules or functions have sparse or zero static inbound 
 
 | Candidate Module / Symbol | Current Inbound References | Dynamic Execution / Runtime Role | Evidence & Verification Path | Final Disposition |
 | :--- | :--- | :--- | :--- | :--- |
-| **`icbot/utils.py:clamp_nonnegative`** | 0 static callers | Utility helper in `utils.py` | Line 6 in [`icbot/utils.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/utils.py#L6). Unused by current commands, but zero side-effect. | **Investigate (Keep)** |
+| **`icbot/utils.py:clamp_nonnegative`** | 0 static callers | Utility helper in `utils.py` | Line 6 in [`icbot/utils.py`](../../icbot/utils.py#L6). Unused by current commands, but zero side-effect. | **Investigate (Keep)** |
 | **`tools/lore_loader.py`** | 0 inbound imports in `main.py` or `icbot/` | Standalone CLI script / devtool for validating lore JSON files | Referenced in `README.md:184`. Loads and parses `lore.tmu_files.json`. | **Investigate (Keep as Dev Tool)** |
 | **`tools/purge_global_commands.py`**| 0 inbound imports | Standalone Discord maintenance script | High operational risk, but intentional utility for clearing rogue global slash commands. | **Investigate (Keep with Confirmation)** |
 | **`tools/scraper.py`** | 0 inbound imports | Historical one-off parser | References missing `tmu_raw.html`. Was used to build `grades.py` soup parsing logic. | **Investigate (Archive candidate)** |

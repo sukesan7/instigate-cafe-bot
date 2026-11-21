@@ -1,8 +1,8 @@
 # Instigate Cafe Bot — Privacy Model, Data Flows & Deletion Policy
 
 **Document Version:** 2.1.0 (Phase 12 Privacy & Data Contract Specification)  
-**Reference Specification:** [`docs/privacy/data-map.md`](file:///home/sukesan/dev/discord/campus-bot/docs/privacy/data-map.md)  
-**Primary Implementation:** [`icbot/services/user_service.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/user_service.py)  
+**Reference Specification:** [`docs/privacy/data-map.md`](privacy/data-map.md)  
+**Primary Implementation:** [`icbot/services/user_service.py`](../icbot/services/user_service.py)  
 **Storage Architecture:** Local SQLite 3 (`DB_PATH`, container default `/data/campus.db`) with Write-Ahead Logging (WAL)  
 **Scope Notice:** This document describes the verified technical privacy controls, data flows, retention boundaries, and erasure/anonymization procedures implemented in code. It does not constitute formal legal counsel or an automated regulatory (GDPR/CCPA) compliance certification.
 
@@ -20,7 +20,7 @@ The Instigate Cafe Bot operates on **data minimization** principles:
 
 ## 2. Authoritative SQLite Data Classification & Storage Matrix
 
-Every table in [`icbot/db.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/db.py) has been audited for user-addressable identifiers:
+Every table in [`icbot/db.py`](../icbot/db.py) has been audited for user-addressable identifiers:
 
 | SQLite Table | Scope | User-Identifiable Fields | Retention Window | `UserStore.delete_user_data()` Behavior |
 |---|---|---|---|---|
@@ -92,13 +92,13 @@ sequenceDiagram
 ## 5. Deterministic Data Export & Right-to-be-Forgotten Erasure / Anonymization Contract
 
 ### 5.1 Deterministic Batched Export (`UserStore.export_user_data()`)
-[`UserStore.export_user_data()`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/user_service.py) exports all user-addressable records for `(guild_id, user_id)` in a machine-readable JSON dictionary (`format_version: 2`):
+[`UserStore.export_user_data()`](../icbot/services/user_service.py) exports all user-addressable records for `(guild_id, user_id)` in a machine-readable JSON dictionary (`format_version: 2`):
 - **Covered Tables:** `profile` (`users`), `blackjack` (`blackjack_users`), `positions` (`fun_positions`), `trades` (`fun_trades`), `ledger` (`economy_ledger`), `exams_created` (`exams`), `academic_resources_added` (`academic_resources`), and `job_preferences` (`user_job_preferences`, explicitly tagged with `"scope": "global_user"`).
 - **No Hidden `LIMIT 100` Truncation:** Queries execute in deterministic pages (`batch_size=250` by default) up to a configurable memory-safety ceiling (`max_rows_per_table=5000`, or `None` for unbounded).
 - **Honest Truncation Reporting:** If any table exceeds `max_rows_per_table`, the export sets `"truncated": True`, populates `pagination.total_counts` vs. exported counts, and appends an explicit human-readable warning in `"warnings"`.
 
 ### 5.2 Atomic Deletion & De-Identification (`UserStore.delete_user_data()`)
-[`UserStore.delete_user_data()`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/user_service.py) executes inside a single `BEGIN IMMEDIATE` write transaction (`db.write_transaction()`):
+[`UserStore.delete_user_data()`](../icbot/services/user_service.py) executes inside a single `BEGIN IMMEDIATE` write transaction (`db.write_transaction()`):
 1. **Guild Profile & Game State Hard-Deleted:** Removes rows for `(guild_id, user_id)` from `users`, `blackjack_users`, and `fun_positions`.
 2. **Cross-Guild Job Preferences Guard:** Checks whether `user_id` still has active profiles in any other guild (`SELECT COUNT(1) FROM users WHERE user_id=? AND guild_id!=?`). `user_job_preferences` is deleted only when no other guild profiles remain or when `delete_global_preferences=True` is explicitly passed.
 3. **Ledger Supply & Accounting Integrity:** All `economy_ledger` rows for `(guild_id, user_id)` keep their exact `amount`, `balance_after`, `category`, and `created_at` values while `user_id` is set to `0` and any `user_id` embedded inside `transaction_id` (e.g. `claim:gid:uid:...`, `buy:gid:uid:...`) or `reference_id` is scrubbed to an irreversible hash token (`anon_<sha256_prefix>:<row_id>`). Aggregate guild token flows and referral links between bet reservations and settlements remain 100% intact.

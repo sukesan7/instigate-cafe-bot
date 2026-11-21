@@ -35,8 +35,8 @@ flowchart TD
 
     subgraph BotCore["Instigate Cafe Bot Core"]
         US["UserStore (icbot/services/user_service.py)"]
-        FM["FunMarket (icbot/services/fun_market_store.py)"]
-        EX["ExamStore (icbot/features/exams.py)"]
+        FM["FunMarket (icbot/services/fun_market.py)"]
+        EX["ExamStore (icbot/academics/exams_service.py)"]
         LLM["LLM Assistant (icbot/tasks/llm_assistant.py)"]
         RES["Resume Reviewer (icbot/features/resume.py)"]
         JOB["Job Poller (icbot/tasks/job_alerts.py)"]
@@ -77,14 +77,14 @@ flowchart TD
 | **Discord User Snowflake ID** (`user_id`) | Discord interaction / message | Account identification, economy tracking, rate limiting | **PII (Indirect Identifier)** | SQLite: `users`, `blackjack_users`, `fun_positions`, `fun_trades`, `exams`, `stock_events` | Never forwarded externally; sent to Discord API in command responses | Indefinite (persists until user deletion request) | User (self-service request) / Bot Operator |
 | **Display Name** (`display_name`) | Discord interaction / message author | User profile embeds, leaderboard display | **PII (Personal Name / Handle)** | SQLite: `users.display_name`; ephemeral RAM in `llm_assistant.py` | Forwarded to **Google Gemini API** when user appears in recent channel history | Updated on every interaction; persists until profile deletion or rename | User (via Discord profile change or deletion) |
 | **Avatar URL** (`avatar_url`) | Discord interaction / message author | Profile embed thumbnail rendering | **PII (Image URL)** | SQLite: `users.avatar_url` | Rendered by Discord client | Overwritten on next user interaction; purged on profile deletion | User / Bot Operator |
-| **Virtual Balances & Bankroll** | Game results, `/ic daily`, trading | Virtual community economy & casino simulation | **Financial / Economic Data (Virtual)** | SQLite: `users.balance`, `blackjack_users.bankroll` | Never forwarded externally | Indefinite | User / Bot Operator (admin reset via `/ic admin set`) |
+| **Virtual Balances & Bankroll** | Game results, `/ic dailyclaim`, trading | Virtual community economy & casino simulation | **Financial / Economic Data (Virtual)** | SQLite: `users.balance`, `blackjack_users.bankroll` | Never forwarded externally | Indefinite | User / Bot Operator (admin reset via `/ic admin set`) |
 | **Virtual Trade Ledger** (`fun_trades`) | `/ic icse buy`, `/ic icse sell` | Historical record of transactions, PnL tracking | **Transactional Audit Record** | SQLite: `fun_trades` (`user_id`, `symbol`, `qty`, `price`, `cash_delta`, `realized_pnl`) | Never forwarded externally | Indefinite (required for market accounting) | Bot Operator (anonymized on user deletion) |
 | **Channel Message Context** | Discord text channel history | Providing conversational memory for `@Instigator` Q&A | **User Communication Content (Text + Embeds)** | **Ephemeral RAM only** (never saved to SQLite or local disk) | **Forwarded to Google Gemini API** (`generativelanguage.googleapis.com`) | Duration of single HTTP request (<60s) in bot memory; subject to Google API data terms | Channel Admin (can disable LLM or restrict bot access to private channels) |
 | **Image Attachments (Q&A)** | Attached image in mention or reply | Multimodal Q&A (math, logic puzzles, diagram review) | **User Content (Image Bytes)** | **Ephemeral RAM only** (buffered up to 2MB in memory) | **Forwarded to Google Gemini API** as raw inline base64/bytes | Duration of single request; discarded immediately upon reply completion | User (chooses what to upload) |
 | **Uploaded Resumes** | `/ic resume` file parameter | Automated ATS screening and engineering resume critique | **Sensitive PII** (Names, contact info, education, career history) | **Ephemeral RAM only** (buffered up to 5MB in memory; never saved to disk) | **Forwarded to Google Gemini API** as inline PDF/image bytes | Duration of ATS + review calls (<120s); discarded immediately after | User (chooses what to upload) |
 | **Exam Schedule Entries** | `/ic exam add` (Admin/User) | Community exam timetable and countdowns | **Public Academic Schedule** | SQLite: `exams` (`course_code`, `course_name`, `start_ts`, `location`, `notes`, `created_by`) | Never forwarded externally | Kept until deleted via `/ic exam remove` or `/ic exam clear` | Server Admin / Course Lead |
 | **Scraped Job Postings** | Greenhouse, Lever, Workday | Deduplicating job notifications | **Public Commercial Metadata** | SQLite: `job_seen` (`source`, `external_id`, `title`, `url`, `first_seen_unix`) | Forwarded to configured Discord announcements channel | Indefinite deduplication cache | Bot Operator |
-| **Professor Ratings Cache** | RateMyProfessors API | Fast caching for `/ic prof` queries | **Public Academic Metadata** | Ephemeral RAM cache in `icbot/services/rmp_client.py` | Never forwarded; queried from RMP GraphQL | Process runtime memory cache | Bot Operator |
+| **Professor Ratings Cache** | RateMyProfessors API | Fast caching for `/ic prof` queries | **Public Academic Metadata** | Ephemeral RAM cache in `icbot/academics/providers.py` | Never forwarded; queried from RMP GraphQL | Process runtime memory cache | Bot Operator |
 | **Grade Distribution Cache** | `tmu.grades.zone` | Fast caching for `/ic grades` queries | **Institutional Academic Data** | SQLite: `course_cache` in `tmu_grades.db` | Never forwarded externally | Kept until manual cache flush | Bot Operator |
 
 ---
@@ -234,7 +234,7 @@ To ensure logs do not inadvertently capture sensitive data or undermine deletion
 
 ## 8. Programmatic Privacy APIs & Future Self-Service Command Prerequisites
 
-Data export and deletion are currently exposed programmatically via [`UserStore.export_user_data()`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/user_service.py) and [`UserStore.delete_user_data()`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/user_service.py) and tested in [`tests/unit/test_privacy_model.py`](file:///home/sukesan/dev/discord/campus-bot/tests/unit/test_privacy_model.py).
+Data export and deletion are currently exposed programmatically via [`UserStore.export_user_data()`](../../icbot/services/user_service.py) and [`UserStore.delete_user_data()`](../../icbot/services/user_service.py) and tested in [`tests/unit/test_privacy_model.py`](../../tests/unit/test_privacy_model.py).
 
 A user-facing slash command (`/ic privacy export`, `/ic privacy delete`) is intentionally **not** exposed in the live Discord command tree until the following security and UX prerequisites are completed:
 1. **Scope Confirmation UX:** Explicit user choice between single-guild erasure (`guild_id=interaction.guild_id`) vs. cross-guild global preference erasure (`delete_global_preferences=True`).

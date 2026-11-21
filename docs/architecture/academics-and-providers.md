@@ -69,7 +69,7 @@ Untrusted user links must never become server-side fetch targets:
 
 ## 5. SQLite Schema Migration (`0006_academic_catalog_and_exam_fields`)
 
-Additive, reversible migration in [`icbot/db.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/db.py):
+Additive, reversible migration in [`icbot/db.py`](../../icbot/db.py):
 - `academic_courses`: `(guild_id, normalized_key)` primary key storing display code, title, campus ID, department code, aliases JSON, and term.
 - `academic_resources`: guild-scoped external resource links with `idx_academic_resources_guild_course`.
 - `exams`: additive columns `course_key`, `organizer`, and `visibility` (default `'guild'`).

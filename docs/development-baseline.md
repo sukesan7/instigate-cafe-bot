@@ -106,11 +106,11 @@ html = urllib.request.urlopen(req, timeout=10).read().decode("utf-8")
 ### 3.2 Collection Phase Impact Summary
 | Test File | Collection Side Effect | Target Host | External Protocol | Risk Classification |
 | :--- | :--- | :--- | :--- | :--- |
-| [`tests/test_rmp.py`](file:///home/sukesan/dev/discord/campus-bot/tests/test_rmp.py) | Executes `run_query()` at top-level on import | `www.ratemyprofessors.com` | HTTPS POST (GraphQL) | **P0 Hazard** (Outbound network probe) |
-| [`tests/test_notes.py`](file:///home/sukesan/dev/discord/campus-bot/tests/test_notes.py) | Executes `urllib.request.urlopen()` on import | `jsprcrz.github.io` | HTTPS GET | **P0 Hazard** (Outbound network probe) |
-| [`tests/test_kh_notes.py`](file:///home/sukesan/dev/discord/campus-bot/tests/test_kh_notes.py) | Executes `urllib.request.urlopen()` on import | `notes.krishadmin.com` | HTTPS GET | **P0 Hazard** (Outbound network probe) |
-| [`tests/test_tmu.py`](file:///home/sukesan/dev/discord/campus-bot/tests/test_tmu.py) | Guarded by `__name__ == "__main__"`, but imports Matplotlib & SQLite | Local file system (`tmu_grades.db`) | Local File I/O | **P1 Hazard** (Mutates SQLite DB) |
-| [`tests/test_yf.py`](file:///home/sukesan/dev/discord/campus-bot/tests/test_yf.py) | Guarded by `__name__ == "__main__"`, imports `yahoo_quotes` | Local process | Module load | **P2 Hazard** (Initializes session locks) |
+| `tests/test_rmp.py` *(removed in Phase 1)* | Executes `run_query()` at top-level on import | `www.ratemyprofessors.com` | HTTPS POST (GraphQL) | **P0 Hazard** (Outbound network probe) |
+| `tests/test_notes.py` *(removed in Phase 1)* | Executes `urllib.request.urlopen()` on import | `jsprcrz.github.io` | HTTPS GET | **P0 Hazard** (Outbound network probe) |
+| `tests/test_kh_notes.py` *(removed in Phase 1)* | Executes `urllib.request.urlopen()` on import | `notes.krishadmin.com` | HTTPS GET | **P0 Hazard** (Outbound network probe) |
+| `tests/test_tmu.py` *(removed in Phase 1)* | Guarded by `__name__ == "__main__"`, but imports Matplotlib & SQLite | Local file system (`tmu_grades.db`) | Local File I/O | **P1 Hazard** (Mutates SQLite DB) |
+| `tests/test_yf.py` *(removed in Phase 1)* | Guarded by `__name__ == "__main__"`, imports `yahoo_quotes` | Local process | Module load | **P2 Hazard** (Initializes session locks) |
 
 ### 3.3 Mitigation & Test Quarantine Strategy
 1. **Never run raw `pytest` against root `tests/`** until legacy probe scripts are refactored.
@@ -282,7 +282,7 @@ uv pip install -r requirements.txt
 
 ## 7. No-Token Gateway Isolation Smoke Test
 
-To mathematically prove that importing bot modules or executing offline validation **cannot accidentally launch the live Discord gateway**, the bot's startup entrypoint in [`main.py`](file:///home/sukesan/dev/discord/campus-bot/main.py) provides a hardcoded safety exit:
+To mathematically prove that importing bot modules or executing offline validation **cannot accidentally launch the live Discord gateway**, the bot's startup entrypoint in [`main.py`](../main.py) provides a hardcoded safety exit:
 
 ```python
 # main.py (Lines 536-541)

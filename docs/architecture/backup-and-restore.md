@@ -74,7 +74,7 @@ Internally, `restore()`:
 ### Step 3: Manual Shell Disaster Recovery
 If restoring from outside the running Python process:
 1. Ensure the bot process is stopped completely (`docker compose stop campus-bot` or `sudo systemctl stop campus-bot.service`).
-2. Use [`tools/backup_db.py`](file:///home/sukesan/dev/discord/campus-bot/tools/backup_db.py) against the canonical `DB_PATH` (e.g., `/data/campus.db` in Docker/Railway, `/opt/campus-bot/data/campus.db` in systemd, or `ic_stock.db` in local dev) to archive the existing database, clean up `-wal`/`-shm` files, and restore with integrity verification:
+2. Use [`tools/backup_db.py`](../../tools/backup_db.py) against the canonical `DB_PATH` (e.g., `/data/campus.db` in Docker/Railway, `/opt/campus-bot/data/campus.db` in systemd, or `ic_stock.db` in local dev) to archive the existing database, clean up `-wal`/`-shm` files, and restore with integrity verification:
    ```bash
    uv run python tools/backup_db.py --restore /var/backups/icbot/snapshot_20261113_000000.db --dest /data/campus.db
    ```

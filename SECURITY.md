@@ -32,7 +32,7 @@ We will acknowledge receipt within **48 hours** and provide regular progress upd
 If a Discord bot token, Gemini API key, or third-party credential is accidentally committed or exposed:
 
 1. **Immediate Revocation:** The compromised credential will be immediately invalidated and rotated at the provider dashboard (Discord Developer Portal, Google AI Studio, Metrolinx Open Data, etc.).
-2. **History Remediation:** The affected commit or branch will be remediated in accordance with our [Pre-Publication Checklist](file:///home/sukesan/dev/discord/campus-bot/docs/publishing-checklist.md).
+2. **History Remediation:** The affected commit or branch will be remediated in accordance with our [Pre-Publication Checklist](docs/publishing-checklist.md).
 3. **Environment Audit:** Maintainers will verify all deployments to ensure uncredentialed environments are restored to offline defaults.
 
 ---

@@ -88,7 +88,7 @@ Both SQLite databases were committed directly to Git in commit `5674035` on Marc
 - **Content Characterization:**
   - Contains private jokes, nicknames of community members, server lore, and tone prompts for the Discord AI assistant (`@Instigator`).
   - While not containing API keys or passwords, this represents **private community intellectual property and member interactions**.
-  - **Verdict:** Must be permanently removed from public source code and ignored via `.gitignore`. A sanitized synthetic fixture ([`tests/fixtures/synthetic_lore.json`](file:///home/sukesan/dev/discord/campus-bot/tests/fixtures/synthetic_lore.json)) has been created for offline test suites.
+  - **Verdict:** Must be permanently removed from public source code and ignored via `.gitignore`. A sanitized synthetic fixture ([`tests/fixtures/synthetic_lore.json`](../../tests/fixtures/synthetic_lore.json)) has been created for offline test suites.
 
 ---
 
@@ -215,7 +215,7 @@ The repository `.gitignore` has been updated with explicit rules:
 - **Scratch Files:** `distribution.png`, `tmu_raw.html`, `scratch/`, `assets/temp/`.
 
 ### 8.2 Synthetic Test Fixture Delivered
-- **Path:** [`tests/fixtures/synthetic_lore.json`](file:///home/sukesan/dev/discord/campus-bot/tests/fixtures/synthetic_lore.json)
+- **Path:** [`tests/fixtures/synthetic_lore.json`](../../tests/fixtures/synthetic_lore.json)
 - **Entries:** 3 clean, safe campus fixtures (`Campus Library`, `Campus Coffee Hub`, `Exam Season Protocol`).
 - **Validation:** Conforms strictly to `llm_assistant.py` and `lore_loader.py` schema with 0 community names or private references.
 

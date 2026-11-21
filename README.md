@@ -4,8 +4,8 @@
 [![Python 3.11 | 3.12 | 3.13](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![discord.py 2.3+](https://img.shields.io/badge/discord.py-2.3%2B%20app__commands-5865F2)](https://github.com/Rapptz/discord.py)
 [![Storage SQLite WAL](https://img.shields.io/badge/Storage-SQLite%20WAL-lightgrey)](https://www.sqlite.org/)
-[![Tests 646 Passing](https://img.shields.io/badge/Tests-646%20Passing%20(100%25%20Offline)-success)](tests/)
-[![CI Offline Quality Gate](https://img.shields.io/badge/CI-Offline%20Quality%20Gate-success)](.github/workflows/ci.yml)
+[![Offline Test Suite](https://img.shields.io/badge/Tests-Offline%20Pytest%20Suite-blue)](tests/)
+[![Offline Quality Gate](https://github.com/sukesan7/instigate-cafe-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/sukesan7/instigate-cafe-bot/actions/workflows/ci.yml)
 [![License MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 A modular, student-focused Discord bot combining academic study tools, tech job alerts, regional transit advisories, a virtual campus economy, and optional privacy-first AI resume feedback. Built with clean architecture, strict multi-guild tenancy, and atomic SQLite Write-Ahead Logging (WAL) transactions.
@@ -140,13 +140,13 @@ The bot has been tested against synthetic staging test guilds (**Guild Alpha** `
 ### 5.2 Local Setup
 ```bash
 # 1. Clone repository
-git clone https://github.com/your-username/campus-bot.git
-cd campus-bot
+git clone https://github.com/sukesan7/instigate-cafe-bot.git
+cd instigate-cafe-bot
 
 # 2. Install locked development environment
 uv sync --dev
 
-# 3. Run the complete test suite offline (625+ tests)
+# 3. Run the complete test suite offline
 uv run pytest
 
 # 4. Run the zero-token offline smoke check
@@ -176,7 +176,7 @@ uv run python main.py --allow-gateway
 ## 6. Module Management & Setup
 
 Server administrators can configure modules directly inside Discord without touching code:
-- **Interactive Setup Wizard:** Run **`/ic admin setup`** to configure channel assignments and community profiles (`default`, `engineering_heavy`, `student_core`).
+- **Interactive Setup Wizard:** Run **`/ic admin setup`** to configure channel assignments and community profiles (`default`, `student_core`, `toronto_tmu`, `community_full`).
 - **Feature Toggling:** Run **`/ic admin features disable:casino`** to silence gambling commands in academic channels.
 - **Diagnostics & Issue Reports:** Run **`/ic status issue_report:True`** to export a sanitized diagnostic file with all tokens redacted.
 

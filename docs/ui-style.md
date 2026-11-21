@@ -1,6 +1,6 @@
 # Instigate Cafe Bot — Discord UI & Embed Visual Style Contract
 
-**Primary Modules:** [`icbot/embeds.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/embeds.py), [`icbot/theme.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/theme.py), [`icbot/guild_config.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/guild_config.py), [`icbot/container.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/container.py)
+**Primary Modules:** [`icbot/embeds.py`](../icbot/embeds.py), [`icbot/theme.py`](../icbot/theme.py), [`icbot/guild_config.py`](../icbot/guild_config.py), [`icbot/container.py`](../icbot/container.py)
 
 ---
 
@@ -44,7 +44,7 @@ The original Instigate Cafe purple (`0xA64DFF`) remains the default preset (`ins
 | `emerald_academic` | `Academic Bot` | `0x059669` (Emerald Green) | `Academic Commons` |
 
 ### 2.2 Named Semantic Status Colors (`EmbedStatus`)
-Resolved via `resolve_embed_color(settings, status=..., color=...)` in [`icbot/embeds.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/embeds.py):
+Resolved via `resolve_embed_color(settings, status=..., color=...)` in [`icbot/embeds.py`](../icbot/embeds.py):
 
 | Semantic Status | Color Hex | When Used |
 | :--- | :--- | :--- |
@@ -54,7 +54,7 @@ Resolved via `resolve_embed_color(settings, status=..., color=...)` in [`icbot/e
 | `"error"` | `0xE74C3C` | Validation failures, rejected inputs, upstream errors |
 | `"disabled"` | `0x64748B` | Disabled feature modules (`disabled_feature_embed`) |
 
-*(All preset accents and semantic colors fall within the relative luminance range heuristic $0.03 \le L \le 0.95$; see [`icbot/theme.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/theme.py)).*
+*(All preset accents and semantic colors fall within the relative luminance range heuristic $0.03 \le L \le 0.95$; see [`icbot/theme.py`](../icbot/theme.py)).*
 
 ---
 
@@ -160,7 +160,7 @@ Footer: TMU Student Hub • System • Feature Governance
 
 ## 6. Interaction-Audience Matrix & Component Lifetimes
 
-**Primary Module:** [`icbot/ui.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/ui.py)
+**Primary Module:** [`icbot/ui.py`](../icbot/ui.py)
 
 All `discord.ui.View` components separate pure page/data calculation (`PageSlice`, `compute_page_slice`) from Discord UI state (`BasePaginationView`) and enforce an explicit interaction-audience matrix:
 

@@ -20,7 +20,7 @@ def test_launch_assets_document_structure_and_completeness() -> None:
     assert "Academic Schedule & Exam Countdown" in content
     assert "/ic exam list" in content
     assert "Career Tools & AI Resume Consent Barrier" in content
-    assert "/ic resume review" in content
+    assert "/ic resume" in content
     assert "Submit for AI Review" in content
     assert "View No-AI Checklist" in content
     assert "Regional Transit & Commuter Advisory" in content
@@ -42,10 +42,10 @@ def test_launch_assets_document_structure_and_completeness() -> None:
     assert "v1.0.0-rc1" in content
     assert "Decoupled Architecture" in content or "decoupled" in content.lower()
     assert "ACID" in content
-    assert "646" in content
+    assert "offline pytest suite" in content.lower()
     assert "Software Engineering" in content
     assert "Commerce" in content
-    assert "https://github.com/" in content
+    assert "https://github.com/sukesan7/instigate-cafe-bot" in content
 
     # 4. GitHub Topics & Discovery Tags
     assert "GitHub Topics" in content
@@ -70,9 +70,10 @@ def test_readme_portfolio_presentation_and_limits() -> None:
     readme_path = PROJECT_ROOT / "README.md"
     content = readme_path.read_text(encoding="utf-8")
 
-    # Badges
+    # Badges (must use real workflow badge and avoid hardcoded stale test counts)
     assert "v1.0.0-rc1" in content
-    assert "646 Passing" in content
+    assert "sukesan7/instigate-cafe-bot/actions/workflows/ci.yml/badge.svg" in content
+    assert "646 Passing" not in content
 
     # Honest Provider Limits Table
     assert "Honest Provider Comparison & Operating Limits" in content

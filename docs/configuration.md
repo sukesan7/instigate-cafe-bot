@@ -1,7 +1,7 @@
 # Instigate Cafe Bot — Complete Configuration Reference
 
 **Document Version:** 2.0.0 (Phase 12 Configuration Specification)  
-**Configuration Source:** [`icbot/config.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/config.py)  
+**Configuration Source:** [`icbot/config.py`](../icbot/config.py)  
 **Loading Precedence:** Process Environment Variables &rarr; Local `.env` file (if present) &rarr; Safe Built-in Defaults
 
 ---

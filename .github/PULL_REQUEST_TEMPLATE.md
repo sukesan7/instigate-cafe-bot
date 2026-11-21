@@ -8,7 +8,7 @@ Fixes #(issue number) or relates to Phase XX modernization.
 - [ ] Academics (`icbot/academics/`)
 - [ ] Careers / ATS Ingestion (`icbot/tasks/jobs*`, `icbot/features/jobs.py`)
 - [ ] Casino / Economy (`icbot/games/`, `icbot/services/casino*`)
-- [ ] Fun-Market ICSE (`icbot/features/icse.py`, `icbot/storage/market.py`)
+- [ ] Fun-Market ICSE (`icbot/features/invest.py`, `icbot/services/fun_market.py`)
 - [ ] Administration & Setup (`icbot/features/admin.py`)
 - [ ] Tooling / Infrastructure / Documentation
 

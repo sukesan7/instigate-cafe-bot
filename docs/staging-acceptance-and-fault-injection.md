@@ -1,8 +1,8 @@
 # Instigate Cafe Bot — Staging Acceptance & Fault-Injection Plan
 
 **Document Version:** 1.0.0 (Phase 13 Staging Protocol)  
-**Execution Harness:** [`tools/run_staging_acceptance.py`](file:///home/sukesan/dev/discord/campus-bot/tools/run_staging_acceptance.py)  
-**Automated Tests:** [`tests/integration/test_staging_acceptance_and_fault_injection.py`](file:///home/sukesan/dev/discord/campus-bot/tests/integration/test_staging_acceptance_and_fault_injection.py)  
+**Execution Harness:** [`tools/run_staging_acceptance.py`](../tools/run_staging_acceptance.py)  
+**Automated Tests:** [`tests/integration/test_staging_acceptance_and_fault_injection.py`](../tests/integration/test_staging_acceptance_and_fault_injection.py)  
 **Target Environment:** Isolated Synthetic Staging Guilds (Zero Production Data / Gateway Access)
 
 ---
@@ -74,7 +74,7 @@ Every defect or failure observed during staging is classified into one of four s
 
 ## 4. Acceptance Test & Fault-Injection Matrix (27 Scenarios)
 
-The table below documents the 27 acceptance, fault-injection, and recovery scenarios executed by [`tools/run_staging_acceptance.py`](file:///home/sukesan/dev/discord/campus-bot/tools/run_staging_acceptance.py):
+The table below documents the 27 acceptance, fault-injection, and recovery scenarios executed by [`tools/run_staging_acceptance.py`](../tools/run_staging_acceptance.py):
 
 | Scenario ID | Category | Subsystem | Description & Injection Mechanism | Expected Outcome | Actual Outcome | Severity | Duration | Status | Owner |
 |---|---|---|---|---|---|---|---|---|---|
@@ -103,7 +103,7 @@ The table below documents the 27 acceptance, fault-injection, and recovery scena
 | **FLT-10** | Fault Injection | Parsers | Scraper receives truncated/corrupted HTML (`<html><head><title>Broken<body...`). | BeautifulSoup parser catches malformed markup, returns empty list, does not crash. | Malformed HTML parsed safely via BeautifulSoup; returned 0 items without error. | **P1** | 0.49ms | **PASS** | core-team |
 | **FLT-11** | Fault Injection | Economy | 10 simultaneous concurrent requests to `/ic dailyclaim` (`asyncio.gather`). | Exactly 1 claim succeeds; 9 rejected with `DailyAlreadyClaimedError`; balance = $1100. | 10 concurrent claims: exactly 1 succeeded, 9 rejected; final balance: $1100. | **P0** | 37.6ms | **PASS** | core-team |
 | **REC-01** | Recovery | Storage | Online hot backup via `tools/backup_db.py` executed while database is active. | Point-in-time snapshot created using SQLite backup API; `PRAGMA integrity_check == ok`. | Point-in-time snapshot created while active; `PRAGMA integrity_check` confirmed 'ok'. | **P0** | 15.5ms | **PASS** | core-team |
-| **REC-02** | Recovery | Disaster Recovery | Restore corrupted database file from verified snapshot using `tools/restore_db.py`. | Database restored cleanly; schema version v7 and user records intact. | Restored database from snapshot; validated schema version and integrity check 'ok'. | **P0** | 2.0ms  | **PASS** | core-team |
+| **REC-02** | Recovery | Disaster Recovery | Restore corrupted database file from verified snapshot using `tools/backup_db.py restore`. | Database restored cleanly; schema version v7 and user records intact. | Restored database from snapshot; validated schema version and integrity check 'ok'. | **P0** | 2.0ms  | **PASS** | core-team |
 | **REC-03** | Recovery | Migrations | Verify full forward migration chain (Schema v1 through Schema v7). | All 7 migrations apply cleanly; foreign keys enabled; user_version = 7. | All 7 migrations verified clean: schema version = v7, foreign keys = True. | **P0** | 14.7ms | **PASS** | core-team |
 
 ---
@@ -118,10 +118,10 @@ Before deploying or inviting any staging bot instance, operators must run the au
 # 1. Run the comprehensive staging acceptance harness
 uv run python tools/run_staging_acceptance.py
 
-# Expected Output:
+# Expected Output (offline synthetic simulation; live staging requires manual owner run):
 # ================================================================================
 #  SUMMARY: 27/27 Passed (100% Offline)
-#  ALL 27 SCENARIOS PASSED — ZERO OPEN P0/P1 DEFECTS (GO FOR BETA)
+#  ALL 27 SCENARIOS PASSED — ZERO OPEN P0/P1 DEFECTS (OFFLINE HARNESS PASS)
 # ================================================================================
 ```
 

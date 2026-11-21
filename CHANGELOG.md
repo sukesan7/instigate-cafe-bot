@@ -60,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - GitHub issue & PR templates: Added [`.github/ISSUE_TEMPLATE/feature_request.md`](.github/ISSUE_TEMPLATE/feature_request.md) and [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) with explicit privacy warnings against pasting tokens or private server data.
 - **Safe Production Hosting & Disaster Recovery (Phase 12B):**
   - Safe automated staging verification script [`tools/smoke_staging.py`](tools/smoke_staging.py) validating migrations, supervisor health, and container initialization offline.
-  - Online hot backup and restore utilities [`tools/backup_db.py`](tools/backup_db.py) and [`tools/restore_db.py`](tools/restore_db.py) using SQLite VACUUM INTO and WAL checkpointing.
+  - Online hot backup and restore CLI [`tools/backup_db.py`](tools/backup_db.py) (`backup`, `restore`, `verify` subcommands) using SQLite `VACUUM INTO` and WAL checkpointing.
 - **GitHub Actions Quality Gate (`.github/workflows/ci.yml`):** Pinned offline CI pipeline executing Ruff lint/format, Mypy static analysis, `pip-audit` dependency vulnerability scanning, secret checking, and Pytest coverage across Python 3.11, 3.12, and 3.13.
 - **Optional Live Provider Smoke Workflow (`.github/workflows/live-smoke.yml`):** Credential-gated workflow for testing live third-party endpoints (RMP, Metrolinx, Mastodon) on manual trigger or low-frequency schedule, isolated from PR checks.
 - **Dependabot Automation (`.github/dependabot.yml`):** Weekly automated dependency update tracking for Python packages and GitHub Actions.
@@ -78,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - External provider reliability contracts (`ProviderProtocol`, `ProviderResult`, circuit breakers, exponential backoff with jitter).
-- Deduplicated alert dispatcher (`icbot/tasks/alert_dispatcher.py`) preventing duplicate announcements across Discord text channels.
+- Deduplicated alert helper (`icbot/services/alert_dedupe.py`) preventing duplicate announcements across Discord text channels.
 - Performance and memory profiling test harness (`tools/benchmark_profile.py`) verifying bounded memory consumption and execution limits.
 
 ---

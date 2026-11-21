@@ -43,10 +43,10 @@ When sharing or distributing the Instigate Cafe Bot, maintainers and community m
 ## 3. Supported Deployment Path 1: Docker & Docker Compose (Recommended)
 
 ### 3.1 Dockerfile Architecture & Honest Readiness Contract
-The project provides a multi-stage, non-root [`Dockerfile`](file:///home/sukesan/dev/discord/campus-bot/Dockerfile):
+The project provides a multi-stage, non-root [`Dockerfile`](../Dockerfile):
 - **Build Stage:** Uses `ghcr.io/astral-sh/uv` to install dependencies into an isolated virtual environment (`/app/.venv`) directly from `uv.lock`.
 - **Runtime Stage:** Runs on `python:3.12-slim-bookworm` with a dedicated non-root user and group (`campusbot:campusbot`, UID/GID `10001:10001`).
-- **Release Tag Synchronization:** Uses `ARG APP_VERSION="1.0.0-rc1"` (synchronized with [`pyproject.toml`](file:///home/sukesan/dev/discord/campus-bot/pyproject.toml) `1.0.0rc1` and [`icbot/__init__.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/__init__.py) `1.0.0-rc1`) to populate OCI image labels (`org.opencontainers.image.version`) and match `docker-compose.yml` (`image: campus-bot:${APP_VERSION:-1.0.0-rc1}`).
+- **Release Tag Synchronization:** Uses `ARG APP_VERSION="1.0.0-rc1"` (synchronized with [`pyproject.toml`](../pyproject.toml) `1.0.0rc1` and [`icbot/__init__.py`](../icbot/__init__.py) `1.0.0-rc1`) to populate OCI image labels (`org.opencontainers.image.version`) and match `docker-compose.yml` (`image: campus-bot:${APP_VERSION:-1.0.0-rc1}`).
 - **Canonical Storage Contract:** Sets `DB_PATH="/data/campus.db"` and `GRADES_DB_PATH="/data/tmu_grades.db"` on a pre-created `/data` directory owned by `campusbot:campusbot` with mode `0700` (never world-writable `0777`). Legacy `SQLITE_PATH` is retained only as a deprecated fallback alias in `Settings.from_env()` when `DB_PATH` is unset, emitting a `DeprecationWarning` and scheduled for removal in `v1.1.0`.
 - **Honest Local Readiness Healthcheck:**
   ```dockerfile
@@ -58,7 +58,7 @@ The project provides a multi-stage, non-root [`Dockerfile`](file:///home/sukesan
 - **Signal Handling:** Configured with `STOPSIGNAL SIGTERM` to invoke `CampusBot.close()` and flush SQLite WAL pages.
 
 ### 3.2 Docker Compose Recipe
-Deploy using [`docker-compose.yml`](file:///home/sukesan/dev/discord/campus-bot/docker-compose.yml):
+Deploy using [`docker-compose.yml`](../docker-compose.yml):
 
 ```yaml
 services:
@@ -166,7 +166,7 @@ For operators preferring a direct system service without Docker:
    ```
 
 ### 4.2 Security Hardening Directives in Unit
-[`systemd/campus-bot.service`](file:///home/sukesan/dev/discord/campus-bot/systemd/campus-bot.service) enforces Linux kernel security sandboxing:
+[`systemd/campus-bot.service`](../systemd/campus-bot.service) enforces Linux kernel security sandboxing:
 - `NoNewPrivileges=true` prevents privilege escalation.
 - `ProtectSystem=strict` makes the root filesystem read-only.
 - `ProtectHome=true` hides `/home` and `/root`.
@@ -244,7 +244,7 @@ Before triggering a manual deployment on Railway:
 - [ ] 2. Secret scanner returns clean exit code (`uv run python tools/scan_secrets.py --enforce-clean`).
 - [ ] 3. No `.db`, `.env`, or `.sqlite-wal` files are tracked in git index.
 - [ ] 4. Staging lifecycle smoke check passes (`uv run python tools/smoke_staging.py`).
-- [ ] 5. Existing production SQLite database has been backed up using [`tools/backup_db.py`](file:///home/sukesan/dev/discord/campus-bot/tools/backup_db.py).
+- [ ] 5. Existing production SQLite database has been backed up using [`tools/backup_db.py`](../tools/backup_db.py).
 - [ ] 6. Explicit written approval from the repository owner (`sukesan`) is documented.
 
 ---
@@ -286,7 +286,7 @@ The bot handles process signals (`SIGTERM`, `SIGINT`) gracefully:
 5. In Docker, `stop_grace_period: 30s` guarantees that in-flight requests finish before `SIGKILL` is issued.
 
 ### 7.2 SQLite Online Hot Backup & Restore Runbook
-SQLite databases in WAL mode must not be copied with standard `cp` while running, as active writes reside in `.sqlite-wal`. Use the project's native hot backup tool [`tools/backup_db.py`](file:///home/sukesan/dev/discord/campus-bot/tools/backup_db.py):
+SQLite databases in WAL mode must not be copied with standard `cp` while running, as active writes reside in `.sqlite-wal`. Use the project's native hot backup tool [`tools/backup_db.py`](../tools/backup_db.py):
 
 #### Performing a Backup:
 ```bash

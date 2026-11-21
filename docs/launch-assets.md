@@ -1,8 +1,8 @@
 # Instigate Cafe Bot — Portfolio Presentation & Launch Assets
 
 **Document Version:** 1.0.0 (Release Candidate `v1.0.0-rc1`)  
-**Target Release Candidate:** [`v1.0.0-rc1`](file:///home/sukesan/dev/discord/campus-bot/pyproject.toml#L3)  
-**Verification Suite:** [`tests/unit/test_portfolio_presentation_and_launch_assets.py`](file:///home/sukesan/dev/discord/campus-bot/tests/unit/test_portfolio_presentation_and_launch_assets.py)  
+**Target Release Candidate:** [`v1.0.0-rc1`](../pyproject.toml#L3)  
+**Verification Suite:** [`tests/unit/test_portfolio_presentation_and_launch_assets.py`](../tests/unit/test_portfolio_presentation_and_launch_assets.py)  
 **Publication Status:** Launch Assets & Portfolio Package  
 
 ---
@@ -48,7 +48,7 @@ These visual representations demonstrate the four core pillars of the bot runnin
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Pillar 2: Career Tools & AI Resume Consent Barrier (`/ic resume review`)
+### 2.2 Pillar 2: Career Tools & AI Resume Consent Barrier (`/ic resume`)
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -75,7 +75,7 @@ These visual representations demonstrate the four core pillars of the bot runnin
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.3 Pillar 3: Regional Transit & Commuter Advisory (`/ic transit`)
+### 2.3 Pillar 3: Regional Transit & Commuter Advisory (Background Alerts: TTC & Metrolinx GO)
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -128,11 +128,11 @@ A concise, structured demonstration video illustrating the technical refactor an
 
 | Timestamp | Visual Screen Scene | On-Screen Action & Interaction | Audio Voiceover Script |
 |---|---|---|---|
-| **0:00 – 0:15** | Split screen: VS Code terminal (`uv run pytest`) and Discord interface. | Display terminal showing 646 tests passing in 13s, then transition to Discord server running `/ic botinfo`. | *"Welcome to the Instigate Cafe Bot—a fully modernized, student-focused Discord bot engineered with discord.py 2.3, SQLite WAL transactions, and comprehensive offline test coverage."* |
-| **0:15 – 0:35** | Discord channel: Academics & Autonomous Setup. | Administrator executes `/ic admin setup`, selects `engineering_heavy`, and runs `/ic exam list` showing upcoming exams and calendar export. | *"Server admins can configure the bot in seconds with autonomous slash-command setup wizards. Students instantly access course study guides, professor ratings, and shared exam schedules with iCalendar export."* |
-| **0:35 – 0:55** | Discord channel: Privacy-First Career Tools. | User invokes `/ic resume review` with a PDF attachment; the privacy consent barrier appears; user selects offline checklist. | *"Career tools filter junior software engineering roles from Greenhouse, Lever, and Workday. For resume reviews, the bot enforces an explicit privacy consent barrier before sending anything to Gemini, with zero disk storage and an instant offline checklist alternative."* |
-| **0:55 – 0:75** | Discord channel: Virtual Paper Trading & Economy. | User runs `/ic dailyclaim`, buys 2 shares of `$IC` on `/ic icse market`, and views `/ic profile` showing immutable ledger entries. | *"Our campus paper-trading exchange and casino mini-games run on an atomic SQLite ledger with WAL mode, guaranteeing zero double-spending and strict multi-guild isolation across different student societies."* |
-| **0:75 – 0:90** | Terminal: Zero-leak scanner (`scan_secrets.py`) & GitHub Repo. | Terminal executes `tools/scan_secrets.py --enforce-clean` showing 0 leaks, transitioning to GitHub repo page. | *"With 646 offline tests, predictable provider degradation, and full Right-to-be-Forgotten compliance, Instigate Cafe Bot is production-ready for self-hosting. Check out the open-source code on GitHub."* |
+| **0:00 – 0:15** | Split screen: VS Code terminal (`uv run pytest`) and Discord interface. | Display terminal running the offline `pytest` suite cleanly, then transition to Discord server running `/ic botinfo`. | *"Welcome to the Instigate Cafe Bot—a fully modernized, student-focused Discord bot engineered with discord.py 2.3, SQLite WAL transactions, and comprehensive offline test coverage."* |
+| **0:15 – 0:35** | Discord channel: Academics & Autonomous Setup. | Administrator executes `/ic admin setup`, selects `toronto_tmu`, and runs `/ic exam list` showing upcoming exams and calendar export. | *"Server admins can configure the bot in seconds with autonomous slash-command setup wizards. Students instantly access course study guides, professor ratings, and shared exam schedules with iCalendar export."* |
+| **0:35 – 0:55** | Discord channel: Privacy-First Career Tools. | User invokes `/ic resume` with a PDF attachment; the privacy consent barrier appears; user selects offline checklist. | *"Career tools filter junior software engineering roles from Greenhouse, Lever, and Workday. For resume reviews, the bot enforces an explicit privacy consent barrier before sending anything to Gemini, with zero local disk storage and an instant offline checklist alternative."* |
+| **0:55 – 0:75** | Discord channel: Virtual Paper Trading & Economy. | User runs `/ic dailyclaim`, buys 2 shares of `$IC` on `/ic icse market`, and views `/ic profile` showing immutable ledger entries. | *"Our campus paper-trading exchange and casino mini-games run on an atomic SQLite ledger with WAL mode, guarding against double-spending with strict multi-guild isolation across different student societies."* |
+| **0:75 – 0:90** | Terminal: Zero-leak scanner (`scan_secrets.py`) & GitHub Repo. | Terminal executes `tools/scan_secrets.py --enforce-clean` showing 0 leaks, transitioning to GitHub repo page. | *"With an extensive offline test suite, predictable provider degradation, and operator-run Right-to-be-Forgotten export/erasure tooling, Instigate Cafe Bot is ready for self-hosted evaluation. Check out the open-source code on GitHub."* |
 
 ---
 
@@ -155,15 +155,15 @@ Over the past several weeks, I led a ground-up modernization effort focusing on 
 • Multi-Guild Isolation: Built true multi-tenancy allowing distinct university clubs to configure independent command profiles (e.g. engineering study hubs vs. finance trading societies) with zero cross-guild data bleed.
 
 📊 By the Numbers:
-• 646+ automated tests passing offline in under 18 seconds (100% test isolation with zero live network calls).
+• Comprehensive automated offline pytest suite (100% test isolation with zero live network calls; check GitHub Actions CI for current totals).
 • Sub-2.5ms average local handler dispatch latency in offline benchmarks, deferring interactions promptly before Discord's 3-second interaction token deadline.
 • Zero credentials, tokens, or private data leaks across tracked files, verified by an automated publication scanner.
-• 8/8 offline simulated release gates verified for v1.0.0-rc1.
+• 8/8 offline simulated release gates verified for v1.0.0-rc1 (live Discord staging pending owner run).
 
 The project is packaged for self-hosting via Python 3.12/uv, Docker Compose, and systemd.
 
 Check out the architecture, design documentation, and open-source codebase on GitHub:
-👉 https://github.com/sukesan/campus-bot (Repository link placeholder)
+👉 https://github.com/sukesan7/instigate-cafe-bot
 
 Feedback, issues, and contributions from fellow student builders and maintainers are warmly welcome!
 
@@ -179,7 +179,7 @@ Recommended metadata configuration for the GitHub repository:
 - **Repository Description:**  
   `A modular, student-focused Discord bot featuring academic study hubs, tech ATS job alerts, regional transit advisories, a virtual equity exchange, and optional privacy-first AI career reviews.`
 - **Website / Documentation:**  
-  `https://github.com/sukesan/campus-bot#readme`
+  `https://github.com/sukesan7/instigate-cafe-bot#readme`
 - **GitHub Topics (Keywords):**
   - `discord-bot`
   - `discord-py`
@@ -204,7 +204,7 @@ This checklist separates **Repository Visibility** from **Live Bot Operation** a
 
 ### Phase A: Repository Visibility Decision (Private -> Public)
 - [ ] **Step A1 (Secret Scan):** Execute `uv run python tools/scan_secrets.py --enforce-clean` to confirm zero leaked tokens, database files, or private lore.
-- [ ] **Step A2 (License Verification):** Confirm MIT License notice in [`LICENSE`](file:///home/sukesan/dev/discord/campus-bot/LICENSE) and student copyright attributions in [`README.md`](file:///home/sukesan/dev/discord/campus-bot/README.md).
+- [ ] **Step A2 (License Verification):** Confirm MIT License notice in [`LICENSE`](../LICENSE) and student copyright attributions in [`README.md`](../README.md).
 - [ ] **Step A3 (CI Green):** Confirm GitHub Actions CI passes across Python 3.11, 3.12, and 3.13.
 - [ ] **Step A4 (Owner Approval):** Explicit owner sign-off obtained to change GitHub visibility from **Private** to **Public**.
 

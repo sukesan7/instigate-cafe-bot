@@ -28,8 +28,8 @@ We use [`uv`](https://docs.astral.sh/uv/) for fast, reproducible dependency mana
 ### 2.2 Setup Environment
 ```bash
 # Clone your fork and enter the directory
-git clone https://github.com/your-username/campus-bot.git
-cd campus-bot
+git clone https://github.com/sukesan7/instigate-cafe-bot.git
+cd instigate-cafe-bot
 
 # Install locked dependencies and development tooling
 uv sync --dev

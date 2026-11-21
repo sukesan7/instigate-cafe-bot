@@ -15,7 +15,7 @@ Server administrators can inspect live runtime health directly within Discord:
 - **`/ic botinfo`:** Public informational diagnostic displaying active LLM model, integration readiness, and data privacy policies.
 
 ### 1.2 Log Monitoring & Secret Redaction
-All standard output and file logs pass through [`RedactingLogFilter`](file:///home/sukesan/dev/discord/campus-bot/icbot/logging.py):
+All standard output and file logs pass through [`RedactingLogFilter`](../icbot/logging.py):
 - **Automated Scrubbing:** Discord bot tokens, Gemini API keys, AWS keys, GitHub tokens, Bearer headers, query string keys (`?key=...`), and user mentions (`<@123>`) are replaced with `[REDACTED]` prior to emission.
 - **Structured Correlation IDs:** Log entries include correlation IDs (`interaction_id`, `task_name`, `provider`) allowing maintainers to trace individual user requests across async boundaries.
 
@@ -38,7 +38,7 @@ External APIs (Metrolinx, TTC Mastodon, RateMyProfessors, Gemini) occasionally e
 
 ## 3. Database Migrations & Versioning
 
-The bot uses a forward-migrating SQLite schema system managed in [`icbot/db.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/db.py):
+The bot uses a forward-migrating SQLite schema system managed in [`icbot/db.py`](../icbot/db.py):
 
 ### 3.1 Schema Version Invariant
 - Every migration increments `PRAGMA user_version`.
@@ -57,7 +57,7 @@ WAL mode enables concurrent reads without blocking writes. In production:
 ### 4.1 Scheduled Backups
 In SQLite WAL mode, copying the file using standard shell `cp` while the bot is running can yield corrupt snapshots. Backups must be performed using SQLite's native online backup mechanism (either via `VACUUM INTO 'backup.db'` or Python's `sqlite3.connect().backup()`).
 
-Use [`tools/backup_db.py`](file:///home/sukesan/dev/discord/campus-bot/tools/backup_db.py) to perform non-blocking online hot backups while the bot is active:
+Use [`tools/backup_db.py`](../tools/backup_db.py) to perform non-blocking online hot backups while the bot is active:
 
 ```bash
 # Add to host crontab (runs daily at 03:00)

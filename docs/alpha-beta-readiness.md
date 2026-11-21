@@ -1,9 +1,9 @@
 # Instigate Cafe Bot — Private Alpha & Public Beta Readiness
 
 **Document Version:** 1.0.0 (Release Candidate `v1.0.0-rc1`)  
-**Target Release Candidate:** [`v1.0.0-rc1`](file:///home/sukesan/dev/discord/campus-bot/pyproject.toml#L3)  
-**Verification Tool:** [`tools/verify_beta_readiness.py`](file:///home/sukesan/dev/discord/campus-bot/tools/verify_beta_readiness.py)  
-**Automated Tests:** [`tests/integration/test_beta_readiness_and_release_gates.py`](file:///home/sukesan/dev/discord/campus-bot/tests/integration/test_beta_readiness_and_release_gates.py)  
+**Target Release Candidate:** [`v1.0.0-rc1`](../pyproject.toml#L3)  
+**Verification Tool:** [`tools/verify_beta_readiness.py`](../tools/verify_beta_readiness.py)  
+**Automated Tests:** [`tests/integration/test_beta_readiness_and_release_gates.py`](../tests/integration/test_beta_readiness_and_release_gates.py)  
 **Publication Status:** Controlled Beta Sign-Off Document  
 
 ---
@@ -34,7 +34,7 @@ To validate that the bot satisfies genuine campus community requirements across 
 | **Discipline Code** | `swe` / `cs` | `biz` / `comm` |
 | **Representative Courses** | `CPS109` (CS I), `CPS209` (CS II), `CPS310` (Architecture) | `MTH140` (Calculus I), `FIN300` (Managerial Finance), `ECN104` (Micro) |
 | **Primary Workflows** | Course note sharing, exam tracking, tech interview prep, SWE resume critique | Course note lookup, exam schedules, virtual stock trading (`ICSE`), finance resumes |
-| **Feature Configuration** | Full standard profile (`feature_profile = "full"`) | Student core profile (`feature_profile = "student_core"`) |
+| **Feature Configuration** | Community full profile (`feature_profile = "community_full"`) | Student core profile (`feature_profile = "student_core"`) |
 | **Staging Guild** | **Guild Alpha** (`900000000000000001`) | **Guild Beta** (`900000000000000002`) |
 | **User Archetypes** | Technical, command-line familiar, automation seekers | Practical, schedule-driven, economy & finance participants |
 
@@ -49,7 +49,7 @@ Multi-guild compartmentalization is strictly enforced by architecture:
 
 ## 3. The 8 Measurable Release Gates (Offline Simulated Verification vs. Live Staging)
 
-Progression to public beta requires passing all 8 measurable release gates. Each gate has an automated, **offline simulated** verification check implemented in [`tools/verify_beta_readiness.py`](file:///home/sukesan/dev/discord/campus-bot/tools/verify_beta_readiness.py) using mocked Discord interactions and synthetic SQLite databases. Passing these offline gates certifies **offline readiness for owner-run staging**, not completed live Discord gateway or human cohort beta certification.
+Progression to public beta requires passing all 8 measurable release gates. Each gate has an automated, **offline simulated** verification check implemented in [`tools/verify_beta_readiness.py`](../tools/verify_beta_readiness.py) using mocked Discord interactions and synthetic SQLite databases. Passing these offline gates certifies **offline readiness for owner-run staging**, not completed live Discord gateway or human cohort beta certification.
 
 | Gate ID | Release Gate Name | Verification Method | Target Threshold | Offline Simulated Evidence / Live Staging Status |
 |---|---|---|---|---|
@@ -73,7 +73,7 @@ During the Alpha and Beta phases, user feedback is collected through privacy-pre
 - **Sanitized Diagnostic Reports:** Diagnostic issue reports generated via `/ic status issue_report:True` pass through `redact_secrets` and `RedactingLogFilter` to strip tokens, authorization headers, and secret keys.
 
 ### 4.2 Right-to-be-Forgotten (Data Portability & Erasure Contract)
-Students and operators have programmatic data portability and erasure controls via [`UserStore`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/user_service.py):
+Students and operators have programmatic data portability and erasure controls via [`UserStore`](../icbot/services/user_service.py):
 1. **Deterministic Batched Export:** Calling `UserStore.export_user_data(user_id, guild_id=...)` paginates across all user-addressable tables (`users`, `blackjack_users`, `fun_positions`, `fun_trades`, `economy_ledger`, `exams`, `academic_resources`, and global `user_job_preferences`) without silent 100-row truncation, reporting explicit `truncated` and `warnings` metadata if `max_rows_per_table` is reached.
 2. **Right-to-be-Forgotten Deletion & De-Identification:** Calling `UserStore.delete_user_data(user_id, guild_id=..., anonymize_ledger=True)` atomically:
    - Hard-deletes personal profile and avatar metadata from `users`, gaming stats from `blackjack_users`, and open equity positions from `fun_positions` in the target guild.
@@ -114,29 +114,29 @@ The bot supports granular feature toggles and emergency circuit breakers to pres
 
 | Feature Profile | Enabled Capabilities | Recommended Environment |
 |---|---|---|
-| `minimal` | Information, help, health checks (`/ic botinfo`, `/ic ping`). | Diagnostic recovery, minimal resource containers. |
-| `student_core` | Core academics, exam tracking, course notes, career checklist (`/ic exam`, `/ic notes`, `/ic resume` checklist). | Classrooms, academic study servers, resource-constrained environments. |
-| `standard` | Core academics, jobs poller, fun stock market (`/ic market`, `/ic jobs`). | Controlled private alpha and public campus servers. |
-| `full` | All features including casino games and AI career review. | Full-featured staging and authorized production servers. |
+| `student_core` | Core utilities, academics, careers, transit, and economy (`/ic botinfo`, `/ic status`, `/ic exam`, `/ic notes`, `/ic jobs`). | Classrooms, academic study servers, resource-constrained environments. |
+| `toronto_tmu` | Student core profile paired with TMU campus defaults and branding. | Toronto Metropolitan University student communities. |
+| `default` | Core utilities, academics, careers, transit, economy, casino, and simulated market (`/ic icse market`, `/ic casino`). External AI/sports remain opt-in. | Controlled private alpha and general campus servers. |
+| `community_full` | All modules including optional AI (`/ic resume`) and sports (`/ic sports`). | Full-featured staging and authorized production servers with optional API keys. |
 
 ### 6.2 Emergency Operational Controls
 - **Instant Casino/AI Shutdown:** If an economy anomaly or Gemini quota overrun occurs, administrators can toggle off high-cost modules immediately:
-  - Command: `/ic admin features set profile student_core`
+  - Command: `/ic admin features disable:casino` (or `/ic admin setup` -> select `Student Core`)
   - Environment override: `FEATURE_PROFILE=student_core` followed by process restart.
-- **Circuit Breakers:** External API wrappers (`GeminiClient`, `MetrolinxAdapter`, `RSSFeedReader`) maintain circuit breakers with exponential backoff and automatic degradation to static catalog links when error rates exceed 50% over a 2-minute rolling window.
+- **Circuit Breakers:** External HTTP wrappers (`BoundedHttpTransport` with `ProviderCircuitBreaker`, `JobsIngestionPipeline` cooldowns, and `TaskSupervisor` exponential backoff) pause requests during sustained upstream failures and degrade cleanly without fabricating fallback data.
 
 ---
 
 ## 7. Launch Decision Record (LDR) — `v1.0.0-rc1`
 
-### 7.1 Sign-Off Evaluation Matrix
+### 7.1 Automated Offline Gate & Pending Owner Sign-Off Matrix
 
-| Sign-Off Domain | Evaluator Role | Evaluation Criteria | Sign-Off Status |
-|---|---|---|---|
-| **Security & Secrets** | Security Lead | `tools/scan_secrets.py --enforce-clean` reports 0 violations; `RedactingLogFilter` verified; zero production secrets committed. | **APPROVED** |
-| **Data & Economy** | Database / Economy Lead | SQLite migrations verified; ACID transaction atomicity verified; zero double-spend under concurrency. | **APPROVED** |
-| **Academic Usability** | Student Experience Lead | CS (`CPS209`) and Commerce (`FIN300`) onboarding, exam schedules, and course note fallback verified. | **APPROVED** |
-| **Reliability & Latency** | Infrastructure Lead | 100% offline verification passed; interactive command latency < 2500ms; task supervisor fault-recovery confirmed. | **APPROVED** |
+| Sign-Off Domain | Evaluation Criteria | Verification & Sign-Off Status |
+|---|---|---|
+| **Security & Secrets** | `tools/scan_secrets.py --enforce-clean` reports 0 violations; `RedactingLogFilter` verified; zero production secrets committed. | **OFFLINE CHECKS PASSED (Pending Owner Sign-Off)** |
+| **Data & Economy** | SQLite migrations verified; ACID transaction atomicity verified; zero double-spend under concurrency. | **OFFLINE CHECKS PASSED (Pending Owner Sign-Off)** |
+| **Academic Usability** | CS (`CPS209`) and Commerce (`FIN300`) onboarding, exam schedules, and course note fallback verified in offline harness. | **OFFLINE CHECKS PASSED (Pending Owner Sign-Off)** |
+| **Reliability & Latency** | Offline test suite, local handler latency (< 2500ms), and task supervisor fault-recovery verified; live Discord gateway RTT pending owner-run staging. | **OFFLINE CHECKS PASSED (Pending Owner Sign-Off)** |
 
 ### 7.2 Open Issues Disposition
 - **Open P0 Issues:** **0** (Zero P0 blockers).
@@ -165,5 +165,5 @@ In the event that an unforeseen critical defect is detected during Alpha/Beta ru
 
 All **8 Measurable Release Gates** have achieved verified **OFFLINE PASS** status under automated offline simulation (`tools/verify_beta_readiness.py` and `pytest`). Live Discord gateway connections, real multi-guild slash-command synchronization, and human student cohort trials have **not** been executed automatically in compliance with `AGENTS.md`.
 
-**Final Release Recommendation:** **GO FOR OWNER-RUN LIVE STAGING & CONTROLLED PRIVATE ALPHA (`v1.0.0-rc1`)** *(see [`docs/release-evidence.md`](file:///home/sukesan/dev/discord/campus-bot/docs/release-evidence.md) for the complete mapping of offline-verified vs. owner-run staging claims)*.
+**Final Release Recommendation:** **GO FOR OWNER-RUN LIVE STAGING & CONTROLLED PRIVATE ALPHA (`v1.0.0-rc1`)** *(see [`docs/release-evidence.md`](release-evidence.md) for the complete mapping of offline-verified vs. owner-run staging claims)*.
 

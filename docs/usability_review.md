@@ -13,7 +13,7 @@
 The objective of this usability review is to evaluate the end-user experience, administrative ergonomics, error clarity, and privacy transparency of the modernized Instigate Cafe Bot. The review tests real command execution paths offline against synthetic Discord interactions across four distinct user archetypes representing the campus community.
 
 ### 1.2 Testing Harness Architecture
-Usability evaluation is driven by an automated, repeatable audit harness implemented in [tools/run_usability_audit.py](file:///home/sukesan/dev/discord/campus-bot/tools/run_usability_audit.py) and integrated into regression testing via [tests/unit/test_usability_review_archetypes.py](file:///home/sukesan/dev/discord/campus-bot/tests/unit/test_usability_review_archetypes.py).
+Usability evaluation is driven by an automated, repeatable audit harness implemented in [tools/run_usability_audit.py](../tools/run_usability_audit.py) and integrated into regression testing via [tests/unit/test_usability_review_archetypes.py](../tests/unit/test_usability_review_archetypes.py).
 
 Key architecture guarantees:
 - **Zero Production Gateway:** Uses `FakeClient` and `FakeInteraction` instances simulating Discord API interactions without connecting to Discord Gateway or invoking `bot.run()`.
@@ -78,7 +78,7 @@ Every task is scored against five objective criteria:
 
 ## 3. Empirical Execution Results & Findings Matrix
 
-The following data reflects the automated execution of [tools/run_usability_audit.py](file:///home/sukesan/dev/discord/campus-bot/tools/run_usability_audit.py) in the offline staging harness:
+The following data reflects the automated execution of [tools/run_usability_audit.py](../tools/run_usability_audit.py) in the offline staging harness:
 
 | Archetype | Task Description | Clicks / Steps | Measured Latency | Status | Error Ambiguity | Observed Friction Point |
 |---|---|:---:|:---:|:---:|:---:|---|
@@ -196,7 +196,7 @@ For a student club leader or community moderator setting up the bot:
 
 - [ ] **1. Interactive Server Setup:**
   - Run `/ic admin setup`.
-  - Verify interactive profile selection (`default`, `engineering_heavy`, `student_core`) and channel assignment dropdowns.
+  - Verify interactive profile selection (`default`, `student_core`, `toronto_tmu`, `community_full`) and channel assignment dropdowns.
 - [ ] **2. Diagnostic & Health Verification:**
   - Run `/ic status`.
   - Confirm bot version, SQLite schema v4 (WAL mode), active background schedules, and channel permission audit.
