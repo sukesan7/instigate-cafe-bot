@@ -31,6 +31,7 @@ def test_required_documentation_files_exist_and_non_empty() -> None:
         "docs/troubleshooting.md",
         "docs/ui-style.md",
         "docs/release-evidence.md",
+        "docs/screenshots-guide.md",
         ".github/ISSUE_TEMPLATE/feature_request.md",
         ".github/PULL_REQUEST_TEMPLATE.md",
     ]
@@ -45,7 +46,7 @@ def test_required_documentation_files_exist_and_non_empty() -> None:
 
 
 def test_readme_documents_all_registered_leaf_commands() -> None:
-    """Verify README and docs/features.md document all 53 leaf commands registered across the bot's modules."""
+    """Verify docs/features.md documents all 53 leaf commands and README.md highlights verified commands."""
     readme_content = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     features_content = (PROJECT_ROOT / "docs/features.md").read_text(encoding="utf-8")
 
@@ -57,12 +58,18 @@ def test_readme_documents_all_registered_leaf_commands() -> None:
         # A command name like '/ic academics course' or leaf token 'course'
         tokens = name.split()
         leaf = tokens[-1]
-        assert leaf in readme_content, (
-            f"Leaf command '{name}' ({leaf}) is missing from README.md documentation"
-        )
         assert leaf in features_content, (
             f"Leaf command '{name}' ({leaf}) is missing from docs/features.md documentation"
         )
+
+    # README stays concise with 6-10 verified representative commands and links to docs/features.md
+    assert "docs/features.md" in readme_content
+    rep_section = readme_content.split("## Representative Commands", 1)[1].split("\n---", 1)[0]
+    mentioned_verified = [name for name in registered if f"`/{name}`" in rep_section]
+    assert 6 <= len(mentioned_verified) <= 10, (
+        f"Expected 6-10 verified slash commands highlighted in README.md Representative Commands, "
+        f"found {len(mentioned_verified)}: {mentioned_verified}"
+    )
 
 
 def test_configuration_doc_covers_settings_fields() -> None:

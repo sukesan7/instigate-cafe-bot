@@ -55,6 +55,7 @@ FORBIDDEN_PLACEHOLDER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _LINK_RE = re.compile(r"(!?)\[([^\]]*)\]\(([^)\r\n]+)\)")
+_HTML_IMG_SRC_RE = re.compile(r"""<img\b[^>]*\bsrc\s*=\s*["']([^"'\r\n]+)["']""", re.IGNORECASE)
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
 _FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 
@@ -346,6 +347,50 @@ def validate_markdown_files(
                                 message=f"Heading anchor '#{anchor_part}' not found in '{path_part}'.",
                             )
                         )
+
+            # 3b. HTML <img src="..."> references (e.g. sized hero logos in README.md)
+            for m_img in _HTML_IMG_SRC_RE.finditer(line):
+                raw_src = m_img.group(1).strip()
+                if not raw_src or raw_src.startswith(("file:///", "data:")):
+                    continue
+                if raw_src.startswith(("http://", "https://")):
+                    parsed = urlparse(raw_src)
+                    host = (parsed.hostname or "").lower()
+                    report.external_urls.setdefault(raw_src, set()).add(rel_display)
+                    if allowed_external_hosts and host not in allowed_external_hosts:
+                        report.violations.append(
+                            DocViolation(
+                                file=rel_display,
+                                line=lineno,
+                                kind="unallowlisted_external_url",
+                                message=f"External image host '{host}' is not in the intentional allowlist: {raw_src}",
+                            )
+                        )
+                    continue
+
+                report.local_images_checked += 1
+                img_path = (resolved_md.parent / unquote(raw_src)).resolve()
+                try:
+                    img_path.relative_to(root_resolved)
+                except ValueError:
+                    report.violations.append(
+                        DocViolation(
+                            file=rel_display,
+                            line=lineno,
+                            kind="path_escape",
+                            message=f"Local image reference '{raw_src}' escapes repository root.",
+                        )
+                    )
+                    continue
+                if not img_path.exists():
+                    report.violations.append(
+                        DocViolation(
+                            file=rel_display,
+                            line=lineno,
+                            kind="missing_image",
+                            message=f"Missing local image target '{raw_src}' (resolved from {rel_display}).",
+                        )
+                    )
 
     return report
 

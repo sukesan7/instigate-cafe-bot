@@ -30,6 +30,7 @@ def test_all_tracked_repository_markdown_files_pass_offline_validation() -> None
         f"  {v.file}:{v.line} [{v.kind}] {v.message}" for v in report.violations
     )
     assert report.local_links_checked >= 60
+    assert report.local_images_checked >= 1
 
 
 def test_validator_rejects_file_uris_missing_links_images_anchors_placeholders_and_unknown_hosts(

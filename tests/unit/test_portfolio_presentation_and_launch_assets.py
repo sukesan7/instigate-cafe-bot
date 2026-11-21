@@ -1,5 +1,5 @@
 # tests/unit/test_portfolio_presentation_and_launch_assets.py
-"""Unit tests verifying README presentation, compact docs architecture, and hygiene."""
+"""Unit tests verifying restrained README presentation, compact docs architecture, and hygiene."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ def test_compact_public_docs_index_and_scope_clarity() -> None:
         "development.md",
         "testing.md",
         "release-evidence.md",
+        "screenshots-guide.md",
     ):
         assert expected_doc in content, f"docs/README.md does not link to {expected_doc}"
 
@@ -45,36 +46,75 @@ def test_compact_public_docs_index_and_scope_clarity() -> None:
         )
 
 
-def test_readme_portfolio_presentation_and_limits() -> None:
-    """Verify README.md contains honest provider limits, staging previews, and discovery tags."""
+def test_readme_restrained_landing_page_and_honest_boundaries() -> None:
+    """Verify README.md is concise, honest, visually restrained, and free of fake screenshot links."""
     readme_path = PROJECT_ROOT / "README.md"
     content = readme_path.read_text(encoding="utf-8")
 
-    # Badges (must use real workflow badge and avoid hardcoded stale test counts)
+    # Brand hero with real local logo and compact factual badges (no rainbow badge wall or stale counts)
+    assert "assets/ic_logo.png" in content
     assert "v1.0.0-rc1" in content
     assert "sukesan7/instigate-cafe-bot/actions/workflows/ci.yml/badge.svg" in content
     assert "646 Passing" not in content
+    assert "<details>" not in content, "README should not embed a giant accordion command inventory"
+    assert "┌───" not in content, "README should not embed a giant ASCII-art architecture chart"
 
-    # Honest Provider Limits Table
-    assert "Honest Provider Comparison & Operating Limits" in content
-    assert "RateMyProfessors" in content
-    assert "Metrolinx GO" in content
-    assert "TTC Alerts" in content
-    assert "Career ATS Feeds" in content
-    assert "Google Gemini AI" in content
-    assert "Market Quotes" in content
-    assert "SQLite WAL Storage" in content
+    # 6 core feature areas
+    for domain in (
+        "Academics",
+        "Careers",
+        "AI Resume Assistance",
+        "Community & Economy",
+        "Transit & Market Feeds",
+        "Administration",
+    ):
+        assert domain in content, f"README.md missing feature domain: {domain}"
 
-    # Visual Showcase & Canonical Docs Index Links
-    assert "Staging Visual Showcase" in content
-    assert "docs/README.md" in content
-    assert "docs/features.md" in content
-    assert "docs/deployment.md" in content
+    # Self-hosted vs hosted distinction and honest TMU/campus scope
+    assert "Self-Hosted" in content
+    assert "Publicly Inviteable Hosted Bot" in content
+    assert "Toronto Metropolitan University" in content
 
-    # GitHub Topics
-    assert "GitHub Topics & Discovery Tags" in content
-    assert "discord-bot" in content
-    assert "clean-architecture" in content
+    # Fresh-checkout Quick Start with Python 3.12/3.13, .env.example, and offline test command
+    assert "3.12" in content and "3.13" in content
+    assert ".env.example" in content
+    assert "uv sync --dev" in content
+    assert "uv run pytest" in content
+    assert "--allow-gateway" in content
+
+    # Reserved Screenshots / Gallery section without fake image URLs
+    assert "Screenshots / Gallery" in content
+    assert "docs/screenshots-guide.md" in content
+    assert "assets/screenshots/" not in content, "README must not link nonexistent screenshots yet"
+
+    # Key doc links
+    for link_target in (
+        "docs/README.md",
+        "docs/features.md",
+        "docs/configuration.md",
+        "docs/deployment.md",
+        "docs/privacy.md",
+        "docs/providers.md",
+        "docs/troubleshooting.md",
+        "docs/release-evidence.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+    ):
+        assert link_target in content, f"README.md missing link to {link_target}"
+
+
+def test_screenshots_guide_defines_redaction_and_owner_only_capture() -> None:
+    """Verify docs/screenshots-guide.md specifies command states, redaction rules, and owner-only boundary."""
+    guide_path = PROJECT_ROOT / "docs/screenshots-guide.md"
+    assert guide_path.is_file(), "docs/screenshots-guide.md is missing"
+    content = guide_path.read_text(encoding="utf-8")
+
+    assert "manual owner-run" in content.lower()
+    assert "redaction" in content.lower()
+    assert "DISCORD_TOKEN" in content
+    assert "/ic resume" in content
+    assert "/ic exam list" in content
+    assert "/ic admin setup" in content
 
 
 def test_public_docs_contain_zero_sensitive_tokens() -> None:

@@ -10,7 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- Consolidated repository documentation into a flat 12-file public `docs/` layout anchored by [`docs/README.md`](docs/README.md) (`features.md`, `configuration.md`, `deployment.md`, `troubleshooting.md`, `architecture.md`, `providers.md`, `privacy.md`, `ui-style.md`, `development.md`, `testing.md`, `release-evidence.md`) and moved historical planning, audit, and launch reports to an out-of-repo owner archive.
+- Rebuilt [`README.md`](README.md) as a concise, restrained landing page for first-time GitHub visitors (featuring `assets/ic_logo.png`, compact real badges, 6-domain feature overview, representative verified slash commands, self-hosted vs. hosted clarity, TMU/campus scope notes, fresh-checkout Quick Start, and a reserved Screenshots section).
+- Added [`docs/screenshots-guide.md`](docs/screenshots-guide.md) defining the manual owner-run capture and PII/token redaction procedure prior to populating gallery screenshots.
+- Updated repository documentation so all public guides and claims reflect actual implemented code and offline-verified behavior rather than aspirational or unverified features.
+- Consolidated repository documentation into a flat public `docs/` layout anchored by [`docs/README.md`](docs/README.md) (`features.md`, `configuration.md`, `deployment.md`, `troubleshooting.md`, `architecture.md`, `providers.md`, `privacy.md`, `ui-style.md`, `development.md`, `testing.md`, `release-evidence.md`, `screenshots-guide.md`) and moved historical planning, audit, and launch reports to an out-of-repo owner archive.
 
 ### Planned
 - Public deployment and automated production migration.

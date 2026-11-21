@@ -38,6 +38,7 @@ Welcome to the documentation for **Instigate Cafe Bot** (`v1.0.0-rc1`), a modula
 | [Discord UI & Visual Style Contract](ui-style.md) | Contributors | Embed anatomy, theme presets, semantic status colors, Unicode/mention safety, and interaction-audience / component timeout matrix. |
 | [Development & Tooling Guide](development.md) | Contributors | Canonical `uv` workflow, Python 3.11–3.13 support matrix, 4 operational safety tiers (`Makefile`, `.pre-commit-config.yaml`, offline CI), and secret-hygiene remediation commands. |
 | [Offline Testing & Invariants Guide](testing.md) | Contributors & QA | Pytest marker taxonomy, `tests/conftest.py` network/env isolation, sanitized fixtures, domain invariants, and offline verification scripts (`smoke_offline.py`, `smoke_staging.py`, `check_docs.py`). |
+| [Screenshots Capture & Redaction Guide](screenshots-guide.md) | Maintainers | Owner-run capture checklist and PII/ID cropping and redaction rules for populating the `README.md` gallery after staging verification. |
 
 ---
 

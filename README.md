@@ -1,217 +1,133 @@
+<p align="left">
+  <img src="assets/ic_banner.png" alt="Instigate Cafe Bot Banner"/>
+</p>
+
 # Instigate Cafe Bot
 
-[![Version v1.0.0-rc1](https://img.shields.io/badge/version-v1.0.0--rc1-blue.svg)](pyproject.toml)
-[![Python 3.11 | 3.12 | 3.13](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
-[![discord.py 2.3+](https://img.shields.io/badge/discord.py-2.3%2B%20app__commands-5865F2)](https://github.com/Rapptz/discord.py)
-[![Storage SQLite WAL](https://img.shields.io/badge/Storage-SQLite%20WAL-lightgrey)](https://www.sqlite.org/)
-[![Offline Test Suite](https://img.shields.io/badge/Tests-Offline%20Pytest%20Suite-blue)](tests/)
+A modular, self-hostable Discord slash-command bot (`/ic`) for student communities—combining academic schedules and course resources, early-career job feeds, optional consent-based AI resume review, regional transit/market feeds, and a virtual campus economy backed by SQLite (WAL mode).
+
+[![Version v1.0.0-rc1](https://img.shields.io/badge/version-v1.0.0--rc1-2b6cb0)](pyproject.toml)
+[![Python 3.11 | 3.12 | 3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776ab)](https://www.python.org/)
+[![License MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
 [![Offline Quality Gate](https://github.com/sukesan7/instigate-cafe-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/sukesan7/instigate-cafe-bot/actions/workflows/ci.yml)
-[![License MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-
-A modular, student-focused Discord bot combining academic study tools, tech job alerts, regional transit advisories, a virtual campus economy, and optional privacy-first AI resume feedback. Built with clean architecture, strict multi-guild tenancy, and atomic SQLite Write-Ahead Logging (WAL) transactions.
 
 ---
 
-## 1. What the Bot Is (and What It Is Not)
+## Overview
 
-- **What it IS:**
-  - An application running strictly on Discord Slash Commands (`/ic`) under a single clean command namespace.
-  - An academic utility providing study guide links (Notion), RateMyProfessors ratings, and shared guild exam calendars with iCalendar (`.ics`) export.
-  - A tech careers feed filtering junior software engineering internships and new grad postings from Greenhouse, Lever, and Workday.
-  - A simulated campus paper-trading exchange (ICSE) and casino mini-games running on an atomic, double-entry SQLite ledger.
-  - A self-hostable service executing as a non-root process with outbound-only networking and zero open inbound ports.
+Instigate Cafe Bot runs strictly on Discord application commands under `/ic` (53 commands across 17 feature modules) and optional background pollers managed by a single-instance `TaskSupervisor`.
 
-- **What it is NOT:**
-  - **Not a universal multi-campus bot:** Default study guides and course notes focus on Toronto Metropolitan University (TMU) STEM curricula. Adding new institutions requires implementing a campus adapter (see [Provider Guide](docs/providers.md)).
-  - **Not a financial or investment platform:** All stock quotes, trades, and casino bets are purely educational simulations using virtual campus tokens. Real money transactions are neither supported nor possible.
-  - **Not an automated compliance tool:** While engineered for data minimization and operator-run Right-to-be-Forgotten deletion/anonymization, hosting operators remain responsible for their community's legal privacy policies, host disk encryption, and upstream third-party API agreements.
-  - **Not a persistent chat logger:** The application does not record or store channel chat messages to local disk or SQLite, and **no automatic channel-history collection occurs by default** (`LLM_CHANNEL_HISTORY_ENABLED=false`). Message content is processed only when explicitly invoked via slash commands or, when the operator enables `LLM_ENABLED=true`, via direct `@mentions` (which read surrounding channel context in memory only if the operator also explicitly opts into `LLM_CHANNEL_HISTORY_ENABLED=true`).
+All optional integrations default to disabled so a fresh checkout can be tested completely offline without tokens, secrets, or live Discord connections. Core features require only a `DISCORD_TOKEN`; third-party API keys (`GEMINI_API_KEY`, `GO_API_KEY`, `ODDS_API_KEY`) are optional and degrade cleanly when omitted.
 
 ---
 
-## 2. High-Level Architecture
+## Features
 
-```
-                       Discord Platform
-                     (Outgoing WSS / HTTPS)
-                              │
-                              ▼
-                   ┌───────────────────────┐
-                   │   main.py (Gateway)   │
-                   └──────────┬────────────┘
-                              │
-         ┌────────────────────┴────────────────────┐
-         ▼                                         ▼
-┌──────────────────┐                     ┌──────────────────┐
-│ Command Router   │                     │ TaskSupervisor   │
-│ (/ic 53 leaves)  │                     │ (8 pollers)      │
-└────────┬─────────┘                     └────────┬─────────┘
-         │                                        │
-         ▼                                        ▼
-┌───────────────────────────────────────────────────────────┐
-│              ServiceContainer & Domain Engines            │
-│  • Academics   • Careers (ATS)   • Economy   • Gemini AI  │
-└─────────────────────────────┬─────────────────────────────┘
-                              │
-                              ▼
-                   ┌───────────────────────┐
-                   │  SQLite 3 (WAL Mode)  │
-                   │  • users  • ledger    │
-                   └───────────────────────┘
-```
+| Area | What It Does | Optional / Scope Notes |
+| :--- | :--- | :--- |
+| **Academics** | Shared server exam calendar with `.ics`/CSV export, RateMyProfessors ratings, course study-guide links, and grade distributions. | `/ic exam` works for any school. Default `/ic notes`, `/ic grades`, and default `RMP_UNIVERSITY` target **TMU** (see [Limitations](#campus-and-operational-limitations)). |
+| **Careers** | Searches cached Greenhouse, Lever, and Workday intern/new-grad postings, saves personal filter preferences, and posts guild job alerts. | No API key required; feeds are polled only when board lists and `JOBS_POLL_SECONDS` are configured. |
+| **AI Resume Assistance** | Ephemeral PDF/image resume critique with a mandatory pre-transmission consent barrier (`ResumeConfirmView`) and an instant offline No-AI checklist. | **Optional & consent-based.** Requires `LLM_ENABLED=true` and `GEMINI_API_KEY`. Processed in RAM only (zero local disk/SQLite persistence); Discord CDN and Gemini API terms apply. |
+| **Community & Economy** | Guild-scoped virtual tokens, daily allowance, net-worth leaderboard, ICSE virtual stock exchange, and unit-tested PRNG game engines (Blackjack, Roulette, Slots). | Runs offline on an atomic SQLite WAL ledger. Purely virtual currency with no real-money transactions. |
+| **Transit & Market Feeds** | Background alerts for GO Transit and TTC delays, Yahoo Finance market snapshots/volatility alerts, optional Bitcoin address watcher, and sports schedules/headlines. | **Optional & location/source-dependent.** GO (`GO_API_KEY`) and TTC Mastodon target Toronto/GTA; sports odds use optional `ODDS_API_KEY`. |
+| **Administration** | Interactive `/ic admin setup` wizard, per-guild feature profiles/toggles, role delegation, config audit log, redacted `/ic status` reports, and `/ic admin llm_stop`. | Requires Discord `Manage Server` / `Administrator` or configured `ALLOWED_ROLE_IDS`. |
 
 ---
 
-## 3. Feature Status & Module Matrix
+## Representative Commands
 
-All user-facing commands reside under the root group **`/ic`** across 17 modular subsystems:
+All commands live under `/ic`. A few common starting points:
 
-| Feature Domain | Root Slash Commands | Background Loop | External API Dependency | Offline Fallback Behavior |
-|---|---|---|---|---|
-| **Academics** | `/ic notes`, `/ic prof`, `/ic grades`, `/ic exam ...` | None | RateMyProfessors (GraphQL) | Server manual catalog links; empty error guidance |
-| **Careers & Jobs** | `/ic jobs`, `/ic job_preferences`, `/ic job_preview`, `/ic resume` | Jobs Poller (`JOBS_POLL_SECONDS`) | Greenhouse, Lever, Workday | In-memory cached postings; offline resume rubric |
-| **Virtual Economy** | `/ic dailyclaim`, `/ic profile`, `/ic leaderboard` | None | None (Internal SQLite Ledger) | Fully offline, atomic ACID transactions |
-| **Casino Games** | `/ic casino blackjack/roulette/slots/payouts` | None | None (Pure Python Game Engines) | Fully offline math engines |
-| **Fun-Stock Market** | `/ic icse buy/sell/short/cover/market/quote...` | Market Watch & Daily Report | Yahoo Finance / AlphaVantage | Internal catalog prices; simulated price moves |
-| **Transit Alerts** | Background channel alerts | TTC & GO Pollers | Metrolinx Open Data, TTC Mastodon | Circuit breakers pause requests during outages |
-| **Administration** | `/ic admin setup`, `/ic admin config`, `/ic admin features`, `/ic admin roles`, `/ic admin set`, `/ic admin move`, `/ic admin audit`, `/ic admin sync_catalog`, `/ic admin weekroll`, `/ic admin llm_start`, `/ic admin llm_stop` | None | None | Instant local configuration mutation |
-| **Diagnostics** | `/ic botinfo`, `/ic serverinfo`, `/ic status`, `/ic help`, `/ic report`, `/ic getting-started` | None | None | Redacted system and storage status inspection |
+| Command | Purpose |
+| :--- | :--- |
+| `/ic getting-started` | Interactive 4-step walkthrough for new members. |
+| `/ic help` | Dynamic command directory filtered to modules enabled in your server. |
+| `/ic exam list` | Upcoming shared guild exams (private exams automatically reply ephemerally). |
+| `/ic notes` | Course study-guide lookup with alias normalization and SSRF-validated links. |
+| `/ic jobs` | Search cached early-career ATS job postings with HTTPS-only apply links. |
+| `/ic resume` | Ephemeral AI resume review (with explicit consent) or offline self-review checklist. |
+| `/ic icse market` | View active listings and weekly changes on the virtual campus stock exchange. |
+| `/ic admin setup` | Guided server setup for channels, campus preset, and enabled feature modules. |
+| `/ic status` | Inspect module readiness, SQLite Schema v7 WAL health, and redacted issue reports. |
 
-<details>
-<summary><b>Click to expand the complete 53 slash command inventory</b></summary>
-
-| Subsystem | Slash Commands | Description |
-|---|---|---|
-| **Admin (11)** | `/ic admin setup`, `/ic admin config`, `/ic admin features`, `/ic admin roles`, `/ic admin set`, `/ic admin move`, `/ic admin audit`, `/ic admin sync_catalog`, `/ic admin weekroll`, `/ic admin llm_start`, `/ic admin llm_stop` | Server configuration, feature toggles, role management, audit logs, and AI killswitch |
-| **Academics (9)** | `/ic notes`, `/ic prof`, `/ic grades`, `/ic exam add`, `/ic exam remove`, `/ic exam list`, `/ic exam clear`, `/ic exam export`, `/ic exam import` | Course study notes, RateMyProfessors ratings, grade distributions, and shared exam schedules |
-| **Careers (5)** | `/ic jobs`, `/ic job_preferences`, `/ic job_preview`, `/ic job_subscribe`, `/ic resume` | ATS job matching (Greenhouse, Lever, Workday) and memory-only AI resume critique (not stored on local bot disk/SQLite; Discord and Gemini API terms apply) |
-| **Economy & Casino (7)** | `/ic dailyclaim`, `/ic profile`, `/ic leaderboard`, `/ic casino blackjack`, `/ic casino roulette`, `/ic casino slots`, `/ic casino payouts` | Daily allowances, net worth leaderboards, and unit-tested PRNG game engines with deterministic payout tables |
-| **Fun-Stock Market ICSE (10)** | `/ic icse market`, `/ic icse stock`, `/ic icse quote`, `/ic icse buy`, `/ic icse sell`, `/ic icse short`, `/ic icse cover`, `/ic icse portfolio`, `/ic icse trades`, `/ic icse history` | Virtual equity exchange with long/short trading and real-time market data |
-| **Info & Diagnostics (6)** | `/ic botinfo`, `/ic serverinfo`, `/ic status`, `/ic help`, `/ic report`, `/ic getting-started` | System diagnostics, component readiness, redaction test, and onboarding guides |
-| **Sports (5)** | `/ic sports nba`, `/ic sports nfl`, `/ic sports mma`, `/ic sports ufc`, `/ic sports boxing` | Upcoming game schedules, betting odds, and sports news headlines |
-
-</details>
-
-*(See full architecture details and sequence diagrams in [Architecture Documentation](docs/architecture.md)).*
-
-### 3.1 Honest Provider Comparison & Operating Limits
-
-To prevent unexpected hosting surprises or hidden subscription dependencies, all external provider boundaries, rate limits, and fallback mechanisms are documented honestly:
-
-| Provider Domain | External Integration | Upstream Limits & Cost Boundaries | Local Fallback & Degradation Invariant |
-|---|---|---|---|
-| **RateMyProfessors** | Unofficial GraphQL API | Undocumented upstream rate limits; free access. | In-memory query caching; user guidance with direct web lookup links. |
-| **Metrolinx GO** | Official Open Data REST API | Requires free Metrolinx API key; rate limits apply. | Exponential-backoff outage dampener; suppresses duplicate alerts. |
-| **TTC Alerts** | Public Fediverse / Mastodon | Public RSS/REST polling; no API key required. | Circuit breaker pauses on connection failure; zero crash loops. |
-| **Career ATS Feeds** | Public RSS & JSON Feeds (Greenhouse, Lever, Workday) | Scraping frequency bounded by poller interval (default 30m). | In-memory cache preserved; stale listings served with timestamp warnings. |
-| **Google Gemini AI** | Google AI Studio REST API | Free tier: 15 RPM / 1M TPM; paid tier pay-as-you-go. | Mandatory opt-in barrier (`ResumeConfirmView`); offline checklist fallback. |
-| **Market Quotes** | Yahoo Finance / AlphaVantage | Yahoo rate limits scrapers; AlphaVantage free key (25 req/day). | Simulated price movement generator; internal exchange catalog keeps trading active. |
-| **SQLite WAL Storage** | Local filesystem (`sqlite3`) | Single-writer concurrency lock; zero cloud storage fee. | Immediate ACID write transactions; double-entry ledger prevents balance drift. |
-
-### 3.2 Staging Visual Showcase (Synthetic Guilds)
-
-The bot has been verified offline against synthetic staging test guilds (**Guild Alpha** `900000000000000001` and **Guild Beta** `900000000000000002`). See [`docs/features.md`](docs/features.md) and [`docs/ui-style.md`](docs/ui-style.md) for the complete command catalog and rendered embed snapshots across themes:
-
-- **Pillar 1 — Academic Hub & Exam Countdown:** Autonomous guild setup (`/ic admin setup`) and shared exam countdowns with iCalendar (`.ics`) export.
-- **Pillar 2 — Career Tools & AI Resume Consent:** Ephemeral resume critiques with mandatory third-party AI consent disclosure and no-AI offline rubric.
-- **Pillar 3 — Transit & Regional Commuter Alerts:** Metrolinx GO transit line delays and TTC transit advisories with circuit breaker dampening.
-- **Pillar 4 — Virtual Stock Exchange (ICSE) & Economy:** Atomic double-entry paper trading with strict multi-guild ledger isolation.
+See [Features & Command Guide](docs/features.md) for all 53 verified slash commands and options.
 
 ---
 
-## 4. Self-Hosted Source Release vs. Hosted Public Invite
+## Self-Hosted vs. Hosted Public Bot
 
-| Consideration | Model A: Self-Hosted Community Bot (Recommended) | Model B: Maintainer-Hosted Public Invite |
-|---|---|---|
-| **Hosting Model** | Community hosts their own container (Docker / systemd) | Upstream maintainer hosts multi-tenant instance |
-| **Data Ownership** | 100% data sovereignty; SQLite DB stays on your disk | Data stored on maintainer's central infrastructure |
-| **Discord Verification** | Not required (<100 servers) | Required by Discord (>100 servers) |
-| **Privileged Intents** | Not required for slash commands; Message Content optional | Strictly restricted by Discord review team |
-| **API Costs & Quotas** | Self-hoster supplies their own free/low-tier API keys | Maintainer absorbs all external API expenses |
+- **Self-Hosted Open-Source Release (Recommended):** Clone this repository, create your own Discord Application, supply your own optional API keys, and keep the SQLite database (`DB_PATH`) on your own host. No Discord `>100`-server verification is needed, and you remain the sole Data Controller for your community.
+- **Publicly Inviteable Hosted Bot (Not Operated Here):** Running a single shared instance across `>100` servers requires Discord Bot Verification, restricted Message Content Intent (slash commands only), multi-tenant operational governance, and maintainer-funded API quotas.
+
+See [Deployment, Hosting & Disaster Recovery](docs/deployment.md) for Docker Compose, `systemd`, and Railway setup.
 
 ---
 
-## 5. Quick Start (Safe Offline Default)
+## Campus and Operational Limitations
 
-### 5.1 Prerequisites
-- Python 3.11, 3.12, or 3.13
-- [`uv`](https://docs.astral.sh/uv/) package manager
+- **TMU & Toronto defaults:** Out-of-the-box study guides (`/ic notes`), grade distributions (`/ic grades` via `tmu.grades.zone`), default `RMP_UNIVERSITY` (`Toronto Metropolitan University`), and transit pollers (Metrolinx GO, TTC Mastodon) target Toronto Metropolitan University and the Greater Toronto Area. Other institutions can override `RMP_UNIVERSITY`, `CAMPUS_ID`, `EXAMS_TZ`, and `NOTES_SITES` or add an adapter (see [Provider Guide](docs/providers.md)).
+- **Privacy & storage boundaries:** The bot stores persistent state in local plaintext SQLite (`DB_PATH`); host-level disk encryption is the operator's responsibility. No channel messages are written to local disk or SQLite, and **no automatic channel-history collection occurs by default** (`LLM_CHANNEL_HISTORY_ENABLED=false`). Resumes are never written to local disk or SQLite, though attachments and AI requests transit Discord CDN and Google Gemini under their respective policies.
+- **Single active replica:** SQLite WAL and scheduled pollers require `replicas: 1` per database.
+- **Virtual economy & games:** Casino games use standard Python PRNG (`unit-tested PRNG game engines`), not a cryptographic commit-reveal protocol. Market tools are educational simulations, not financial advice.
 
-### 5.2 Local Setup
+For claim-by-claim test traceability and unverified live-staging items, see [Release Claims & Verification Evidence](docs/release-evidence.md).
+
+---
+
+## Quick Start
+
+Requires **Python 3.12 or 3.13** (3.11 is also tested in CI) and [`uv`](https://docs.astral.sh/uv/).
+
+### 1. Install and Verify Offline (No Tokens Required)
+
 ```bash
-# 1. Clone repository
 git clone https://github.com/sukesan7/instigate-cafe-bot.git
 cd instigate-cafe-bot
 
-# 2. Install locked development environment
 uv sync --dev
-
-# 3. Run the complete test suite offline
-uv run pytest
-
-# 4. Run the zero-token offline smoke check
 uv run python tools/smoke_offline.py
-
-# 5. Run the staging lifecycle smoke check
-uv run python tools/smoke_staging.py
+uv run pytest
 ```
 
-### 5.3 Launching the Live Bot
-By default, the bot **refuses to connect to Discord** to protect developers from accidental live launches. To launch:
+### 2. Configure and Run Locally
+
+All optional modules (`LLM_ENABLED`, `MARKET_WATCH_ENABLED`, `BTC_WATCH_ENABLED`, `WORKDAY_POLL_SECONDS=0`) default to off in [`.env.example`](.env.example). Live Discord connections are blocked by default until `--allow-gateway` (or `ICBOT_ALLOW_GATEWAY=true`) is explicitly passed.
 
 ```bash
-# 1. Copy example configuration
 cp .env.example .env
 chmod 600 .env
+# Set DISCORD_TOKEN and GUILD_ID in .env (plus any optional provider keys)
 
-# 2. Edit .env with your DISCORD_TOKEN and GUILD_ID
-# 3. Launch with explicit gateway opt-in:
 uv run python main.py --allow-gateway
 ```
 
-*(For production Docker Compose, `systemd`, and Railway deployment recipes, see [Deployment, Hosting & Disaster Recovery](docs/deployment.md)).*
+---
+
+## Screenshots / Gallery
+
+*Reserved for verified, redacted screenshots captured on an owner-run staging server after development completes. No placeholder or AI-generated UI mockups are included here.*
+
+Maintainers preparing gallery captures should follow [Screenshots Capture & Redaction Guide](docs/screenshots-guide.md) to ensure user IDs, tokens, private channels, and personal records are cropped or redacted before committing images.
 
 ---
 
-## 6. Module Management & Setup
+## Documentation & Community
 
-Server administrators can configure modules directly inside Discord without touching code:
-- **Interactive Setup Wizard:** Run **`/ic admin setup`** to configure channel assignments and community profiles (`default`, `student_core`, `toronto_tmu`, `community_full`).
-- **Feature Toggling:** Run **`/ic admin features disable:casino`** to silence gambling commands in academic channels.
-- **Diagnostics & Issue Reports:** Run **`/ic status issue_report:True`** to export a sanitized diagnostic file with all tokens redacted.
-
----
-
-## 7. Documentation Index
-
-Start at the **[Documentation Index](docs/README.md)**, or jump directly to a guide:
-
-- [Features & 53-Command Guide](docs/features.md)
-- [Complete Configuration Reference](docs/configuration.md)
-- [Deployment, Hosting & Disaster Recovery](docs/deployment.md)
-- [Troubleshooting & Incident Runbook](docs/troubleshooting.md)
-- [System Architecture & Developer Reference](docs/architecture.md)
-- [External Provider Specifications & Campus Guide](docs/providers.md)
-- [Privacy Architecture, Data Map & Deletion Model](docs/privacy.md)
-- [Discord UI & Visual Style Contract](docs/ui-style.md)
-- [Development & Tooling Guide](docs/development.md)
-- [Offline Testing & Invariants Guide](docs/testing.md)
-- [Release Claims & Verification Evidence Matrix](docs/release-evidence.md)
-- [Contributing Guidelines](CONTRIBUTING.md)
-- [Security Policy & Vulnerability Disclosure](SECURITY.md)
-- [Changelog](CHANGELOG.md)
+- [Documentation Index](docs/README.md) — Full map of user, operator, and contributor guides
+- [Features & 53-Command Guide](docs/features.md) — Complete slash-command reference
+- [Configuration Reference](docs/configuration.md) — All environment variables and per-guild overrides
+- [Deployment & Recovery](docs/deployment.md) — Docker Compose, `systemd`, Railway, and SQLite WAL backups
+- [Privacy & Data Model](docs/privacy.md) — Data flows, ephemeral resume handling, and user data export/erasure
+- [Security Policy](SECURITY.md) — Vulnerability disclosure and secret incident response
+- [External Providers & Campus Extensions](docs/providers.md) — Provider limits, SSRF rules, and adding a university adapter
+- [Troubleshooting](docs/troubleshooting.md) — `/ic status` diagnostics, failure taxonomy, and recovery steps
+- [Contributing](CONTRIBUTING.md) & [Development Guide](docs/development.md) — Local workflow, safety tiers, and PR gates
+- [Issues & Feature Requests](https://github.com/sukesan7/instigate-cafe-bot/issues) — Bug reports and proposals
 
 ---
 
-## 8. License & Attribution
+## License & Attribution
 
-- Bot source code is licensed under the [MIT License](LICENSE) (Copyright &copy; 2026 sukesan).
-- "Instigate Cafe" brand identity and server logos are reserved by the Instigate Cafe community.
-- Course notes study guides are authored by **Jasper Cruz** and **Krish Patel** (Copyright &copy; respective authors).
-- Transit data provided under the Metrolinx Open Data Licence and public TTC Mastodon feeds.
-
----
-
-## 9. GitHub Topics & Discovery Tags
-
-`discord-bot` • `discord-py` • `python3` • `sqlite-wal` • `asyncio` • `clean-architecture` • `career-tools` • `academic-schedule` • `transit-alerts` • `virtual-economy` • `rate-my-professor` • `privacy-by-design` • `offline-testing` • `student-community`
+- Source code is licensed under the [MIT License](LICENSE) (Copyright &copy; 2026 sukesan).
+- "Instigate Cafe" branding and `assets/ic_logo.png` are reserved by the Instigate Cafe community.
+- External course notes remain the copyright of their student authors (**Jasper Cruz** and **Krish Patel**); transit data follows the [Metrolinx Open Data Licence](https://www.metrolinx.com/en/about-us/open-data) and public TTC Mastodon feeds.
