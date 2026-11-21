@@ -307,13 +307,15 @@ async def test_privacy_preserving_consent_and_rtbf_deletion(tmp_path: Path) -> N
         del_counts = await u_store.delete_user_data(uid, anonymize_ledger=True)
         assert del_counts["users"] == 1
         assert del_counts["economy_ledger_preserved"] == 1
+        assert del_counts["economy_ledger_anonymized"] == 1
 
         # Profile deleted
         profile_after = await u_store.get_profile(uid)
         assert profile_after is None
 
-        # Ledger records preserved for financial audit integrity
-        ledger_after = await u_store.get_ledger(uid)
+        # Original user_id has zero ledger rows; ledger records preserved under anonymized sentinel 0
+        assert await u_store.get_ledger(uid) == []
+        ledger_after = await u_store.get_ledger(0)
         assert len(ledger_after) >= 1
     finally:
         await db.close()

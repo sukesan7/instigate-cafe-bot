@@ -297,6 +297,7 @@ async def test_user_data_export_and_right_to_be_forgotten_deletion(tmp_path: Pat
 
         # 1. Export User Data (Data Portability)
         export = await u_store.export_user_data(uid)
+        assert export["format_version"] == 2
         assert export["guild_id"] == gid
         assert export["user_id"] == uid
         assert export["profile"] is not None
@@ -305,23 +306,28 @@ async def test_user_data_export_and_right_to_be_forgotten_deletion(tmp_path: Pat
         assert export["positions"][0]["symbol"] == "IC"
         assert len(export["trades"]) >= 1
         assert len(export["ledger"]) >= 1
+        assert export["truncated"] is False
 
         # 2. Delete User Data (Right-to-be-Forgotten)
         deleted_counts = await u_store.delete_user_data(uid, anonymize_ledger=True)
         assert deleted_counts["users"] == 1
         assert deleted_counts["fun_positions"] == 1
         assert deleted_counts["fun_trades"] == 1
-        assert deleted_counts["economy_ledger_preserved"] == 1
+        assert deleted_counts["fun_trades_anonymized"] == 1
+        assert deleted_counts["economy_ledger_preserved"] >= 1
+        assert deleted_counts["economy_ledger_anonymized"] >= 1
 
         # Personal profile and game state must be gone
         assert await u_store.get_profile(uid) is None
         portfolio = await m_store.portfolio(user_id=uid)
         assert len(portfolio.positions) == 0
 
-        # Ledger records remain intact for financial audit trail
-        ledger_after = await u_store.get_ledger(uid)
+        # Original user_id has zero ledger rows; ledger records remain intact under sentinel 0
+        assert await u_store.get_ledger(uid) == []
+        ledger_after = await u_store.get_ledger(0)
         assert len(ledger_after) >= 1
         assert any(e.category == "seed" for e in ledger_after)
+        assert all(str(uid) not in e.transaction_id for e in ledger_after)
     finally:
         await db.close()
 
