@@ -23,6 +23,7 @@ This document specifies the Phase 3B configuration validation, capability readin
 - **Forgiving Mode (`Settings.from_env(strict=False)`):** Default loader preserving safe local/test startup (invalid snowflakes clamp safely while setting `guild_id_invalid=True`; `workday_poll_seconds == 0` inherits `jobs_poll_seconds`).
 - **Strict Mode (`Settings.from_env(strict=True)` / `Settings.load_validated()` / `settings.validate(strict=True)`):** Validates integers, booleans, floats, snowflakes (`0..MAX_SNOWFLAKE`), negative values, `http://`/`https://` URLs (`embed_logo_url`, `ttc_mastodon_base`, `go_api_base`, `btc_esplora_base_url`, `sports_rss_*`, `notes_sites`, `workday_sites`), 24-bit embed colors, `HH:MM` report times, IANA timezones (`exams_tz`, `market_daily_report_tz`), and `major`/`all` alert levels — raising [`ConfigValidationError`](../../icbot/errors.py) without leaking secrets.
 - **Deprecated Env Aliases (emit `DeprecationWarning`):**
+  - `SQLITE_PATH` → `DB_PATH` (consumed only when `DB_PATH` is unset/empty; scheduled for removal in `v1.1.0`)
   - `LLM_MODEL` → `GEMINI_MODEL`
   - `TTC_CHANNEL_ID` → `TTC_ALERTS_CHANNEL_ID`
   - `JOBS_CHANNEL_ID` → `JOB_ALERTS_CHANNEL_ID`

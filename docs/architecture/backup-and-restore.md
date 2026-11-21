@@ -73,22 +73,20 @@ Internally, `restore()`:
 
 ### Step 3: Manual Shell Disaster Recovery
 If restoring from outside the running Python process:
-1. Ensure the bot process is stopped completely.
-2. Archive the existing broken database and its WAL files:
+1. Ensure the bot process is stopped completely (`docker compose stop campus-bot` or `sudo systemctl stop campus-bot.service`).
+2. Use [`tools/backup_db.py`](file:///home/sukesan/dev/discord/campus-bot/tools/backup_db.py) against the canonical `DB_PATH` (e.g., `/data/campus.db` in Docker/Railway, `/opt/campus-bot/data/campus.db` in systemd, or `ic_stock.db` in local dev) to archive the existing database, clean up `-wal`/`-shm` files, and restore with integrity verification:
    ```bash
-   mv ic_stock.db ic_stock.db.broken
-   mv ic_stock.db-wal ic_stock.db-wal.broken 2>/dev/null || true
-   mv ic_stock.db-shm ic_stock.db-shm.broken 2>/dev/null || true
+   uv run python tools/backup_db.py --restore /var/backups/icbot/snapshot_20261113_000000.db --dest /data/campus.db
    ```
-3. Copy the verified backup into place:
+3. Or manually archive the broken database and its WAL files before copying the verified backup into place:
    ```bash
-   cp /var/backups/icbot/snapshot_20261113_000000.db ic_stock.db
+   mv /data/campus.db /data/campus.db.broken
+   mv /data/campus.db-wal /data/campus.db-wal.broken 2>/dev/null || true
+   mv /data/campus.db-shm /data/campus.db-shm.broken 2>/dev/null || true
+   cp /var/backups/icbot/snapshot_20261113_000000.db /data/campus.db
+   sqlite3 /data/campus.db "PRAGMA integrity_check; PRAGMA foreign_key_check;"
    ```
-4. Verify the newly placed database:
-   ```bash
-   sqlite3 ic_stock.db "PRAGMA integrity_check; PRAGMA foreign_key_check;"
-   ```
-5. Start the bot with offline smoke verification before enabling live services.
+4. Start the bot with offline smoke verification before enabling live services.
 
 ---
 

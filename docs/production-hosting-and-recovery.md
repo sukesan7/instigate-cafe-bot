@@ -42,10 +42,18 @@ When sharing or distributing the Instigate Cafe Bot, maintainers and community m
 
 ## 3. Supported Deployment Path 1: Docker & Docker Compose (Recommended)
 
-### 3.1 Dockerfile Architecture
+### 3.1 Dockerfile Architecture & Honest Readiness Contract
 The project provides a multi-stage, non-root [`Dockerfile`](file:///home/sukesan/dev/discord/campus-bot/Dockerfile):
 - **Build Stage:** Uses `ghcr.io/astral-sh/uv` to install dependencies into an isolated virtual environment (`/app/.venv`) directly from `uv.lock`.
 - **Runtime Stage:** Runs on `python:3.12-slim-bookworm` with a dedicated non-root user and group (`campusbot:campusbot`, UID/GID `10001:10001`).
+- **Release Tag Synchronization:** Uses `ARG APP_VERSION="1.0.0-rc1"` (synchronized with [`pyproject.toml`](file:///home/sukesan/dev/discord/campus-bot/pyproject.toml) `1.0.0rc1` and [`icbot/__init__.py`](file:///home/sukesan/dev/discord/campus-bot/icbot/__init__.py) `1.0.0-rc1`) to populate OCI image labels (`org.opencontainers.image.version`) and match `docker-compose.yml` (`image: campus-bot:${APP_VERSION:-1.0.0-rc1}`).
+- **Canonical Storage Contract:** Sets `DB_PATH="/data/campus.db"` and `GRADES_DB_PATH="/data/tmu_grades.db"` on a pre-created `/data` directory owned by `campusbot:campusbot` with mode `0700` (never world-writable `0777`). Legacy `SQLITE_PATH` is retained only as a deprecated fallback alias in `Settings.from_env()` when `DB_PATH` is unset, emitting a `DeprecationWarning` and scheduled for removal in `v1.1.0`.
+- **Honest Local Readiness Healthcheck:**
+  ```dockerfile
+  HEALTHCHECK --interval=60s --timeout=10s --start-period=15s --retries=3 \
+      CMD python3 -c "from icbot.config import Settings; from icbot.db import prepare_sqlite_path; s = Settings.load_validated(); prepare_sqlite_path(s.db_path, ensure_parent=True)" || exit 1
+  ```
+  This healthcheck verifies that the Python virtual environment is intact, `Settings.load_validated()` passes strict schema validation, and the configured `DB_PATH` parent directory is writable by the non-root UID (`10001`). **Honest boundary:** It proves local container configuration and storage readiness without requiring a live `DISCORD_TOKEN` or making network calls; it does *not* prove live Discord gateway WebSocket authentication or heartbeat status.
 - **Zero Inbound Ports:** No `EXPOSE` instruction is used. Discord bots connect outbound over secure WebSockets (WSS) and HTTPS; opening inbound ports increases the attack surface with zero operational benefit.
 - **Signal Handling:** Configured with `STOPSIGNAL SIGTERM` to invoke `CampusBot.close()` and flush SQLite WAL pages.
 
@@ -58,13 +66,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: campus-bot:0.2.4
+      args:
+        APP_VERSION: ${APP_VERSION:-1.0.0-rc1}
+    image: campus-bot:${APP_VERSION:-1.0.0-rc1}
     container_name: campus-bot
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      - SQLITE_PATH=/data/campus.db
+      - DB_PATH=/data/campus.db
+      - GRADES_DB_PATH=/data/tmu_grades.db
       - ICBOT_ALLOW_GATEWAY=true
       - PYTHONUNBUFFERED=1
     volumes:
@@ -86,23 +97,36 @@ services:
         max-file: "3"
 ```
 
-### 3.3 Quickstart Commands
+### 3.3 Quickstart & Offline Container Smoke Verification Commands
 ```bash
-# 1. Create persistent storage directory
+# 1. Create persistent storage directory owned by non-root container UID 10001 (mode 0700)
 mkdir -p data && chmod 700 data
+# When running under rootful Docker on Linux, grant ownership to container UID/GID 10001:10001:
+sudo chown 10001:10001 data
 
 # 2. Configure environment file (chmod 600)
 cp .env.example .env
 chmod 600 .env
 # Edit .env with your DISCORD_TOKEN and GUILD_ID
 
-# 3. Build and launch container in detached mode
+# 3. Optional Offline Container Build & Mounted-Volume Smoke Test (Zero Discord Connection):
+docker build --build-arg APP_VERSION=1.0.0-rc1 -t campus-bot:1.0.0-rc1 .
+docker run --rm --network none \
+  -e DB_PATH=/data/campus.db \
+  -e GRADES_DB_PATH=/data/tmu_grades.db \
+  -e ICBOT_ALLOW_GATEWAY=false \
+  -v "$(pwd)/data:/data" \
+  --entrypoint python3 \
+  campus-bot:1.0.0-rc1 \
+  tools/smoke_staging.py
+
+# 4. Build and launch live container in detached mode (only when ready for gateway connection)
 docker compose up -d --build
 
-# 4. View container startup logs
+# 5. View container startup logs
 docker compose logs -f campus-bot
 
-# 5. Check container health status
+# 6. Check container local readiness health status
 docker inspect --format='{{json .State.Health}}' campus-bot
 ```
 
@@ -154,15 +178,59 @@ For operators preferring a direct system service without Docker:
 
 ## 5. Railway Production Service Reconciliation & Staging Architecture
 
-### 5.1 Discovered Railway Production Baseline
-The pre-existing Railway deployment operates under the following baseline:
-- **Repository Branch:** `main`
-- **Autodeploy Toggle:** **MUST REMAIN DISABLED.** Historically, every push to `main` triggered an immediate rebuild and restart of the live bot. During modernization, autodeploy was disconnected to prevent unintended execution of unverified code.
-- **Start Command:** `python main.py --allow-gateway` (or Nixpacks auto-detected Python start).
-- **Persistence Mount:** Railway Persistent Volume attached at `/data` (configured via `SQLITE_PATH=/data/campus.db`).
-- **Single Scheduler Invariant:** Railway service must be configured with **Replica Count: 1**. Never increase replica count.
+### 5.1 Discovered Railway Production Baseline & Required Manual UI Confirmations
+The pre-existing Railway deployment operates under the following baseline. Because automated modifications to production Railway settings are prohibited, a human operator must explicitly confirm each setting in the **Railway Web Dashboard**:
 
-### 5.2 Isolated Staging Environment
+| Railway UI Setting | Required Value / State | Why Operator Confirmation Is Required |
+|---|---|---|
+| **Deploy Branch & Autodeploy** | Branch: `main` — **Autodeploy: OFF (Disabled)** | Historically, pushes to `main` triggered immediate live redeploys. Disabling autodeploy prevents unverified commits from restarting the active service (note: turning off autodeploy does *not* stop an already running container). |
+| **Release Triggers** | **Manual Deploy Only** (Wait for CI / Owner Approval) | Ensures deployments only occur after offline tests, secret scans, and pre-deploy database backups complete. |
+| **Start Command** | `python3 main.py --allow-gateway` | Explicit gateway opt-in required by `validate_gateway_launch()`. |
+| **Replica Count** | **`1` (Single Instance)** | Mandatory for SQLite WAL locking and preventing duplicate background poller broadcasts or economy double-settlement. |
+| **Persistent Volume Mount** | Mount path: **`/data`** | Non-root container UID `10001` (`campusbot`) requires write/execute permissions on `/data` for SQLite and `-wal`/`-shm` journals. |
+| **Canonical Variable Names** | `DB_PATH=/data/campus.db`<br>`GRADES_DB_PATH=/data/tmu_grades.db`<br>`ICBOT_ALLOW_GATEWAY=true` | Replaces the legacy ignored `SQLITE_PATH` variable so the application writes directly to the mounted `/data` volume instead of relative `ic_stock.db` in `/app`. |
+| **Secret Isolation** | `DISCORD_TOKEN`, `GEMINI_API_KEY`, `GO_API_KEY`, `ODDS_API_KEY` in Railway Variables only | Production secrets must live exclusively in Railway's encrypted environment variables — never in Git, `.env.example`, or container layers. Staging must use a separate Railway service/environment, Discord token, guild, and volume. |
+
+### 5.2 Manual Railway Database Path Migration & Rollback Procedure (Existing Volume vs. Legacy Path)
+If an existing Railway deployment previously set `SQLITE_PATH=/data/campus.db` (which older code ignored, writing to `/app/ic_stock.db` inside ephemeral container storage) or already has a database file at `/data/ic_stock.db` or `/data/campus.db` on the persistent volume, follow these exact manual steps before and during cutover:
+
+1. **Pre-Cutover Volume Inspection (Manual Owner Step via Railway CLI / Shell):**
+   - Inspect files currently on the `/data` volume and working directory without starting a second bot replica:
+     ```bash
+     ls -la /data /app/*.db 2>/dev/null || true
+     ```
+   - Determine which database file holds the authoritative production state:
+     - **Case A:** `/data/ic_stock.db` exists on the persistent volume (operator previously set `DB_PATH=/data/ic_stock.db`).
+     - **Case B:** `/data/campus.db` exists on the persistent volume.
+     - **Case C:** Data currently resides in `/app/ic_stock.db` in the running container and must be backed up onto `/data/campus.db` before redeploying.
+2. **Create a Verified Online Hot Backup on the Persistent Volume:**
+   ```bash
+   python3 tools/backup_db.py --source <active_db_path> --dest /data/backups/pre_cutover_$(date +%Y%m%d_%H%M%S).db
+   python3 tools/backup_db.py --verify /data/backups/pre_cutover_*.db
+   ```
+   - If migrating from `/data/ic_stock.db` or `/app/ic_stock.db` to `/data/campus.db`, copy via the online backup tool so WAL frames are checkpointed cleanly:
+     ```bash
+     python3 tools/backup_db.py --source <active_db_path> --dest /data/campus.db
+     python3 tools/backup_db.py --verify /data/campus.db
+     ```
+3. **Update Railway Environment Variables:**
+   - Set canonical variables in Railway Dashboard &rarr; Service &rarr; Variables:
+     - `DB_PATH=/data/campus.db` (or `/data/ic_stock.db` if retaining the existing filename on `/data`)
+     - `GRADES_DB_PATH=/data/tmu_grades.db`
+   - Remove deprecated `SQLITE_PATH` once `DB_PATH` is set (if both are present, `DB_PATH` takes strict precedence; if only `SQLITE_PATH` is present, `Settings.from_env()` maps it to `db_path` with a `DeprecationWarning` until removal in `v1.1.0`).
+4. **Post-Deploy Verification:**
+   - Confirm startup logs show `[MARKET] config: ... db=/data/campus.db` and zero `DeprecationWarning: SQLITE_PATH` warnings.
+   - Run `/ic status` in Discord to confirm Schema v7 (WAL mode) and expected row counts.
+   - Verify no stray `/app/ic_stock.db` file was created in the container working directory.
+5. **Exact Rollback Procedure (If Regression Occurs):**
+   - Stop or roll back the Railway deployment to the previous snapshot.
+   - If rolling back to a pre-fix image that only read `DB_PATH` (or defaulted to `ic_stock.db`), keep `DB_PATH=/data/campus.db` set in Railway Variables (since both old and new `icbot/config.py` consume `DB_PATH`).
+   - If a schema migration needs to be reverted, restore the pre-cutover backup onto the active path:
+     ```bash
+     python3 tools/backup_db.py --restore /data/backups/pre_cutover_<timestamp>.db --dest /data/campus.db
+     ```
+
+### 5.3 Isolated Staging Environment
 To test new features without risking production state or disturbing community members:
 1. **Separate Discord Application:** Create an independent application in the Discord Developer Portal (e.g. `Instigate Cafe Staging`).
 2. **Dedicated Staging Token:** Never reuse the production `DISCORD_TOKEN`.
@@ -170,7 +238,7 @@ To test new features without risking production state or disturbing community me
 4. **Independent Database Volume:** Use a clean, freshly migrated SQLite database. **Never clone the production SQLite database** (which contains real user balances, economy transactions, and server lore) into staging.
 5. **Separate Provider Credentials:** Use free/sandbox API keys for external services where available.
 
-### 5.3 Release Approval Checklist for Railway Deployments
+### 5.4 Release Approval Checklist for Railway Deployments
 Before triggering a manual deployment on Railway:
 - [ ] 1. All unit, integration, and benchmark tests pass offline (`uv run pytest`).
 - [ ] 2. Secret scanner returns clean exit code (`uv run python tools/scan_secrets.py --enforce-clean`).

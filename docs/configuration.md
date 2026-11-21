@@ -33,8 +33,9 @@ The Instigate Cafe Bot uses strict runtime configuration validation via the `Set
 
 | Environment Variable | Settings Field | Type | Default | Description & Security Risk | Example |
 |---|---|---|---|---|---|
-| `DB_PATH` | `db_path` | string | `ic_stock.db` | Path to persistent SQLite database file for user balances, market trades, and logs. Uses WAL mode. | `/data/campus.db` |
-| `GRADES_DB_PATH` | `grades_db_path` | string | `tmu_grades.db` | Path to local grade distributions database (optional). | `/data/tmu_grades.db` |
+| `DB_PATH` | `db_path` | string | `ic_stock.db` | Canonical path to the persistent SQLite database file for user balances, market trades, exams, scheduler checkpoints, and audit logs. Normalized via `normalize_sqlite_path()`; parent directory is verified writable (`0700` on creation) and fails closed via `DatabasePathError` if unwritable (never falls back to another path). Uses WAL mode. | `/data/campus.db` |
+| `GRADES_DB_PATH` | `grades_db_path` | string | `tmu_grades.db` | Path to local grade distributions SQLite cache (optional; when empty or unset in container runtimes, `ServiceContainer` uses the shared `Database(settings.db_path)` or falls back to `settings.db_path`). | `/data/tmu_grades.db` |
+| `SQLITE_PATH` *(Deprecated)* | `db_path` | string | *(unset)* | Narrowly scoped deprecated compatibility alias for `DB_PATH`. Used **only** when `DB_PATH` is unset or empty; emits `DeprecationWarning` and is scheduled for removal in `v1.1.0`. Never touches `GRADES_DB_PATH`. | `/data/campus.db` |
 | `LORE_PATH` | `lore_path` | string | `""` | Path to custom server lore file. If empty, falls back safely to example lore (`tools/lore.example.json`). | `/data/lore.json` |
 
 ---
