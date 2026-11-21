@@ -483,7 +483,8 @@ class BetaReadinessVerifier:
 
         del_res = await u_store.delete_user_data(808, anonymize_ledger=True)
         user_after_delete = await u_store.get_profile(808)
-        ledger_after_delete = await u_store.get_ledger(808)
+        user_ledger_after_delete = await u_store.get_ledger(808)
+        anon_ledger_after_delete = await u_store.get_ledger(0)
 
         await db.close()
         ms = (time.perf_counter() - t0) * 1000.0
@@ -491,8 +492,10 @@ class BetaReadinessVerifier:
             has_consent_barrier
             and del_res.get("users", 0) == 1
             and user_after_delete is None
-            and del_res.get("economy_ledger_preserved", 0) == 1
-            and len(ledger_after_delete) >= 1
+            and del_res.get("economy_ledger_preserved", 0) >= 1
+            and del_res.get("economy_ledger_anonymized", 0) >= 1
+            and len(user_ledger_after_delete) == 0
+            and len(anon_ledger_after_delete) >= 1
         )
         self.record(
             "GATE-8",
