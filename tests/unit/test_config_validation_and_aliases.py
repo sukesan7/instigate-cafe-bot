@@ -283,7 +283,8 @@ def test_strict_env_validation_rejects_malformed_values_and_never_leaks_secrets(
         ({"embed_accent_color": 0x1000000}, "embed_accent_color"),
         ({"embed_accent_color": True}, "embed_accent_color"),
         ({"db_path": ""}, "db_path"),
-        ({"grades_db_path": "   "}, "grades_db_path"),
+        ({"db_path": "./"}, "db_path"),
+        ({"grades_db_path": "/data/dir/"}, "grades_db_path"),
         ({"go_api_base": "", "go_alerts_channel_id": 900000000000000050, "go_api_key": "k"}, "go_api_base"),
     ],
 )
@@ -293,6 +294,39 @@ def test_settings_validate_strict_catches_direct_constructor_invariants(
     settings = Settings(**kwargs)
     with pytest.raises(ConfigValidationError, match=expected_field):
         settings.validate(strict=True)
+
+
+def test_sqlite_path_deprecated_alias_precedence_and_absent_grades_db_path():
+    # 1. SQLITE_PATH fallback emits DeprecationWarning with removal plan when DB_PATH is unset
+    with pytest.warns(DeprecationWarning, match=r"SQLITE_PATH is deprecated.*v1\.1\.0.*DB_PATH"):
+        s_legacy = Settings.from_env(strict=True, environ={"SQLITE_PATH": "/data//campus.db"})
+    assert s_legacy.db_path == "/data/campus.db"
+    assert s_legacy.grades_db_path == "tmu_grades.db"
+
+    # 2. Canonical DB_PATH wins over SQLITE_PATH without emitting DeprecationWarning
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DeprecationWarning)
+        s_prec = Settings.from_env(
+            strict=True,
+            environ={
+                "DB_PATH": "/data/canonical.db",
+                "SQLITE_PATH": "/data/legacy_ignored.db",
+            },
+        )
+    assert caught == []
+    assert s_prec.db_path == "/data/canonical.db"
+
+    # 3. Absent/empty optional GRADES_DB_PATH is valid and normalizes to ""
+    s_no_grades = Settings.from_env(
+        strict=True,
+        environ={
+            "DB_PATH": "/data/campus.db",
+            "GRADES_DB_PATH": "",
+        },
+    )
+    assert s_no_grades.db_path == "/data/campus.db"
+    assert s_no_grades.grades_db_path == ""
+    assert s_no_grades.validate(strict=True).is_valid is True
 
 
 def test_deprecated_env_vars_and_properties_emit_deprecation_warnings():

@@ -207,6 +207,8 @@ def _isolate_environment(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv(flag, "false")
 
     monkeypatch.setenv("DB_PATH", ":memory:")
+    monkeypatch.delenv("SQLITE_PATH", raising=False)
+    monkeypatch.delenv("GRADES_DB_PATH", raising=False)
     monkeypatch.setenv("JOBS_POLL_SECONDS", "0")
     monkeypatch.setenv("WORKDAY_POLL_SECONDS", "0")
 
