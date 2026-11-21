@@ -135,14 +135,19 @@ def extract_markdown_anchors(content: str) -> set[str]:
 
 
 def list_tracked_markdown_files(repo_root: Path = PROJECT_ROOT) -> list[Path]:
-    """Return sorted paths of all git-tracked Markdown files under `repo_root`."""
+    """Return sorted paths of all existing tracked and non-ignored Markdown files under `repo_root`."""
     try:
         out = subprocess.check_output(
-            ["git", "ls-files", "*.md"],
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "*.md"],
             cwd=str(repo_root),
             text=True,
         )
-        return sorted(repo_root / line.strip() for line in out.splitlines() if line.strip())
+        paths = {
+            repo_root / line.strip()
+            for line in out.splitlines()
+            if line.strip() and (repo_root / line.strip()).is_file()
+        }
+        return sorted(paths)
     except (subprocess.SubprocessError, OSError):
         return sorted(p for p in repo_root.rglob("*.md") if ".venv" not in p.parts and ".git" not in p.parts)
 

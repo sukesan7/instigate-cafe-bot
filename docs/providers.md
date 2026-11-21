@@ -1,35 +1,40 @@
 # Instigate Cafe Bot — External Provider Specifications & Integration Guide
 
-**Document Version:** 2.0.0 (Phase 12 Provider Specification)  
+**Release:** `v1.0.0-rc1`  
 **Architecture Contract:** [`icbot/academics/providers.py`](../icbot/academics/providers.py) & [`icbot/services/http_transport.py`](../icbot/services/http_transport.py)  
 **Security Invariants:** Strict SSRF URL validation, circuit breaker dampening, exponential backoff with jitter, zero credential leakage in logs, and deterministic offline mocking.
 
 ---
 
-## 1. Overview & Provenance Standards
+## 1. Overview, Campus Scope & Provenance Standards
 
-The Instigate Cafe Bot integrates with external web services for transit alerts, academic information, job feeds, and optional generative AI. To protect stability and community privacy, all external integrations adhere to these rules:
+The Instigate Cafe Bot integrates with external web services for academics, job feeds, regional transit alerts, market snapshots, sports headlines, and optional generative AI.
 
-1. **Decoupled Contracts:** External calls implement either `ProviderProtocol` or `AcademicProviderProtocol`, returning structured `ProviderResult` containers with standardized status codes (`ok`, `empty`, `error`, `circuit_open`).
-2. **Circuit Breakers & Dampening:** Upstream provider outages trigger circuit breakers that pause requests and dampen log noise via `ProviderOutageTracker` (1st failure at WARNING, repeated failures at DEBUG).
-3. **SSRF Defense:** All external URLs fetched by academic tools must pass host whitelist and protocol validation in [`icbot/academics/url_safety.py`](../icbot/academics/url_safety.py).
-4. **Honest Scope Notice:** Default course notes and academic tools currently focus on Toronto Metropolitan University (TMU / Ryerson) STEM curricula. The bot does **not** claim automated coverage for all North American universities out of the box, but provides a clean extension interface for other institutions.
+1. **Decoupled Contracts:** External calls implement `ProviderProtocol` or `AcademicProviderProtocol`, returning structured `ProviderResult` containers (`ok`, `empty`, `error`, `circuit_open`).
+2. **Circuit Breakers & Outage Dampening:** Repeated upstream errors open `ProviderCircuitBreaker` (fast-fail cooldown) and dampen log noise via `ProviderOutageTracker`.
+3. **SSRF Defense:** External academic URLs pass host/scheme/private-IP validation in [`icbot/academics/url_safety.py`](../icbot/academics/url_safety.py) (`validate_fetch_url`), bounded by `ACADEMIC_ALLOWED_HOSTS` and `NOTES_SITES`.
+4. **Honest Campus & Regional Scope:**
+   - **TMU / Toronto-specific providers:** `/ic grades` (`tmu.grades.zone`), default `/ic notes` (`NOTES_SITES` Notion/SPA study guides), default `RMP_UNIVERSITY` (`Toronto Metropolitan University`), Metrolinx GO Transit, and TTC Mastodon alerts.
+   - **Institution-agnostic providers:** Greenhouse, Lever, Workday ATS, Google Gemini AI, Yahoo Finance, Alternative.me Fear & Greed, Blockstream Esplora, ESPN RSS, and The Odds API.
+   - Other universities can override `RMP_UNIVERSITY`, `CAMPUS_ID`, `ACADEMIC_COURSE_ALIASES`, and `NOTES_SITES` or contribute a dedicated adapter (Section 4).
 
 ---
 
 ## 2. Supported External Provider Directory
 
-| Provider | Data Domain | Protocol / Endpoint | Authentication | Quota & Rate Limits | Offline Fallback |
-|---|---|---|---|---|---|
-| **Google Gemini API** | AI resume review & mention assistant | REST (`generativelanguage.googleapis.com`) | API Key (`GEMINI_API_KEY`) | Capped via `LLM_BUDGET_HOURLY` (default: 100/hr) | `/ic resume` presents offline self-review rubric |
-| **RateMyProfessors** | Professor ratings & student difficulty | GraphQL (`www.ratemyprofessors.com/graphql`) | Public / None | 6-hour TTL in-memory cache | Returns "Rating unavailable or provider degraded" |
-| **Metrolinx Open Data** | GO Transit rail and bus advisories | REST (`api.openmetrolinx.com/OpenDataAPI/api/V1/`) | Query Key (`GO_API_KEY`) | Free tier per Metrolinx terms | Circuit breaker opens; silences alerts until recovery |
-| **TTC Mastodon** | Toronto subway and bus delay alerts | REST (`mstdn.ca/api/v1/accounts/...`) | Public ActivityPub / None | 300 requests per 5 min | Jittered exponential backoff; no channel flooding |
-| **Greenhouse ATS** | Tech internship and new grad jobs | REST (`boards.greenhouse.io/v1/boards/...`) | Public / None | Polled every `JOBS_POLL_SECONDS` (default: 300s) | Retains existing cached postings |
-| **Lever ATS** | Tech internship and new grad jobs | REST (`api.lever.co/v0/postings/...`) | Public / None | Polled every `JOBS_POLL_SECONDS` (default: 300s) | Retains existing cached postings |
-| **Workday CX** | Enterprise job postings | REST (`*.myworkdayjobs.com/wday/cxs/...`) | Public / None | Polled every `WORKDAY_POLL_SECONDS` (default: 600s) | Malformed feeds quarantined in bad sources set |
-| **Yahoo Finance** | Virtual market simulation quotes | HTTP Quote Endpoints | Public / None | 10-minute cache TTL | Emits static disclaimers; falls back to catalog prices |
-| **Esplora Bitcoin** | Bitcoin block and mempool statistics | REST (`blockstream.info/api/`) | Public / None | Polled on fixed intervals | Skips iteration cleanly on timeout |
+| Provider | Scope | Data Domain | Authentication (Required vs. Optional) | Quota & Rate Limits | Offline Fallback |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Google Gemini API** | Generic | AI resume review & `@mention` assistant | **Optional key** (`GEMINI_API_KEY` + `LLM_ENABLED=true`) | Free tier 15 RPM / 1M TPM; paid tier pay-as-you-go; local cooldowns & token caps | `/ic resume` offers offline **No-AI Checklist**; `@mention` disabled when unconfigured |
+| **RateMyProfessors** | Configurable (**TMU default**) | Professor ratings & difficulty (`/ic prof`) | None (Public GraphQL) | Undocumented upstream limits; 6-hour in-memory cache | Returns degraded notice with manual web lookup guidance |
+| **TMU Grades (`tmu.grades.zone`)** | **TMU-specific** | Course grade histograms (`/ic grades`) | None (Public HTML) | Cached locally in SQLite (`grades_course_cache`) | Serves cached data or accessible text summary fallback |
+| **Campus Notes (`NOTES_SITES`)** | **TMU default** (configurable) | Student study guides (`/ic notes`) | None (Public SPA/Notion links) | 6-hour in-memory cache + per-guild SQLite catalog | Serves guild manual catalog (`academic_resources`) |
+| **Metrolinx Open Data** | **Toronto / GTA (TMU)** | GO Transit rail & bus advisories | **Optional key** (`GO_API_KEY` — free registration) | Metrolinx API rate limits; polled every `GO_POLL_SECONDS` (default `180s`) | Circuit breaker opens; suppresses duplicate/noisy alerts |
+| **TTC Mastodon** | **Toronto (TMU)** | TTC subway, streetcar & bus alerts | None (Public Mastodon REST) | 300 req / 5 min; polled every `TTC_POLL_SECONDS` (default `120s`) | Jittered exponential backoff; zero crash loops |
+| **Greenhouse / Lever ATS** | Generic | Junior tech internship & new-grad jobs | None (Public JSON APIs) | Polled every `JOBS_POLL_SECONDS` (default `600s`; `0` disables) | Serves cached SQLite postings (`job_seen`) with timestamp |
+| **Workday CX** | Generic | Enterprise job postings | None (Public CXS REST) | Polled every `WORKDAY_POLL_SECONDS` (`0` disables by default) | Permanent 404/config errors quarantined in `SourceHealth` |
+| **Yahoo Finance / Fear & Greed** | Generic | Market watch & `/ic report` snapshots | None (Public HTTP) | 10-minute cache TTL; upstream scraper limits apply | Falls back to internal ICSE catalog prices |
+| **Blockstream Esplora** | Generic | Optional Bitcoin address watcher | None (Public REST) | Polled every `BTC_WATCH_POLL_SECONDS` (default `300s`, disabled by default) | Skips iteration cleanly on timeout |
+| **The Odds API & ESPN RSS** | Generic | `/ic sports` schedules, odds & news | **Optional key** (`ODDS_API_KEY`; free tier 500 calls/mo); RSS needs none | Free-tier monthly quota on Odds API; cached RSS | Renders ESPN RSS headlines without odds when key is omitted |
 
 ---
 

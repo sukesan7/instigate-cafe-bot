@@ -108,9 +108,9 @@ To prevent unexpected hosting surprises or hidden subscription dependencies, all
 | **Market Quotes** | Yahoo Finance / AlphaVantage | Yahoo rate limits scrapers; AlphaVantage free key (25 req/day). | Simulated price movement generator; internal exchange catalog keeps trading active. |
 | **SQLite WAL Storage** | Local filesystem (`sqlite3`) | Single-writer concurrency lock; zero cloud storage fee. | Immediate ACID write transactions; double-entry ledger prevents balance drift. |
 
-### 3.2 Staging Visual Showcase (Synthetic Mockups)
+### 3.2 Staging Visual Showcase (Synthetic Guilds)
 
-The bot has been tested against synthetic staging test guilds (**Guild Alpha** `900000000000000001` and **Guild Beta** `900000000000000002`). Detailed ASCII/text mockups and video demonstration storyboards are available in [`docs/launch-assets.md`](docs/launch-assets.md):
+The bot has been verified offline against synthetic staging test guilds (**Guild Alpha** `900000000000000001` and **Guild Beta** `900000000000000002`). See [`docs/features.md`](docs/features.md) and [`docs/ui-style.md`](docs/ui-style.md) for the complete command catalog and rendered embed snapshots across themes:
 
 - **Pillar 1 — Academic Hub & Exam Countdown:** Autonomous guild setup (`/ic admin setup`) and shared exam countdowns with iCalendar (`.ics`) export.
 - **Pillar 2 — Career Tools & AI Resume Consent:** Ephemeral resume critiques with mandatory third-party AI consent disclosure and no-AI offline rubric.
@@ -169,7 +169,7 @@ chmod 600 .env
 uv run python main.py --allow-gateway
 ```
 
-*(For production Docker Compose and systemd deployment recipes, see [Production Hosting Guide](docs/production-hosting-and-recovery.md)).*
+*(For production Docker Compose, `systemd`, and Railway deployment recipes, see [Deployment, Hosting & Disaster Recovery](docs/deployment.md)).*
 
 ---
 
@@ -184,17 +184,19 @@ Server administrators can configure modules directly inside Discord without touc
 
 ## 7. Documentation Index
 
-- [System Architecture & Sequence Flows](docs/architecture.md)
+Start at the **[Documentation Index](docs/README.md)**, or jump directly to a guide:
+
+- [Features & 53-Command Guide](docs/features.md)
 - [Complete Configuration Reference](docs/configuration.md)
-- [External Provider Specifications & Integration Guide](docs/providers.md)
-- [Privacy Architecture, Data Flows & Deletion Model](docs/privacy.md)
-- [Operations, Backups & Incident Runbook](docs/operations.md)
-- [Staging Acceptance & Fault-Injection Plan](docs/staging-acceptance-and-fault-injection.md)
-- [Production Hosting & Recovery Runbook](docs/production-hosting-and-recovery.md)
-- [Private Alpha & Public Beta Readiness Gates](docs/alpha-beta-readiness.md)
+- [Deployment, Hosting & Disaster Recovery](docs/deployment.md)
+- [Troubleshooting & Incident Runbook](docs/troubleshooting.md)
+- [System Architecture & Developer Reference](docs/architecture.md)
+- [External Provider Specifications & Campus Guide](docs/providers.md)
+- [Privacy Architecture, Data Map & Deletion Model](docs/privacy.md)
+- [Discord UI & Visual Style Contract](docs/ui-style.md)
+- [Development & Tooling Guide](docs/development.md)
+- [Offline Testing & Invariants Guide](docs/testing.md)
 - [Release Claims & Verification Evidence Matrix](docs/release-evidence.md)
-- [Portfolio Presentation & Launch Assets](docs/launch-assets.md)
-- [Usability Review & Archetype Audit Report](docs/usability_review.md)
 - [Contributing Guidelines](CONTRIBUTING.md)
 - [Security Policy & Vulnerability Disclosure](SECURITY.md)
 - [Changelog](CHANGELOG.md)

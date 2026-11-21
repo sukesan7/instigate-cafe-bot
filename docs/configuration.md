@@ -1,17 +1,19 @@
 # Instigate Cafe Bot — Complete Configuration Reference
 
-**Document Version:** 2.0.0 (Phase 12 Configuration Specification)  
+**Release:** `v1.0.0-rc1`  
 **Configuration Source:** [`icbot/config.py`](../icbot/config.py)  
-**Loading Precedence:** Process Environment Variables &rarr; Local `.env` file (if present) &rarr; Safe Built-in Defaults
+**Loading Precedence:** Per-Guild SQLite Override (`guild_settings` for supported keys) &rarr; Process Environment Variables &rarr; Local `.env` file (if present) &rarr; Safe Built-in Defaults
 
 ---
 
-## 1. Overview & Safety Invariants
+## 1. Overview, Optional API Keys & Safety Invariants
 
-The Instigate Cafe Bot uses strict runtime configuration validation via the `Settings` model. On boot:
-- **Zero Secret Echo:** If a configuration error occurs, all secret tokens and API keys are redacted before error messages are emitted.
-- **Gateway Safeguard:** Live Discord gateway connection is blocked unless `ICBOT_ALLOW_GATEWAY=true` (or the `--allow-gateway` CLI flag) is explicitly passed.
-- **Safe Development Defaults:** All background pollers (`LLM_ENABLED`, `MARKET_WATCH_ENABLED`, `BTC_WATCH_ENABLED`, `JOBS_POLL_SECONDS=0`) default to disabled to ensure a clean checkout boots safely offline.
+The Instigate Cafe Bot uses strict runtime configuration validation via the `Settings` model (`Settings.load_validated()`):
+- **Zero Secret Echo:** Configuration validation errors redact all tokens and API keys before logging.
+- **Gateway Safeguard:** Live Discord gateway connection is blocked unless `ICBOT_ALLOW_GATEWAY=true` (or `--allow-gateway`) is explicitly passed.
+- **Safe Offline Defaults:** Optional pollers (`LLM_ENABLED`, `MARKET_WATCH_ENABLED`, `BTC_WATCH_ENABLED`, `WORKDAY_POLL_SECONDS=0`) default to disabled so a fresh checkout boots safely offline.
+- **Required vs. Optional Keys:** Only `DISCORD_TOKEN` is required to connect to Discord. `GEMINI_API_KEY` (AI chat & resume review), `GO_API_KEY` (Metrolinx GO transit alerts), and `ODDS_API_KEY` (sports schedules/odds) are **strictly optional**—leaving them blank disables only those specific integrations with graceful fallbacks.
+- **TMU-Specific Defaults:** `RMP_UNIVERSITY` defaults to `Toronto Metropolitan University`, and `EXAMS_TZ` / `MARKET_DAILY_REPORT_TZ` default to `America/Toronto`. All three can be overridden globally or per server.
 
 ---
 
@@ -217,3 +219,17 @@ The Instigate Cafe Bot uses strict runtime configuration validation via the `Set
 | `ICBOT_TELEMETRY` | `telemetry_enabled` | boolean | `false` | Enables internal performance latency timers and health counters. | `true` |
 | `TASK_STARTUP_JITTER_SECONDS`| `task_startup_jitter_seconds`| float| `15.0` | Maximum random startup delay applied to background tasks to stagger boot load. | `10.0` |
 | `TASK_MAX_BACKOFF_SECONDS`| `task_max_backoff_seconds`| float | `1800.0`| Exponential backoff ceiling (30 minutes) for failing background tasks. | `1800.0` |
+
+---
+
+## 13. Process vs. Per-Guild Overrides, Permissions & Theme Presets
+
+Server administrators can customize guild-specific behavior directly inside Discord without restarting the bot or editing `.env`:
+
+- **Process-Only (Secret / Infrastructure) Keys:** Secrets (`DISCORD_TOKEN`, `GEMINI_API_KEY`, `GO_API_KEY`, `ODDS_API_KEY`), storage paths (`DB_PATH`, `GRADES_DB_PATH`), gateway flags (`ICBOT_ALLOW_GATEWAY`), and poller cadence limits are **strictly process-level** and cannot be mutated from Discord.
+- **Per-Guild Overrides (`guild_settings`):** Managed via `/ic admin setup`, `/ic admin config`, `/ic admin features`, and `/ic admin roles`, with every change recorded in `guild_settings_audit` (`/ic admin audit`). Overridable domains include:
+  - **Channels:** Stock/economy channel, user command channel, job alerts channel, exam reminder channel.
+  - **Academics & Locale:** `campus_id`, `rmp_university`, `exams_tz`.
+  - **Feature Modules:** Applying profiles (`default`, `student_core`, `toronto_tmu`, `community_full`) or enabling/disabling individual modules.
+  - **RBAC (`ALLOWED_ROLE_IDS` / `/ic admin roles`):** Grants bot-management permissions to designated roles without requiring Discord `Administrator`.
+  - **Branding & Visual Themes:** Built-in presets (`instigate_cafe`, `tmu_bold`, `emerald_mint`, `cyber_neon`, `nordic_frost`) or custom accent hex validated via [`icbot/theme.py`](../icbot/theme.py)'s W3C relative luminance range heuristic ($0.03 \le L \le 0.95$; see [UI Style Contract](ui-style.md)).

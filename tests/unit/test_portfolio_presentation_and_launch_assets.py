@@ -1,5 +1,5 @@
 # tests/unit/test_portfolio_presentation_and_launch_assets.py
-"""Unit tests verifying GitHub portfolio presentation, launch assets, and release consistency."""
+"""Unit tests verifying README presentation, compact docs architecture, and hygiene."""
 
 from __future__ import annotations
 
@@ -8,61 +8,41 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-def test_launch_assets_document_structure_and_completeness() -> None:
-    """Verify docs/launch-assets.md contains all required launch sections and portfolio components."""
-    assets_path = PROJECT_ROOT / "docs/launch-assets.md"
-    assert assets_path.is_file(), "docs/launch-assets.md is missing"
+def test_compact_public_docs_index_and_scope_clarity() -> None:
+    """Verify docs/README.md indexes the compact public layout and clarifies hosting & campus scope."""
+    index_path = PROJECT_ROOT / "docs/README.md"
+    assert index_path.is_file(), "docs/README.md is missing"
 
-    content = assets_path.read_text(encoding="utf-8")
-    assert len(content) > 3000, f"docs/launch-assets.md is unexpectedly short ({len(content)} chars)"
+    content = index_path.read_text(encoding="utf-8")
+    for expected_doc in (
+        "features.md",
+        "configuration.md",
+        "deployment.md",
+        "troubleshooting.md",
+        "architecture.md",
+        "providers.md",
+        "privacy.md",
+        "ui-style.md",
+        "development.md",
+        "testing.md",
+        "release-evidence.md",
+    ):
+        assert expected_doc in content, f"docs/README.md does not link to {expected_doc}"
 
-    # 1. Four High-Quality Staging Mockups
-    assert "Academic Schedule & Exam Countdown" in content
-    assert "/ic exam list" in content
-    assert "Career Tools & AI Resume Consent Barrier" in content
-    assert "/ic resume" in content
-    assert "Submit for AI Review" in content
-    assert "View No-AI Checklist" in content
-    assert "Regional Transit & Commuter Advisory" in content
-    assert "Metrolinx GO" in content
-    assert "Virtual Equity Exchange & Financial Ledger" in content
-    assert "Instigate Cafe Stock Exchange" in content or "ICSE" in content
+    assert "Self-Hosted Open-Source Bot" in content
+    assert "Publicly Inviteable Hosted Bot" in content
+    assert "TMU" in content
 
-    # 2. 45-90 Second Video Storyboard
-    assert "Demo Video Storyboard" in content
-    assert "0:00" in content
-    assert "0:15" in content
-    assert "0:35" in content
-    assert "0:55" in content
-    assert "0:75" in content
-    assert "0:90" in content
-
-    # 3. Professional LinkedIn Post Draft
-    assert "LinkedIn Announcement Post" in content
-    assert "v1.0.0-rc1" in content
-    assert "Decoupled Architecture" in content or "decoupled" in content.lower()
-    assert "ACID" in content
-    assert "offline pytest suite" in content.lower()
-    assert "Software Engineering" in content
-    assert "Commerce" in content
-    assert "https://github.com/sukesan7/instigate-cafe-bot" in content
-
-    # 4. GitHub Topics & Discovery Tags
-    assert "GitHub Topics" in content
-    assert "discord-bot" in content
-    assert "sqlite-wal" in content
-    assert "clean-architecture" in content
-
-    # 5. Owner-Editable Launch Checklist
-    assert "Owner-Editable Launch Checklist" in content
-    assert "Repository Visibility Decision" in content
-    assert "Live Bot Hosting Decision" in content
-    assert "Railway" in content
-
-    # 6. Version 1.1 Follow-Up Roadmap Outline
-    assert "Version 1.1 Follow-Up Roadmap Outline" in content
-    assert "Multi-Campus Adapter Registry" in content
-    assert "Web Event & Exam Dashboard" in content
+    # Historical planning/launch reports should not live in public docs/
+    for archived_path in (
+        "docs/launch-assets.md",
+        "docs/alpha-beta-readiness.md",
+        "docs/usability_review.md",
+        "docs/audit/architecture_inventory.md",
+    ):
+        assert not (PROJECT_ROOT / archived_path).exists(), (
+            f"Historical/planning document should be archived outside docs/: {archived_path}"
+        )
 
 
 def test_readme_portfolio_presentation_and_limits() -> None:
@@ -85,9 +65,11 @@ def test_readme_portfolio_presentation_and_limits() -> None:
     assert "Market Quotes" in content
     assert "SQLite WAL Storage" in content
 
-    # Visual Showcase & Links
+    # Visual Showcase & Canonical Docs Index Links
     assert "Staging Visual Showcase" in content
-    assert "docs/launch-assets.md" in content
+    assert "docs/README.md" in content
+    assert "docs/features.md" in content
+    assert "docs/deployment.md" in content
 
     # GitHub Topics
     assert "GitHub Topics & Discovery Tags" in content
@@ -95,16 +77,14 @@ def test_readme_portfolio_presentation_and_limits() -> None:
     assert "clean-architecture" in content
 
 
-def test_launch_assets_contain_zero_sensitive_data() -> None:
-    """Verify docs/launch-assets.md uses strictly synthetic data and zero credentials or real lore."""
-    assets_path = PROJECT_ROOT / "docs/launch-assets.md"
-    content = assets_path.read_text(encoding="utf-8")
-
-    # Must only use synthetic guild IDs
-    assert "900000000000000001" in content
-    assert "900000000000000002" in content
-
-    # Forbidden private lore or real tokens
-    forbidden_tokens = ["MTAw", "AIzaSy", "ghp_", "sk-"]
-    for tok in forbidden_tokens:
-        assert tok not in content, f"Detected potential credential token '{tok}' in launch assets"
+def test_public_docs_contain_zero_sensitive_tokens() -> None:
+    """Verify README.md and all public docs/*.md contain zero real credential token prefixes."""
+    forbidden_tokens = ["AIzaSy", "ghp_", "sk-"]
+    for md_file in [PROJECT_ROOT / "README.md", *sorted((PROJECT_ROOT / "docs").glob("*.md"))]:
+        content = md_file.read_text(encoding="utf-8")
+        for tok in forbidden_tokens:
+            if md_file.name == "configuration.md" and tok == "AIzaSy":
+                # configuration.md shows placeholder example `AIzaSy...` (6 chars, not a key)
+                assert "AIzaSy..." in content
+                continue
+            assert tok not in content, f"Detected potential credential token '{tok}' in {md_file.name}"

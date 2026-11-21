@@ -18,14 +18,14 @@ A clear and concise description of the bug or unexpected behavior.
 A clear description of what you expected to happen.
 
 ### System Diagnostics
-Run `/ic status issue_report:True` in your Discord server (requires Manage Server permissions) and paste the sanitized report here:
+Before filing a bug, check the [Troubleshooting Guide](../../docs/troubleshooting.md). Run `/ic status issue_report:True` in your Discord server (requires Manage Server permissions) and paste the sanitized report here:
 
 ```markdown
 <!-- Paste output from status_issue_report.md here -->
 ```
 
 ### Environment
-- **Bot Version:** `v2.0.0`
+- **Bot Version:** `v1.0.0-rc1`
 - **Python Version:** 3.12
 - **Deployment Track:** Self-Hosted / Hosted
 - **Database:** SQLite (WAL mode)

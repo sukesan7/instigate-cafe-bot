@@ -174,7 +174,7 @@ def test_open_source_governance_documents_exist():
         ("SECURITY.md", "Reporting a Vulnerability"),
         ("CONTRIBUTING.md", "Contributing to Instigate Cafe Bot"),
         ("CHANGELOG.md", "[0.2.4]"),
-        ("docs/publishing-checklist.md", "Pre-Publication Checklist"),
+        ("docs/deployment.md", "Pre-Publication Security"),
     ]
 
     for filename, expected_content in required_docs:

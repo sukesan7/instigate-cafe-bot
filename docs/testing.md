@@ -1,8 +1,8 @@
-# Instigate Cafe Bot — Offline Testing & Coverage Guide
+# Instigate Cafe Bot — Offline Testing, Invariants & Verification Guide
 
-**Phase 2: Offline Tests, Characterization, and Developer Tooling**
+**Release:** `v1.0.0-rc1`
 
-This repository enforces an **offline-first automated test suite**. Running `pytest` never connects to Discord, executes live HTTP scrapers, loads private `.env` secrets, or mutates production SQLite files.
+This repository enforces an **offline-first automated test suite**. Running `uv run pytest` never connects to Discord, executes live HTTP scrapers, loads private `.env` secrets, or mutates production SQLite files.
 
 ---
 
@@ -12,18 +12,17 @@ Pytest configuration lives in [`pyproject.toml`](../pyproject.toml):
 - `testpaths = ["tests"]`
 - `norecursedirs` excludes `scripts/`, `.venv/`, `docs/`, `assets/`, and `tools/`
 - `asyncio_mode = "auto"` with per-test function event loops
-- `--strict-markers -m 'not live_smoke'` prevents undeclared markers and excludes live checks by default
+- `--strict-markers -m 'not live_smoke'` prevents undeclared markers and excludes opt-in live probes by default
 
-| Marker | Scope | Suite Directory / Files | External I/O |
+| Marker | Scope | Examples | External I/O |
 | :--- | :--- | :--- | :--- |
-| `unit` | Pure logic (`Settings`, game engines & table invariants, permissions, embed bounds, privacy spec, network guard) | [`tests/unit/`](../tests/unit/) (`test_config.py`, `test_game_engines.py`, `test_game_invariants.py`, `test_network_guard.py`, `test_permissions_and_embeds.py`, `test_privacy_model.py`) | None (in-memory only) |
-| `storage` | SQLite persistence, concurrency races, short collateral, startup migrations (`Database.init`, `UserStore`, `BlackjackStore`, `FunMarketStore`) | [`test_storage_user_and_market.py`](../tests/integration/test_storage_user_and_market.py), [`test_economy_and_market_invariants.py`](../tests/integration/test_economy_and_market_invariants.py) | Isolated `tmp_path` SQLite |
-| `discord_mock` | Slash commands, UI views, timeouts, RBAC & DB settlement via `FakeInteraction` / `FakeMessage` | [`test_discord_mock_commands.py`](../tests/integration/test_discord_mock_commands.py), [`test_casino_views_and_commands.py`](../tests/integration/test_casino_views_and_commands.py) | Mocked Discord + local fixtures |
-| `provider_contract` | External payload parsers, background poller checkpoints, and 12-client × 6-mode HTTP error-family matrix | [`test_provider_contracts.py`](../tests/integration/test_provider_contracts.py), [`test_pollers_and_http_errors.py`](../tests/integration/test_pollers_and_http_errors.py) | Monkeypatched `aiohttp` + [`tests/fixtures/`](../tests/fixtures/) |
+| `unit` | Pure logic (`Settings`, game engines, permissions, embeds, theme luminance, privacy export/delete, 12-family failure taxonomy, doc validation, secret scan) | [`tests/unit/`](../tests/unit/) | None (in-memory / temp dir) |
+| `storage` | SQLite WAL persistence, concurrency locks, multi-guild economy ledgers, Schema v1–v7 migrations | [`tests/integration/test_storage_user_and_market.py`](../tests/integration/test_storage_user_and_market.py), [`tests/integration/test_economy_and_market_invariants.py`](../tests/integration/test_economy_and_market_invariants.py) | Isolated `tmp_path` SQLite |
+| `discord_mock` | Slash commands, UI views, actor/guild guards, timeouts, RBAC, and DB settlement via `FakeInteraction` / `FakeClient` | [`tests/integration/test_discord_mock_commands.py`](../tests/integration/test_discord_mock_commands.py), [`tests/integration/test_interaction_state_and_pagination.py`](../tests/integration/test_interaction_state_and_pagination.py) | Mocked Discord + local fixtures |
+| `provider_contract` | External payload parsers, ATS pipeline, circuit breakers, poller checkpoints, and HTTP error-family matrix | [`tests/integration/test_provider_contracts.py`](../tests/integration/test_provider_contracts.py), [`tests/integration/test_pollers_and_http_errors.py`](../tests/integration/test_pollers_and_http_errors.py) | Monkeypatched `aiohttp` + [`tests/fixtures/`](../tests/fixtures/) |
 | `live_smoke` | Opt-in manual live checks (never collected automatically) | [`scripts/manual/`](../scripts/manual/README.md) | Requires explicit owner consent + `ICBOT_ALLOW_LIVE_SMOKE=1` |
 
-> **Domain Invariant & Defect Matrix:** See [`docs/testing/invariant-matrix.md`](testing/invariant-matrix.md) for the complete catalog of verified invariants, HTTP error-family contracts across all 12 external clients, non-test code-audited risks, and tracked `ISSUE-2B-01` .. `ISSUE-2B-11` strict `xfail` locks.
-> **Tooling & Quality Gate Baseline:** See [`docs/tooling-baseline.md`](tooling-baseline.md) for the canonical `uv` packaging workflow, `Makefile` targets (`make check`), offline `.pre-commit-config.yaml` hooks, `.github/workflows/ci.yml`, and full Ruff/Mypy baseline metrics.
+> **Development Workflow & CI:** See [Development & Tooling Guide](development.md) for `uv` setup, `Makefile` safety tiers, pre-commit hooks, and `.github/workflows/ci.yml`.
 
 ---
 
@@ -72,36 +71,41 @@ All files in [`tests/fixtures/`](../tests/fixtures/) are synthetically construct
 
 ---
 
-## 5. Commands
+## 5. Offline Verification Commands
 
 ```bash
-# Run full offline suite (unit + storage + discord_mock + provider_contract)
-pytest
+# Run full offline pytest suite
+uv run pytest
 
-# Collect without running to verify zero import-time network side effects
-pytest --collect-only
+# Verify zero import-time network side effects during collection
+uv run pytest --collect-only
 
-# Run only pure unit tests
-pytest -m unit
+# Run only pure unit tests or coverage report
+uv run pytest -m unit
+uv run pytest --cov=icbot --cov-report=term-missing
 
-# Run with branch coverage report against icbot/
-pytest --cov=icbot --cov-report=term-missing
-
-# Verify secret hygiene across tracked files
-python3 tools/scan_secrets.py --enforce-clean
+# Offline smoke, documentation, secret hygiene, and synthetic staging harnesses
+uv run python tools/smoke_offline.py
+uv run python tools/smoke_staging.py
+uv run python tools/check_docs.py
+uv run python tools/scan_secrets.py --enforce-clean
+uv run python tools/run_usability_audit.py
+uv run python tools/run_staging_acceptance.py
+uv run python tools/verify_beta_readiness.py
 ```
 
-Manual live probes formerly in `tests/test_*.py` now reside in [`scripts/manual/`](../scripts/manual/README.md), excluded from pytest discovery and wrapped in `if __name__ == "__main__":` guards.
+Manual live probes reside in [`scripts/manual/`](../scripts/manual/README.md), excluded from pytest discovery and guarded behind `if __name__ == "__main__":`.
 
 ---
 
-## 6. Coverage Policy & Baseline Status
+## 6. Verified Domain Invariants & Coverage Policy
 
-- **Coverage configuration** (`[tool.coverage.run]` in `pyproject.toml`): measures line and branch coverage (`branch = true`) across `icbot/`.
-- **Policy:** Never lower or bypass failing checks (`--no-cov` in CI or silently deleting assertions) to manufacture green runs. New or modified modules in subsequent phases must include deterministic offline tests in the matching marker category.
-- **Measured coverage status (Python 3.12.13 Phase 2B characterization baseline — `204 passed, 19 xfailed`, 223 collected):**
-  - Command: `.venv/bin/pytest --cov=icbot --cov-report=term-missing -v`
-  - Overall `icbot/` baseline: **55%** combined statement+branch coverage across 5,879 statements and 1,884 branches (up from 33% at Phase 2A). Remaining uncharacterized UI/task modules (`admin.py`, `info.py`, `invest.py`, `jobs.py`, `report.py`, `resume.py`, `sports.py`, `btc_watch.py`, `llm_assistant.py`, `market_daily_report.py`, `market_watch.py`) are scheduled for Phase 3/4 remediation & expansion.
-  - Characterized modules: `slots_engine.py` (**100%**), `roulette_engine.py` (**99%**), `roulette.py` (**98%**), `help.py` (**95%**), `grades.py` (**93%**), `gemini_client.py` (**93%**), `config.py` (**93%**), `fun_market_catalog.py` (**93%**), `permissions.py` (**92%**), `db.py` (**90%**), `blackjack_engine.py` (**89%**), `slots.py` (**89%**), `embeds.py` (**88%**), `jobs_ats_client.py` (**86%**), `sports_client.py` (**85%**), `fun_market.py` (**83%**), `user_service.py` (**81%**), `yahoo_quotes.py` (**81%**), `notes.py` (**81%**), `ttc_client.py` (**80%**), `go_client.py` (**79%**), `exams.py` (**79%**), `jobs_workday_client.py` (**78%**), `lc_leaderboard.py` (**75%**), `profile.py` (**74%**), `prof.py` (**71%**), `jobs_workday_alerts.py` (**67%**), `ttc_alerts.py` (**64%**), `crypto_fng.py` (**63%**), `blackjack.py` (**62%**), `go_alerts.py` (**58%**), `job_alerts.py` (**53%**), `btc_esplora.py` (**49%**).
-  - Tracked defect locks: **19** strict `xfail` cases across **11** registered bugs (`ISSUE-2B-01` .. `ISSUE-2B-11`); see [`docs/testing/invariant-matrix.md`](testing/invariant-matrix.md).
+- **Coverage configuration** (`[tool.coverage.run]` in `pyproject.toml`): measures line and branch coverage (`branch = true`) across `icbot/`. Never bypass assertions or coverage checks to force green runs.
+- **Core Verified Invariant Families (Offline Automated Tests):**
+  1. **Economy & Market Atomicity:** `BEGIN IMMEDIATE` transactions prevent double-claiming, negative balances, overselling, and collateral drift across concurrent invocations and multi-guild tenants.
+  2. **Casino Engines & Restart Recovery:** Pure Python PRNG engines (`blackjack_engine.py`, `roulette_engine.py`, `slots_engine.py`) enforce deterministic payout bounds and persistent Blackjack crash recovery.
+  3. **Privacy & Erasure Invariants:** Batched `UserStore.export_user_data()` (`format_version: 2`), atomic `UserStore.delete_user_data()` de-identification across Schema v7 tables, zero local disk writes on `/ic resume`, and `LLM_CHANNEL_HISTORY_ENABLED=false` default.
+  4. **UI & Interaction Safety:** Pre-defer ephemeral audience resolution for private exams, actor-bound `BasePaginationView` / `BaseConfirmView` authorization, Discord character limits, HTTPS-only job links, and zero-width mention neutralization.
+  5. **12-Family Failure Taxonomy & HTTP Error Matrix:** All 12 failure families normalize safely with secret/path/SQL/prompt redaction, `asyncio.CancelledError` propagation, `ProviderCircuitBreaker` fast-fail/recovery, and RFC `Retry-After` handling.
+  6. **Offline Harness Boundary:** `run_staging_acceptance.py`, `verify_beta_readiness.py`, and `run_usability_audit.py` exercise synthetic guilds and mocked interactions only. See [Release Claims & Verification Evidence](release-evidence.md) for what still requires manual owner-run live staging.
 

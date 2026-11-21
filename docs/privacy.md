@@ -1,10 +1,9 @@
-# Instigate Cafe Bot — Privacy Model, Data Flows & Deletion Policy
+# Instigate Cafe Bot — Privacy Model, Data Map & Deletion Policy
 
-**Document Version:** 2.1.0 (Phase 12 Privacy & Data Contract Specification)  
-**Reference Specification:** [`docs/privacy/data-map.md`](privacy/data-map.md)  
+**Release:** `v1.0.0-rc1`  
 **Primary Implementation:** [`icbot/services/user_service.py`](../icbot/services/user_service.py)  
 **Storage Architecture:** Local SQLite 3 (`DB_PATH`, container default `/data/campus.db`) with Write-Ahead Logging (WAL)  
-**Scope Notice:** This document describes the verified technical privacy controls, data flows, retention boundaries, and erasure/anonymization procedures implemented in code. It does not constitute formal legal counsel or an automated regulatory (GDPR/CCPA) compliance certification.
+**Scope Notice:** This document describes the verified technical privacy controls, data flows, retention boundaries, and erasure/anonymization procedures implemented in code. It does not constitute formal legal counsel or an automated regulatory certification.
 
 ---
 
@@ -77,19 +76,56 @@ sequenceDiagram
 
 ---
 
-## 4. Third-Party Data Processors
+## 4. Third-Party Data Processors & Data-Flow Map
 
-| Third Party | Purpose | Data Transmitted | Privacy Safeguards |
+```mermaid
+flowchart LR
+    Bot["Instigate Cafe Bot"] -->|1. Gateway, Slash Commands, Embeds| Discord["Discord Inc. (Gateway & CDN)"]
+    Bot -->|2. Opt-in Mentions & Consented Resumes| Google["Google LLC (Gemini API)"]
+    Bot -->|3. Professor & Institution Names Only| RMP["RateMyProfessors (GraphQL)"]
+    Bot -->|4. Public Transit & Job Queries Only| Feeds["Metrolinx / TTC Mastodon / ATS Feeds"]
+    Bot -->|5. Public Ticker & Chain Queries Only| Markets["Yahoo Finance / Esplora / Odds API"]
+```
+
+| Third Party | Purpose | Data Transmitted | Privacy Safeguards & Terms |
 |---|---|---|---|
-| **Discord (Discord Inc.)** | Message delivery, slash commands, UI components | User interactions, command options, ephemeral responses | Discord Developer Terms of Service and Privacy Policy |
-| **Google Gemini API (Google LLC)** | Generative assistant replies & opt-in resume feedback | Mention prompt text, optional recent channel history (`LLM_CHANNEL_HISTORY_ENABLED`), in-memory resume bytes after explicit user consent | TLS encryption; hourly/daily token budgets; redaction filter on logs |
+| **Discord (Discord Inc.)** | Message delivery, slash commands, UI components | User interactions, command options, ephemeral responses | [Discord Developer Terms of Service](https://discord.com/developers/docs/policies-and-agreements/developer-terms-of-service) & [Discord Privacy Policy](https://discord.com/privacy) |
+| **Google Gemini API (Google LLC)** | Generative assistant replies & opt-in resume feedback | Mention prompt text, optional recent channel history (`LLM_CHANNEL_HISTORY_ENABLED=true` only), in-memory resume bytes after explicit user consent | TLS encryption; rate limits & token budgets; log redaction; [Gemini API Terms](https://ai.google.dev/terms) |
 | **RateMyProfessors (Chewse Inc.)** | Professor lookup (`/ic prof`) | Professor names and institution names only | Zero user IDs or Discord metadata transmitted |
-| **Metrolinx / TTC Mastodon** | Transit alert aggregation | None (bot only pulls public feeds) | Zero user data transmitted |
-| **Greenhouse / Lever / Workday** | Career board ingestion | None (bot only pulls public job listings) | Zero user data transmitted |
+| **Metrolinx / TTC Mastodon** | Transit alert aggregation | None (public feeds only) | Zero user data transmitted |
+| **Greenhouse / Lever / Workday** | Career board ingestion | None (public job listings only) | Zero user data transmitted |
+| **Yahoo Finance / Esplora / Odds API** | Market quotes, BTC UTXOs, sports schedules | Public tickers, addresses, and sport keys only | Zero user PII or Discord IDs transmitted |
+
+### 4.1 Operator Disablement & Log Redaction Controls
+| Control | Environment Variable / Command | Effect |
+| :--- | :--- | :--- |
+| **Disable All AI Processing** | `LLM_ENABLED=false` or `/ic admin llm_stop` | Halts `@mention` Q&A and `/ic resume` AI calls immediately; zero content leaves to Google Gemini. |
+| **Disable Channel Context Window** | `LLM_CHANNEL_HISTORY_ENABLED=false` *(default)* | `@mention` processes only the invoking message (and direct reply), never surrounding channel history. |
+| **Restrict Command Channels** | `USER_COMMAND_CHANNEL_ID` / `LLM_ALLOWED_CHANNEL_IDS` | Scopes command and AI access to approved channels only. |
+| **Disable Background Pollers** | `MARKET_WATCH_ENABLED=false`, `BTC_WATCH_ENABLED=false`, `JOBS_POLL_SECONDS=0` | Stops autonomous outbound polling and checkpoint storage. |
+| **Log Redaction Invariant** | `RedactingLogFilter` ([`icbot/logging.py`](../icbot/logging.py)) | Never logs raw resume bytes, channel message bodies, credentials, host paths, or bound SQL parameters; deletion audit receipts record an opaque random UUID without re-logging the deleted `user_id`. |
+
+### 4.2 Data Controller Boundary: Self-Hosted vs. Hosted Public Instance
+- **Self-Hosted Operator (Recommended):** Controls the Discord Application, optional API keys, host filesystem (`DB_PATH`), backups, and logs. The **self-hosting operator is the sole Data Controller** for their community.
+- **Maintainer-Hosted Shared Instance:** Central operator controls shared infrastructure and acts as Data Controller for invited guilds, handling cross-guild deletion requests and API billing.
 
 ---
 
 ## 5. Deterministic Data Export & Right-to-be-Forgotten Erasure / Anonymization Contract
+
+```mermaid
+flowchart TD
+    Req["UserStore.delete_user_data(user_id, guild_id)"] --> Tier1["Tier 1: Guild Personal State (Hard Delete)"]
+    Req --> Tier1G["Tier 1B: Global Preferences (Scope-Guarded Delete)"]
+    Req --> Tier2["Tier 2: Ledgers & Shared Content (Tombstone Anonymization)"]
+    Req --> Tier3["Tier 3: Admin Audit Logs (Target Scrub + Actor Policy)"]
+
+    Tier1 --> D1["DELETE users, blackjack_users, fun_positions"]
+    Tier1G --> DG["DELETE user_job_preferences (if 0 other guilds or forced)"]
+    Tier2 --> A1["economy_ledger: user_id=0 + SHA-256 pseudonym scrub"]
+    Tier2 --> A2["fun_trades, stock_events, exams, academic_resources: user_id/creator=0"]
+    Tier3 --> S1["admin_audit_log: target_user_id=NULL + opaque erasure_receipt UUID"]
+```
 
 ### 5.1 Deterministic Batched Export (`UserStore.export_user_data()`)
 [`UserStore.export_user_data()`](../icbot/services/user_service.py) exports all user-addressable records for `(guild_id, user_id)` in a machine-readable JSON dictionary (`format_version: 2`):

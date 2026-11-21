@@ -12,18 +12,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def test_required_documentation_files_exist_and_non_empty() -> None:
-    """Verify all architectural, operational, policy, and community files exist and contain non-trivial content."""
+    """Verify all canonical public documentation, operational, policy, and community files exist."""
     required_files = [
         "README.md",
         "CONTRIBUTING.md",
         "SECURITY.md",
         "CHANGELOG.md",
         "CODE_OF_CONDUCT.md",
+        "docs/README.md",
+        "docs/features.md",
         "docs/architecture.md",
         "docs/configuration.md",
-        "docs/operations.md",
+        "docs/deployment.md",
+        "docs/development.md",
         "docs/privacy.md",
         "docs/providers.md",
+        "docs/testing.md",
+        "docs/troubleshooting.md",
+        "docs/ui-style.md",
+        "docs/release-evidence.md",
         ".github/ISSUE_TEMPLATE/feature_request.md",
         ".github/PULL_REQUEST_TEMPLATE.md",
     ]
@@ -38,8 +45,9 @@ def test_required_documentation_files_exist_and_non_empty() -> None:
 
 
 def test_readme_documents_all_registered_leaf_commands() -> None:
-    """Verify README documents all 53 leaf commands registered across the bot's modules."""
+    """Verify README and docs/features.md document all 53 leaf commands registered across the bot's modules."""
     readme_content = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    features_content = (PROJECT_ROOT / "docs/features.md").read_text(encoding="utf-8")
 
     load_feature_modules()
     registered = registered_qualified_names()
@@ -51,6 +59,9 @@ def test_readme_documents_all_registered_leaf_commands() -> None:
         leaf = tokens[-1]
         assert leaf in readme_content, (
             f"Leaf command '{name}' ({leaf}) is missing from README.md documentation"
+        )
+        assert leaf in features_content, (
+            f"Leaf command '{name}' ({leaf}) is missing from docs/features.md documentation"
         )
 
 
@@ -94,12 +105,14 @@ def test_privacy_doc_contains_data_handling_invariants() -> None:
 
 
 def test_operations_doc_contains_backup_and_scheduler_invariants() -> None:
-    """Verify docs/operations.md covers single scheduler ownership, status diagnostics, and hot backups."""
-    ops_doc = (PROJECT_ROOT / "docs/operations.md").read_text(encoding="utf-8")
+    """Verify docs/deployment.md and docs/troubleshooting.md cover single scheduler, diagnostics, and hot backups."""
+    deploy_doc = (PROJECT_ROOT / "docs/deployment.md").read_text(encoding="utf-8")
+    troubleshoot_doc = (PROJECT_ROOT / "docs/troubleshooting.md").read_text(encoding="utf-8")
 
-    assert "VACUUM INTO" in ops_doc
-    assert "/ic status" in ops_doc
-    assert "single scheduler" in ops_doc.lower() or "replicas: 1" in ops_doc.lower()
+    assert "VACUUM INTO" in deploy_doc
+    assert "single" in deploy_doc.lower() and "replicas: 1" in deploy_doc.lower()
+    assert "/ic status" in troubleshoot_doc
+    assert "ProviderCircuitBreaker" in troubleshoot_doc
 
 
 def test_providers_doc_contains_contributor_protocol_and_mocking() -> None:

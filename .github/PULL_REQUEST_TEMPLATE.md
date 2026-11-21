@@ -17,6 +17,7 @@ Before requesting review, confirm that all local offline checks pass:
 - [ ] `uv run pytest` passes 100% of tests offline.
 - [ ] `uv run ruff check . && uv run ruff format --check .` reports clean formatting.
 - [ ] `uv run mypy .` reports no type errors.
+- [ ] `uv run python tools/check_docs.py` passes offline documentation validation.
 - [ ] `uv run python tools/smoke_offline.py` passes zero-token import check.
 - [ ] `uv run python tools/scan_secrets.py --enforce-clean` reports zero leaked secrets.
 

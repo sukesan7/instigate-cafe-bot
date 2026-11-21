@@ -82,11 +82,9 @@ SECRET_REGEXES: dict[str, re.Pattern[str]] = {
     "Private Key Header": re.compile(r"-----BEGIN (?:[A-Z ]+)?PRIVATE KEY-----"),
 }
 
-# Files exempt from content pattern scanning (scanner itself, docs discussing patterns)
+# Files exempt from content pattern scanning (scanner itself, docs/tests discussing patterns)
 SCAN_EXEMPT_PATHS = {
     "tools/scan_secrets.py",
-    "docs/audit/sensitive_artifact_audit.md",
-    "docs/publishing-checklist.md",
     "tests/fixtures/synthetic_lore.json",
     "tests/unit/test_supply_chain_and_leak_guards.py",
 }
@@ -381,7 +379,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(" 2. If a secret or token was committed to git history:")
         print("      a. Immediately REVOKE and ROTATE the compromised credential at the provider.")
         print("      b. Remove the secret from code/configuration and commit the scrubbed version.")
-        print("      c. Consult docs/publishing-checklist.md for git history inspection policies.")
+        print("      c. Consult SECURITY.md and docs/deployment.md for git history remediation policies.")
         print("================================================================================")
 
     if critical_findings:

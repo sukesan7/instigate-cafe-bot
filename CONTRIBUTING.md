@@ -19,7 +19,7 @@ Before making any changes or submitting pull requests, you must adhere to these 
 
 ## 2. Getting Started with Local Development
 
-We use [`uv`](https://docs.astral.sh/uv/) for fast, reproducible dependency management and virtual environments.
+We use [`uv`](https://docs.astral.sh/uv/) for fast, reproducible dependency management and virtual environments. For full tooling details and safety tiers, see the [Development & Tooling Guide](docs/development.md) and [Offline Testing Guide](docs/testing.md).
 
 ### 2.1 Prerequisites
 - Python 3.11, 3.12, or 3.13

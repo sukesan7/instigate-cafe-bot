@@ -65,9 +65,13 @@ def test_public_copy_and_documentation_claims_are_accurate() -> None:
     assert "unit-tested PRNG game engines" in readme_src
     assert "LLM_CHANNEL_HISTORY_ENABLED=false" in readme_src
     assert "docs/release-evidence.md" in readme_src
+    assert "GDPR-compliant" not in readme_src
 
-    launch_src = (PROJECT_ROOT / "docs/launch-assets.md").read_text(encoding="utf-8")
-    assert "GDPR-compliant" not in launch_src
+    privacy_src = (PROJECT_ROOT / "docs/privacy.md").read_text(encoding="utf-8")
+    assert "GDPR-compliant" not in privacy_src
+
+    docs_index_src = (PROJECT_ROOT / "docs/README.md").read_text(encoding="utf-8")
+    assert "GDPR-compliant" not in docs_index_src
 
     evidence_path = PROJECT_ROOT / "docs/release-evidence.md"
     assert evidence_path.is_file()
