@@ -72,16 +72,15 @@ During the Alpha and Beta phases, user feedback is collected exclusively through
 - **No Career Document Persistence:** Resumes submitted via `/ic resume` are held strictly in memory during ephemeral review execution and immediately discarded. File attachments are never saved to SQLite, local disk, or external object storage.
 - **Structured Bug Reports:** Feedback submitted through `/ic feedback` or the support channel is limited to structured dropdown categories (e.g. `[Academic, Schedule, Economy, UI]`) and free-form comment text that passes through `RedactingLogFilter` to strip accidental tokens or contact information.
 
-### 4.2 Right-to-be-Forgotten (GDPR / Privacy Compliance)
-Students retain full sovereignty over their data:
-1. **Self-Service Export:** Calling `UserStore.export_user_data(user_id)` produces a machine-readable JSON archive containing the user's profile, open stock positions, trade history, and economy ledger entries.
-2. **Right-to-be-Forgotten Deletion:** Calling `UserStore.delete_user_data(user_id, anonymize_ledger=True)` atomically:
-   - Deletes personal profile and avatar metadata from the `users` table.
-   - Deletes gaming statistics from `blackjack_users`.
-   - Clears active equity positions from `fun_positions`.
-   - Deletes trading history from `fun_trades`.
-   - Records an administrative deletion event in `admin_audit_log`.
-   - **Audit Ledger Preservation:** Preserves immutable financial ledger entries in `economy_ledger` to maintain aggregate token supply invariants and prevent fraudulent balance destruction.
+### 4.2 Right-to-be-Forgotten (Data Portability & Erasure Contract)
+Students and operators have programmatic data portability and erasure controls via [`UserStore`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/user_service.py):
+1. **Deterministic Batched Export:** Calling `UserStore.export_user_data(user_id, guild_id=...)` paginates across all user-addressable tables (`users`, `blackjack_users`, `fun_positions`, `fun_trades`, `economy_ledger`, `exams`, `academic_resources`, and global `user_job_preferences`) without silent 100-row truncation, reporting explicit `truncated` and `warnings` metadata if `max_rows_per_table` is reached.
+2. **Right-to-be-Forgotten Deletion & De-Identification:** Calling `UserStore.delete_user_data(user_id, guild_id=..., anonymize_ledger=True)` atomically:
+   - Hard-deletes personal profile and avatar metadata from `users`, gaming stats from `blackjack_users`, and open equity positions from `fun_positions` in the target guild.
+   - Deletes cross-guild `user_job_preferences` only when the user has no remaining profiles in other guilds (or when `delete_global_preferences=True` is explicitly specified).
+   - Anonymizes `fun_trades`, `fun_stock_events`, `stock_events`, `fun_market_weeks.settled_by`, `exams.created_by`, and `academic_resources.added_by` in the target guild.
+   - Anonymizes `economy_ledger` rows (`user_id = 0`) and scrubs embedded `user_id` substrings from `transaction_id` and `reference_id` while preserving exact transaction amounts and timestamps so aggregate token supply invariants remain verifiable.
+   - Scrubs `target_user_id` in `admin_audit_log` and records a `user_data_delete` receipt with `target_user_id = NULL` and a random `erasure_receipt` UUID (never re-exposing the deleted `user_id`).
 
 ---
 

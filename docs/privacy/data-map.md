@@ -150,36 +150,53 @@ Hard-deleting foreign keys from financial/market ledgers causes database corrupt
 - If a user row is removed with `CASCADE DELETE`, historical trades in `fun_trades` disappear, invalidating historical market volume, stock price tracking, and weekly market settlement audits (`fun_market_weeks`).
 - If a user row is removed with `RESTRICT`, the deletion fails, violating the user's right to erasure.
 
-### 5.2 Two-Tier Deletion Architecture
+### 5.2 Two-Tier Deletion & De-Identification Architecture (`UserStore.delete_user_data`)
 
 ```mermaid
 flowchart TD
-    Req["User Requests Deletion (/ic privacy delete)"] --> Tier1["Tier 1: Ephemeral & Personal PII (Hard Delete)"]
-    Req --> Tier2["Tier 2: Transactional Audit Ledger (Tombstone Anonymization)"]
+    Req["Operator / Admin Triggers UserStore.delete_user_data(user_id, guild_id)"] --> Tier1["Tier 1: Guild-Scoped Personal State (Hard Delete)"]
+    Req --> Tier1G["Tier 1B: Cross-Guild Global Preferences (Scope-Guarded Delete)"]
+    Req --> Tier2["Tier 2: Ledgers & Shared Community Content (Tombstone Anonymization)"]
+    Req --> Tier3["Tier 3: Security & Admin Audit Logs (Target Scrub + Actor Policy)"]
 
-    Tier1 --> D1["DELETE FROM users WHERE user_id = :id"]
-    Tier1 --> D2["DELETE FROM blackjack_users WHERE user_id = :id"]
-    Tier1 --> D3["DELETE FROM fun_positions WHERE user_id = :id (Liquidate / Close)"]
+    Tier1 --> D1["DELETE FROM users WHERE guild_id = :gid AND user_id = :uid"]
+    Tier1 --> D2["DELETE FROM blackjack_users WHERE guild_id = :gid AND user_id = :uid"]
+    Tier1 --> D3["DELETE FROM fun_positions WHERE guild_id = :gid AND user_id = :uid"]
 
-    Tier2 --> A1["UPDATE fun_trades SET user_id = 0, note = 'ANONYMIZED_USER' WHERE user_id = :id"]
-    Tier2 --> A2["UPDATE fun_stock_events SET user_id = 0, reason = '[REDACTED]' WHERE user_id = :id"]
-    Tier2 --> A3["UPDATE exams SET created_by = NULL WHERE created_by = :id"]
+    Tier1G --> DG["DELETE FROM user_job_preferences WHERE user_id = :uid (only if 0 other guild profiles remain or delete_global_preferences=True)"]
 
-    D1 & D2 & D3 & A1 & A2 & A3 --> Audit["Append Nonce Audit Entry (Zero Content Leaked)"]
+    Tier2 --> A1["UPDATE economy_ledger SET user_id = 0, transaction_id = anon_hash, reference_id = anon_hash WHERE guild_id = :gid AND user_id = :uid"]
+    Tier2 --> A2["UPDATE fun_trades SET user_id = 0, note = '[ANONYMIZED_USER]' WHERE guild_id = :gid AND user_id = :uid"]
+    Tier2 --> A3["UPDATE fun_stock_events / stock_events SET user_id = 0, reason = '[ANONYMIZED_USER]' WHERE guild_id = :gid AND user_id = :uid"]
+    Tier2 --> A4["UPDATE exams SET created_by = 0 WHERE guild_id = :gid AND created_by = :uid"]
+    Tier2 --> A5["UPDATE academic_resources SET added_by = 0 WHERE guild_id = :gid AND added_by = :uid"]
+    Tier2 --> A6["UPDATE fun_market_weeks SET settled_by = NULL WHERE guild_id = :gid AND settled_by = :uid"]
+
+    Tier3 --> S1["UPDATE admin_audit_log SET target_user_id = NULL, details_json = scrubbed WHERE guild_id = :gid AND target_user_id = :uid"]
+    Tier3 --> S2["Optional (retain_admin_actor_audit=False): zero admin_user_id & guild_settings_audit.actor_id"]
+    Tier3 --> S3["INSERT admin_audit_log (action='user_data_delete', target_user_id=NULL, erasure_receipt=UUID)"]
 ```
 
-#### Tier 1: Hard Deletion (Personal PII & Direct User State)
-The following tables are immediately wiped of the user's records:
-1. `users`: Wipes `user_id`, `display_name`, `avatar_url`, `balance`, `daily_claim_ts`.
-2. `blackjack_users`: Wipes user's bankroll, win/loss stats, reset count.
-3. `fun_positions`: Closes and wipes all active long/short share holdings.
-4. Discord Cache: Flushes any in-memory rate-limit trackers (`_llm_last_reply[user_id]`).
+#### Tier 1: Hard Deletion (Personal Profile, Game State & Scope-Guarded Global Preferences)
+1. `users`: Deletes `(guild_id, user_id)` row (`display_name`, `avatar_url`, `balance`, `created_at`, `daily_claim_ts`).
+2. `blackjack_users`: Deletes `(guild_id, user_id)` bankroll, win/loss/push counts, and reset counters.
+3. `fun_positions`: Deletes all open long/short positions for `(guild_id, user_id)`.
+4. `user_job_preferences` (Cross-Guild Global Key): Because `user_job_preferences` is keyed globally by `user_id` (`PRIMARY KEY (user_id)`), deleting a user in Guild A checks whether the user still has a profile in Guild B (`SELECT COUNT(1) FROM users WHERE user_id=? AND guild_id!=?`). It deletes `user_job_preferences` automatically only when zero other guild profiles remain, or when `delete_global_preferences=True` is explicitly confirmed.
 
-#### Tier 2: Tombstone Anonymization (Transactional Ledgers & Audits)
-To preserve ledger balance without retaining user identifiers:
-1. `fun_trades`: `user_id` is replaced with sentinel `0` (`ANONYMIZED_USER`), `note` field is sanitized of any user mentions.
-2. `fun_stock_events`: `user_id` is replaced with `0`, administrative reason fields mentioning the user are scrubbed.
-3. `exams`: `created_by` is set to `NULL` (`0`), leaving the academic course timetable intact for fellow students while severing all links to the creator's identity.
+#### Tier 2: Tombstone Anonymization (Financial Ledgers & Shared Community Content)
+To preserve aggregate token supply and shared academic schedules without retaining the deleted user's snowflake ID:
+1. `economy_ledger`: Preserves all rows and amounts while setting `user_id = 0` (`ANONYMIZED_USER_ID`) and scrubbing the user's snowflake substring out of `transaction_id` (e.g. `claim:gid:uid:...` &rarr; `claim:gid:anon_<sha256_12>:...:<row_id>`) and `reference_id`, preserving internal reservation-to-settlement referral links.
+2. `fun_trades`: Sets `user_id = 0` and `note = '[ANONYMIZED_USER]'` when `anonymize_ledger=True` (or hard-deletes rows when `anonymize_ledger=False`).
+3. `fun_stock_events` and `stock_events`: Sets `user_id = 0` and `reason = '[ANONYMIZED_USER]'`.
+4. `fun_market_weeks`: Sets `settled_by = NULL` where `settled_by = user_id`.
+5. `exams`: Sets `created_by = 0` where `created_by = user_id` in that guild, preserving shared course exam calendars while removing creator identity.
+6. `academic_resources`: Sets `added_by = 0` where `added_by = user_id` in that guild, preserving shared study guide links while removing contributor identity.
+
+#### Tier 3: Security & Administrative Audit Logs (Honest Retention & De-Identification Policy)
+1. **Target De-Identification:** Any `admin_audit_log` row where `target_user_id = user_id` has `target_user_id` set to `NULL` and `details_json` scrubbed of the user's snowflake.
+2. **Deletion Receipt Without Re-Exposure:** The `user_data_delete` audit event is inserted with `admin_user_id = 0`, `target_user_id = NULL`, and an opaque random `erasure_receipt` UUID in `details_json` — never re-recording the deleted `user_id`.
+3. **Privileged Admin Actor Retention (`retain_admin_actor_audit=True` default):** When a server administrator performs privileged actions (`admin_audit_log.admin_user_id` or `guild_settings_audit.actor_id`), those actor IDs are retained by default for security and abuse accountability. If an operator wishes to de-identify an outgoing administrator's actor records as well, passing `retain_admin_actor_audit=False` zeroes `admin_user_id` and `guild_settings_audit.actor_id` for that guild.
+4. **Residual Identifiability Notice:** Anonymized ledger and trade rows retain timestamps and integer amounts to keep financial audit totals invariant; someone possessing external knowledge of an exact transaction timestamp and amount could correlate an anonymized row. Historical database backup files (`tools/backup_db.py`) also retain pre-deletion snapshots until rotated.
 
 ---
 
@@ -215,33 +232,12 @@ To ensure logs do not inadvertently capture sensitive data or undermine deletion
 
 ---
 
-## 8. Testable Specification for Future Privacy APIs
+## 8. Programmatic Privacy APIs & Future Self-Service Command Prerequisites
 
-The following command contracts are specified for implementation in future phases:
+Data export and deletion are currently exposed programmatically via [`UserStore.export_user_data()`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/user_service.py) and [`UserStore.delete_user_data()`](file:///home/sukesan/dev/discord/campus-bot/icbot/services/user_service.py) and tested in [`tests/unit/test_privacy_model.py`](file:///home/sukesan/dev/discord/campus-bot/tests/unit/test_privacy_model.py).
 
-### 8.1 `/ic privacy export`
-- **Scope:** Returns an ephemeral JSON attachment containing all data associated with `interaction.user.id`:
-  ```json
-  {
-    "user_id": 123456789012345678,
-    "display_name": "StudentName",
-    "avatar_url": "https://cdn.discordapp.com/...",
-    "economy": {
-      "balance": 1500,
-      "daily_claim_ts": 1730000000,
-      "blackjack": { "hands": 12, "wins": 7, "losses": 5 }
-    },
-    "fun_market": {
-      "positions": [...],
-      "trades": [...]
-    },
-    "exams_created": [...]
-  }
-  ```
-- **Visibility:** `ephemeral=True` (strictly visible only to the requesting user).
-
-### 8.2 `/ic privacy delete`
-- **Scope:** Prompts user with a confirmation modal explaining the irreversible deletion of their profile, economy balance, and casino stats, plus the anonymization of trade history.
-- **Action:** Executes the two-tier atomic transaction specified in Section 5.2.
-- **Verification:** Verified offline in [`tests/unit/test_privacy_model.py`](file:///home/sukesan/dev/discord/campus-bot/tests/unit/test_privacy_model.py).
+A user-facing slash command (`/ic privacy export`, `/ic privacy delete`) is intentionally **not** exposed in the live Discord command tree until the following security and UX prerequisites are completed:
+1. **Scope Confirmation UX:** Explicit user choice between single-guild erasure (`guild_id=interaction.guild_id`) vs. cross-guild global preference erasure (`delete_global_preferences=True`).
+2. **Active Escrow / Live Hand Lockout:** Verification that the user cannot trigger self-deletion mid-hand while an unsettled Blackjack or Casino wager reservation is open in `CasinoService._active_wagers` or `SessionManager`.
+3. **Re-Authentication & Cooldown Gate:** Anti-abuse confirmation modal preventing accidental click-through or rapid create/claim/delete cycling to farm starting bankrolls (`bj_starting_bankroll`).
 
