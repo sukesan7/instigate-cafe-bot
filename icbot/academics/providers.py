@@ -802,13 +802,17 @@ class TmuGradesZoneProvider:
 
         # Respect injected store or configured settings.grades_db_path (no hardcoded tmu_grades.db!)
         eff_store = self._store
-        eff_db_path = self._db_path
+        eff_db_path = (self._db_path or "").strip() or None
         if grades_mod.DB_PATH != grades_mod.DEFAULT_GRADES_DB_PATH:
             # Explicit monkeypatch override in isolated test harnesses
             eff_store = None
             eff_db_path = grades_mod.DB_PATH
         elif eff_store is None and eff_db_path is None and settings is not None:
-            eff_db_path = getattr(settings, "grades_db_path", None)
+            eff_db_path = (
+                (getattr(settings, "grades_db_path", "") or "").strip()
+                or (getattr(settings, "db_path", "") or "").strip()
+                or None
+            )
 
         try:
             raw, fetched_at, from_sqlite_cache = await grades_mod.fetch_course_data_with_meta(
