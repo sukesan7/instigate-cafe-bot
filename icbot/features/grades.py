@@ -201,7 +201,7 @@ async def fetch_course_data_with_meta(
     now_ts = int(now)
 
     if store is None:
-        eff_db = db_path or DB_PATH
+        eff_db = (db_path or "").strip() or DB_PATH
         store = await _init_db(eff_db)
     else:
         await store.init()
