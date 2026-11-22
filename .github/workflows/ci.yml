@@ -78,6 +78,20 @@ jobs:
       - name: Run offline AST and zero-token import smoke check
         run: uv run python tools/smoke_offline.py
 
+      - name: Run offline syntax check (Python, JSON, TOML, YAML)
+        run: uv run python tools/check_syntax.py pyproject.toml .pre-commit-config.yaml .github/workflows/ci.yml .github/workflows/live-smoke.yml .github/dependabot.yml tools/lore.example.json
+
+      - name: Run offline staging lifecycle and SQLite migration smoke check
+        run: uv run python tools/smoke_staging.py
+
+      - name: Validate documentation links, images, and command-tree parity
+        run: |
+          uv run python tools/check_docs.py
+          uv run python tools/check_command_docs.py
+
+      - name: Verify offline pytest collection (zero network side effects)
+        run: uv run pytest --collect-only -q
+
       - name: Run offline usability review benchmark
         run: uv run pytest tests/unit/test_usability_review_archetypes.py -v
 

@@ -26,6 +26,7 @@ def test_compact_public_docs_index_and_scope_clarity() -> None:
         "development.md",
         "testing.md",
         "release-evidence.md",
+        "release-verification.md",
         "screenshots-guide.md",
     ):
         assert expected_doc in content, f"docs/README.md does not link to {expected_doc}"

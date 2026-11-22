@@ -28,6 +28,7 @@ Welcome to the documentation for **Instigate Cafe Bot** (`v1.0.0-rc1`), a modula
 | :--- | :--- | :--- |
 | [Privacy Model & Data Map](privacy.md) | Users, Admins & Auditors | Data-flow diagrams, table-by-table SQLite classification, zero-local-disk ephemeral resume processing, Discord/Gemini retention boundaries, operator disablement controls, and transactional export/erasure (`UserStore.delete_user_data`). |
 | [Release Claims & Verification Evidence](release-evidence.md) | Maintainers & Reviewers | Traceability matrix mapping public, privacy, and operational claims to source files, automated offline tests, and explicit unverified live-staging boundaries. |
+| [Release Verification Ledger & Blockers](release-verification.md) | Maintainers & Release QA | Measured offline verification ledger, unexecuted CI/Docker/live checks with reproducible commands, and pre-publication release-blockers checklist (including Git history review). |
 | [Security Policy](../SECURITY.md) | All Readers | Supported versions, confidential vulnerability reporting, and incident response SLAs. |
 
 ### Developers & Contributors
