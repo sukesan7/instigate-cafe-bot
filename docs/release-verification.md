@@ -55,7 +55,7 @@ The following checks are **not executed** inside this offline sandbox and are **
 | **Python 3.11 & 3.13 full test matrix** | **Not Executed Locally** | Only `Python 3.12.13` (and unsupported host `3.14.10`) are installed locally without PyPI network access. | Trigger [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (`matrix.python-version: ["3.11", "3.12", "3.13"]`) or run locally on a host with 3.11/3.13: `uv venv --python 3.13 .venv313 && UV_PROJECT_ENVIRONMENT=.venv313 uv sync --frozen --dev && .venv313/bin/python tools/verify_offline.py` |
 | **Dependency vulnerability audit (`pip-audit`)** | **Not Executed Locally** | Queries PyPI OSV advisory API (no network in offline sandbox). | Executed in `.github/workflows/ci.yml` or locally with network: `uv run pip-audit --desc auto` (or `make audit`) |
 | **Docker image build & offline container restart smoke** | **Not Executed Locally** | Docker daemon socket `/var/run/docker.sock` is unavailable in sandbox. | Run on host with Docker daemon: `docker build --build-arg APP_VERSION=1.0.0-rc1 -t campus-bot:1.0.0-rc1 . && docker run --rm --network none -e DB_PATH=/data/campus.db -e ICBOT_ALLOW_GATEWAY=false -v "$(pwd)/data:/data" --entrypoint python3 campus-bot:1.0.0-rc1 tools/smoke_staging.py` |
-| **Live Discord Gateway sync & upstream API round-trips** | **Not Executed Locally** | Strictly prohibited in automated runs; requires owner-supplied staging credentials. | Manual owner staging procedure in [`docs/deployment.md`](deployment.md#62-isolated-staging-environment) |
+| **Live Discord Gateway sync & upstream API round-trips** | **Not Executed Locally** | Strictly prohibited in automated runs; requires owner-supplied staging credentials. | Manual owner staging procedure in [`docs/staging-runbook.md`](staging-runbook.md) |
 
 ---
 
@@ -75,4 +75,4 @@ Check each item against actual CI run URLs and manual verification evidence befo
 - [ ] **BLOCKER 4 — Railway Production Safeguards & Manual `DB_PATH` Cutover:**  
   Confirm Railway autodeploy is **OFF**, `replicas = 1`, persistent `/data` volume is mounted, pre-cutover online hot backup (`tools/backup_db.py`) is verified, and `DB_PATH=/data/campus.db` is set (see [`docs/deployment.md`](deployment.md#61-manual-railway-db_path-cutover-and-rollback)).
 - [ ] **BLOCKER 5 — Manual Owner-Run Staging Verification & Redacted Screenshots:**  
-  Run a dedicated non-production staging bot token against an isolated private test channel; verify live `/ic` command sync and optionally capture redacted PNGs following [`docs/screenshots-guide.md`](screenshots-guide.md) before populating the `README.md` gallery.
+  Execute [`docs/staging-runbook.md`](staging-runbook.md) using a dedicated non-production staging bot token against an isolated private test channel; complete the 11-family acceptance matrix and optionally capture redacted PNGs following [`docs/screenshots-guide.md`](screenshots-guide.md) before populating the `README.md` gallery.

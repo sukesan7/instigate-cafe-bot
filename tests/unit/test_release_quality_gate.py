@@ -126,3 +126,45 @@ def test_pr_a_through_d_release_invariants_and_verification_ledger() -> None:
         "CI Run URL",
     ):
         assert required_phrase in ledger, f"docs/release-verification.md missing '{required_phrase}'"
+
+
+def test_staging_runbook_enforces_isolation_railway_audit_matrix_and_unfilled_signoff() -> None:
+    """Verify docs/staging-runbook.md defines safe staging isolation, 11 command families, and blank sign-off."""
+    runbook_path = PROJECT_ROOT / "docs" / "staging-runbook.md"
+    assert runbook_path.is_file(), "docs/staging-runbook.md is missing"
+    content = runbook_path.read_text(encoding="utf-8")
+
+    # Safety & Railway audit invariants
+    for phrase in (
+        "Never reuse the production `DISCORD_TOKEN`",
+        "Autodeploy: OFF",
+        "277025507392",
+        "--allow-gateway",
+        "RedactingLogFilter",
+        "tools/backup_db.py",
+        "Immediate Stop & Remediation Checklist",
+        "Owner Release Sign-Off Gate",
+        "NEVER real student resume",
+        "Do not** run stress tests",
+    ):
+        assert phrase in content, f"docs/staging-runbook.md missing required safeguard: {phrase}"
+
+    # All 11 manual acceptance command families covered
+    for family in (
+        "Help & Onboarding",
+        "Theme Presets",
+        "Manual Notes",
+        "Exams — Public, Private, Import & Export",
+        "Professor & Grades",
+        "Jobs Filters & Cached-Outage State",
+        "Resume Consent & Rejection",
+        "Virtual Economy, Casino & ICSE Settlement",
+        "Admin Setup, Status & Feature Toggles",
+        "Transit, Market & Sports Disabled / Error Handling",
+        "Pagination, Actor Guards & Restart / Reconnect",
+    ):
+        assert family in content, f"docs/staging-runbook.md missing command family: {family}"
+
+    # Must NOT fabricate an already-approved release banner
+    assert "APPROVED FOR" not in content
+    assert "CERTIFIED" not in content

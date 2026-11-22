@@ -21,6 +21,7 @@ Welcome to the documentation for **Instigate Cafe Bot** (`v1.0.0-rc1`), a modula
 | [Features & Command Guide](features.md) | Students & Server Admins | Complete guide to all 53 `/ic` slash commands, module profiles, onboarding (`/ic getting-started`), exam scheduling & `.ics`/CSV export, job alerts, resume consent barrier, ICSE paper trading, and casino games. |
 | [Configuration Reference](configuration.md) | Operators & Server Admins | Every environment variable in `icbot.config.Settings`, optional API keys vs. zero-key defaults, per-guild `/ic admin` overrides, feature profiles, and visual theme presets. |
 | [Deployment, Hosting & Recovery](deployment.md) | Operators & Maintainers | Self-hosted vs. hosted public invite model, Discord OAuth2 scopes/intents, Docker Compose, systemd, Railway volume cutover/rollback, single-replica ownership, SQLite WAL online backups/restore, credential rotation, and pre-publication security checklist. |
+| [Manual Staging Acceptance Runbook](staging-runbook.md) | Repository Owner / Operators | Owner-only manual staging setup (isolated bot token & synthetic DB), Railway safety audit, 11-family manual acceptance matrix, safe failure injection, immediate stop checklist, and human sign-off gate. |
 | [Troubleshooting & Incident Runbook](troubleshooting.md) | Operators & Contributors | `/ic status` redacted diagnostics, startup & database path errors, Discord permissions/sync issues, 12-family failure taxonomy, provider circuit breakers, SQLite locks, and emergency AI killswitch. |
 
 ### Privacy, Security & Verification

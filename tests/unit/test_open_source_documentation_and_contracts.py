@@ -32,6 +32,7 @@ def test_required_documentation_files_exist_and_non_empty() -> None:
         "docs/ui-style.md",
         "docs/release-evidence.md",
         "docs/release-verification.md",
+        "docs/staging-runbook.md",
         "docs/screenshots-guide.md",
         ".github/ISSUE_TEMPLATE/feature_request.md",
         ".github/PULL_REQUEST_TEMPLATE.md",
