@@ -5,24 +5,52 @@ from __future__ import annotations
 import dataclasses
 import math
 import os
-import re
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
-from urllib.parse import urlparse
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from icbot.config_parsers import (
+    _FALSE_VALUES,
+    _HEX_COLOR_RE,
+    _HHMM_RE,
+    _TRUE_VALUES,
+    MAX_SNOWFLAKE,
+    normalize_sqlite_path,
+)
+from icbot.config_parsers import (
+    is_memory_sqlite_path as _is_memory_sqlite_path,
+)
+from icbot.config_parsers import (
+    is_valid_hhmm as _is_valid_hhmm,
+)
+from icbot.config_parsers import (
+    is_valid_http_url as _is_valid_http_url,
+)
+from icbot.config_parsers import (
+    is_valid_snowflake as _is_valid_snowflake,
+)
+from icbot.config_parsers import (
+    is_valid_tz as _is_valid_tz,
+)
+from icbot.config_parsers import (
+    parse_bool as _to_bool,
+)
+from icbot.config_parsers import (
+    parse_color as _to_color,
+)
+from icbot.config_parsers import (
+    parse_float as _to_float,
+)
+from icbot.config_parsers import (
+    parse_int as _to_int,
+)
+from icbot.config_parsers import (
+    parse_str_list as _to_str_list,
+)
 from icbot.errors import ConfigValidationError, redact_secrets
 from icbot.theme import DEFAULT_THEME_NAME, KNOWN_THEME_NAMES, get_theme_preset, is_accessible_accent
 
-# Discord "snowflake" IDs fit in signed int64 for most libs
-MAX_SNOWFLAKE = 9223372036854775807
-
-_HEX_COLOR_RE = re.compile(r"^(?:#|0x)?([0-9a-fA-F]{6})$")
-_HHMM_RE = re.compile(r"^(\d{2}):(\d{2})$")
-_TRUE_VALUES = ("1", "true", "yes", "y", "on")
-_FALSE_VALUES = ("0", "false", "no", "n", "off")
 _VALID_ALERT_LEVELS = frozenset({"major", "all"})
 KNOWN_FEATURE_PROFILES: frozenset[str] = frozenset(
     {"default", "student_core", "community_full", "toronto_tmu"}
@@ -31,162 +59,25 @@ KNOWN_MODULE_IDS: frozenset[str] = frozenset(
     {"core", "academics", "careers", "transit", "economy", "casino", "market", "ai", "sports"}
 )
 
-
-def _to_int(value: Any, default: int = 0, *, clamp_snowflake: bool = False) -> int:
-    """Best-effort int parsing with optional snowflake clamping."""
-    try:
-        if value is None:
-            return default
-        s = str(value).strip()
-        if not s:
-            return default
-        n = int(s)
-        if clamp_snowflake and (n < 0 or n > MAX_SNOWFLAKE):
-            return default
-        return n
-    except (TypeError, ValueError):
-        return default
-
-
-def _to_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        s = str(value).strip()
-        if not s:
-            return default
-        return float(s)
-    except (TypeError, ValueError):
-        return default
-
-
-def _to_bool(value: Any, default: bool = False) -> bool:
-    try:
-        if value is None:
-            return default
-        s = str(value).strip().lower()
-        if s in _TRUE_VALUES:
-            return True
-        if s in _FALSE_VALUES:
-            return False
-        return default
-    except (TypeError, ValueError):
-        return default
-
-
-def _to_color(value: Any, default: int = 0xA64DFF) -> int:
-    """Parse embed color from '#RRGGBB', '0xRRGGBB', 'RRGGBB', or int."""
-    try:
-        if value is None:
-            return default
-        if isinstance(value, bool):
-            return default
-        if isinstance(value, int):
-            return int(value)
-        s = str(value).strip()
-        if not s:
-            return default
-
-        # Already numeric
-        if s.isdigit():
-            return int(s)
-
-        m = _HEX_COLOR_RE.match(s)
-        if m:
-            return int(m.group(1), 16)
-
-        return default
-    except (TypeError, ValueError):
-        return default
-
-
-def _to_str_list(raw: Any) -> list[str]:
-    """Parse comma-separated env lists, stripping junk tokens (e.g., '\\')."""
-    if raw is None:
-        return []
-    if isinstance(raw, (list, tuple)):
-        tokens = [str(x).strip() for x in raw]
-    else:
-        s = str(raw).strip()
-        if not s:
-            return []
-        tokens = [tok.strip() for tok in s.split(",")]
-
-    out: list[str] = []
-    for t in tokens:
-        if not t or t in ("\\", "\\\\"):
-            continue
-        out.append(t)
-
-    # de-dupe while preserving order
-    seen: set[str] = set()
-    uniq: list[str] = []
-    for t in out:
-        k = t.lower()
-        if k in seen:
-            continue
-        seen.add(k)
-        uniq.append(t)
-    return uniq
-
-
-def _is_valid_http_url(raw: str) -> bool:
-    s = (raw or "").strip()
-    if not s or any(ch.isspace() for ch in s):
-        return False
-    parsed = urlparse(s)
-    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
-
-
-def _is_valid_hhmm(raw: str) -> bool:
-    m = _HHMM_RE.fullmatch((raw or "").strip())
-    if not m:
-        return False
-    hh, mm = int(m.group(1)), int(m.group(2))
-    return 0 <= hh <= 23 and 0 <= mm <= 59
-
-
-def _is_valid_tz(tz_name: str) -> bool:
-    name = (tz_name or "").strip()
-    if not name:
-        return False
-    try:
-        ZoneInfo(name)
-        return True
-    except (ZoneInfoNotFoundError, KeyError, ValueError):
-        return False
-
-
-def _is_valid_snowflake(val: int, *, allow_zero: bool = True) -> bool:
-    if isinstance(val, bool) or not isinstance(val, int):
-        return False
-    lower = 0 if allow_zero else 1
-    return lower <= val <= MAX_SNOWFLAKE
-
-
-def _is_memory_sqlite_path(raw: str) -> bool:
-    s = (raw or "").strip()
-    return s == ":memory:" or s.startswith("file::memory:") or "mode=memory" in s
-
-
-def normalize_sqlite_path(raw: str, *, allow_empty: bool = False) -> str:
-    """Normalize a configured SQLite database file path while preserving special memory URIs."""
-    s = (raw or "").strip()
-    if not s:
-        if allow_empty:
-            return ""
-        raise ConfigValidationError("SQLite database path must not be empty.")
-    if "\x00" in s:
-        raise ConfigValidationError("SQLite database path must not contain null bytes.")
-    if _is_memory_sqlite_path(s):
-        return s
-    if s in (".", "./", "..", "../") or s.endswith(("/", "\\")):
-        raise ConfigValidationError(f"SQLite database path must point to a file, not a directory: {raw!r}")
-    expanded = os.path.expanduser(s)
-    normed = os.path.normpath(expanded)
-    if normed in ("", "."):
-        raise ConfigValidationError(f"SQLite database path must point to a file, not a directory: {raw!r}")
-    return normed
+# Re-export compatibility references for internal/test callers
+_CONFIG_PARSER_EXPORTS = (
+    MAX_SNOWFLAKE,
+    _HEX_COLOR_RE,
+    _HHMM_RE,
+    _TRUE_VALUES,
+    _FALSE_VALUES,
+    _to_int,
+    _to_float,
+    _to_bool,
+    _to_color,
+    _to_str_list,
+    _is_valid_http_url,
+    _is_valid_hhmm,
+    _is_valid_tz,
+    _is_valid_snowflake,
+    _is_memory_sqlite_path,
+    normalize_sqlite_path,
+)
 
 
 # ---------------------------------------------------------------------------

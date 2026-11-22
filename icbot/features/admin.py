@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import zoneinfo
 from typing import Any, cast
 
 import discord
@@ -8,6 +7,7 @@ from discord import app_commands
 
 from icbot.app import admin
 from icbot.config import KNOWN_MODULE_IDS, Settings
+from icbot.config_parsers import is_valid_tz as _is_valid_tz
 from icbot.container import ServiceContainer, get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 from icbot.errors import ConfigValidationError
@@ -28,17 +28,6 @@ def _get_store(container: ServiceContainer) -> GuildSettingsStore:
     if container.db is not None:
         return GuildSettingsStore(container.db)
     raise RuntimeError("Guild settings store is not available.")
-
-
-def _is_valid_tz(name: str) -> bool:
-    """Check if ``name`` represents a valid IANA timezone."""
-    if not name or not name.strip():
-        return False
-    try:
-        zoneinfo.ZoneInfo(name.strip())
-        return True
-    except (zoneinfo.ZoneInfoNotFoundError, ValueError, KeyError):
-        return False
 
 
 # ---------------------------------------------------------------------------

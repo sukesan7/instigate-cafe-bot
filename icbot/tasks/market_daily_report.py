@@ -43,13 +43,6 @@ def _fmt_price(x: float | None) -> str:
     return f"{x:.2f}"
 
 
-def _to_int(s: str, default: int = 0) -> int:
-    try:
-        return int((s or "").strip() or default)
-    except ValueError:
-        return default
-
-
 async def _get_meta(db, key: str) -> str:
     row = await db.fetchone("SELECT value FROM meta WHERE key=?", (key,))
     return str(row[0]) if row and row[0] is not None else ""

@@ -6,6 +6,8 @@ from typing import Any
 import aiohttp
 import discord
 
+from icbot.config_parsers import parse_bool as _to_bool
+from icbot.config_parsers import parse_int as _to_int
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 from icbot.errors import format_exception_safe
@@ -32,17 +34,6 @@ def _fmt_price(x: float | None) -> str:
     if x is None:
         return "n/a"
     return f"{x:.2f}"
-
-
-def _to_int(s: str, default: int = 0) -> int:
-    try:
-        return int((s or "").strip() or default)
-    except ValueError:
-        return default
-
-
-def _to_bool(s: str) -> bool:
-    return (s or "").strip() in ("1", "true", "True", "yes", "on")
 
 
 async def _get_meta(db, key: str) -> str:

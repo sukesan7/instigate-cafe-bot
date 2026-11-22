@@ -6,6 +6,7 @@ from typing import Any
 import aiohttp
 import discord
 
+from icbot.config_parsers import parse_int as _to_int
 from icbot.container import get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 from icbot.errors import format_exception_safe
@@ -20,13 +21,6 @@ from icbot.services.alert_dedupe import (
 from icbot.services.btc_esplora import DEFAULT_BASE_URL, fetch_address_txs
 
 log = logging.getLogger(__name__)
-
-
-def _to_int(s: str, default: int = 0) -> int:
-    try:
-        return int((s or "").strip() or default)
-    except ValueError:
-        return default
 
 
 async def _get_meta(db, key: str) -> str:
