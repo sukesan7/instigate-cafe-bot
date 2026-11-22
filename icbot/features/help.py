@@ -726,7 +726,7 @@ class GettingStartedView(BasePaginationView):
         await safe_edit_view_message(interaction, embed=embed, view=self)
 
 
-@ic.command(name="help", description="Show the paginated help menu for all IC bot commands.")
+@ic.command(name="help", description="Command help menu.")
 async def ic_help(interaction: discord.Interaction) -> None:
     settings = await resolve_guild_settings(interaction.client, interaction)
 
@@ -748,10 +748,7 @@ async def ic_help(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(embed=embed, view=view)
 
 
-@ic.command(
-    name="getting-started",
-    description="Interactive guided walkthrough for new students and community members.",
-)
+@ic.command(name="getting-started", description="New user guide.")
 async def ic_getting_started(interaction: discord.Interaction) -> None:
     settings = await resolve_guild_settings(interaction.client, interaction)
     current_step = 0

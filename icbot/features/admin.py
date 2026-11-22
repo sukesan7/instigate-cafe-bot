@@ -359,9 +359,7 @@ class GuildSetupView(discord.ui.View):
 # ---------------------------------------------------------------------------
 
 
-@admin.command(
-    name="setup", description="Interactive dashboard to configure server settings, channels, and modules."
-)
+@admin.command(name="setup", description="Server setup dashboard.")
 async def setup_cmd(interaction: discord.Interaction):
     if interaction.guild is None:
         await interaction.response.send_message(
@@ -383,21 +381,21 @@ async def setup_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
-@admin.command(name="config", description="View or directly update server configuration overrides.")
+@admin.command(name="config", description="View or update server config.")
 @app_commands.describe(
-    action="Operation to perform: view configuration, update settings, or reset overrides",
-    campus="Campus or university name for RMP and campus lookup",
-    timezone="IANA timezone for exams and schedules (e.g. America/Toronto)",
-    theme="Visual branding theme preset (e.g. instigate_cafe, campus_generic, student_clean, toronto_tmu, emerald_academic)",
-    command_channel="Channel dedicated to bot user commands (optional)",
-    job_alerts_channel="Channel for job feed alert broadcasts (optional)",
-    transit_alerts_channel="Channel for TTC and GO transit alert broadcasts (optional)",
+    action="Action",
+    campus="Campus name",
+    timezone="IANA timezone",
+    theme="Theme preset",
+    command_channel="Commands channel",
+    job_alerts_channel="Job alerts channel",
+    transit_alerts_channel="Transit alerts channel",
 )
 @app_commands.choices(
     action=[
-        app_commands.Choice(name="View Current Configuration", value="view"),
-        app_commands.Choice(name="Update Configuration", value="update"),
-        app_commands.Choice(name="Reset to Defaults", value="reset"),
+        app_commands.Choice(name="View", value="view"),
+        app_commands.Choice(name="Update", value="update"),
+        app_commands.Choice(name="Reset", value="reset"),
     ]
 )
 async def config_cmd(
@@ -531,18 +529,18 @@ async def config_cmd(
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@admin.command(name="features", description="Configure feature profile preset or toggle individual modules.")
+@admin.command(name="features", description="Set profile or toggle modules.")
 @app_commands.describe(
-    profile="Preset feature profile (default, student_core, community_full, toronto_tmu)",
-    enable="Module ID to add to enabled_features (e.g. casino, market, ai, sports)",
-    disable="Module ID to add to disabled_features",
+    profile="Feature profile",
+    enable="Module to enable",
+    disable="Module to disable",
 )
 @app_commands.choices(
     profile=[
-        app_commands.Choice(name="Default Preset (Core on, external APIs opt-in)", value="default"),
-        app_commands.Choice(name="Student Core (Academics, Careers, Transit, Economy)", value="student_core"),
-        app_commands.Choice(name="Community Full (All features on)", value="community_full"),
-        app_commands.Choice(name="Toronto / TMU (TMU student core)", value="toronto_tmu"),
+        app_commands.Choice(name="Default", value="default"),
+        app_commands.Choice(name="Student Core", value="student_core"),
+        app_commands.Choice(name="Community Full", value="community_full"),
+        app_commands.Choice(name="Toronto / TMU", value="toronto_tmu"),
     ]
 )
 async def features_cmd(
@@ -629,17 +627,17 @@ async def features_cmd(
     )
 
 
-@admin.command(name="roles", description="Manage administrative allowed roles for bot management.")
+@admin.command(name="roles", description="Manage admin roles.")
 @app_commands.describe(
-    action="Operation to perform on allowed roles",
-    role="Discord role to add or remove",
+    action="Action",
+    role="Discord role",
 )
 @app_commands.choices(
     action=[
-        app_commands.Choice(name="Add Role to Allowlist", value="add"),
-        app_commands.Choice(name="Remove Role from Allowlist", value="remove"),
-        app_commands.Choice(name="List Allowed Roles", value="list"),
-        app_commands.Choice(name="Clear All Allowed Roles", value="clear"),
+        app_commands.Choice(name="Add", value="add"),
+        app_commands.Choice(name="Remove", value="remove"),
+        app_commands.Choice(name="List", value="list"),
+        app_commands.Choice(name="Clear", value="clear"),
     ]
 )
 async def roles_cmd(
@@ -727,7 +725,7 @@ async def roles_cmd(
         return
 
 
-@admin.command(name="audit", description="View recent configuration change audit logs for this server.")
+@admin.command(name="audit", description="View config audit log.")
 async def audit_cmd(interaction: discord.Interaction):
     if interaction.guild is None:
         await interaction.response.send_message(
@@ -781,9 +779,7 @@ async def audit_cmd(interaction: discord.Interaction):
 # ---------------------------------------------------------------------------
 
 
-@admin.command(
-    name="llm_stop", description="Stop the LLM from functioning (pauses chatbot and resume tools)."
-)
+@admin.command(name="llm_stop", description="Pause LLM features.")
 async def llm_stop_cmd(interaction: discord.Interaction):
     if interaction.guild is None:
         await interaction.response.send_message(
@@ -814,7 +810,7 @@ async def llm_stop_cmd(interaction: discord.Interaction):
     )
 
 
-@admin.command(name="llm_start", description="Re-enable the LLM features.")
+@admin.command(name="llm_start", description="Resume LLM features.")
 async def llm_start_cmd(interaction: discord.Interaction):
     if interaction.guild is None:
         await interaction.response.send_message(

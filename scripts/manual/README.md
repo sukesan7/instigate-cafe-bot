@@ -7,6 +7,7 @@
 > **Do not run these scripts in offline CI or sandboxed verification.**
 
 ## Available Manual Probes
+- `probe_job_boards.py` — Opt-in live ATS verifier for ~100 curated Greenhouse, Lever, and Workday employer boards (supports `--include-existing` and `--write-env`).
 - `probe_kh_notes.py` — Opt-in live HTML/Notion link extraction probe for configured course notes HTML pages.
 - `probe_notes.py` — Opt-in live SPA JS bundle link extraction probe for Vite/React course notes portals.
 - `probe_rmp.py` — Opt-in live RateMyProfessors GraphQL API connectivity probe.

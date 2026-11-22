@@ -21,8 +21,8 @@ log = logging.getLogger(__name__)
 # ==========
 
 
-@ic.command(name="profile", description="View your (or another user's) profile.")
-@app_commands.describe(user="User to view (defaults to you)")
+@ic.command(name="profile", description="View profile.")
+@app_commands.describe(user="Member")
 async def profile_cmd(interaction: discord.Interaction, user: discord.User | None = None):
     if interaction.guild is None:
         await interaction.response.send_message(
@@ -125,7 +125,7 @@ async def profile_cmd(interaction: discord.Interaction, user: discord.User | Non
 # ==========
 
 
-@ic.command(name="dailyclaim", description="Claim your daily $100 reward.")
+@ic.command(name="dailyclaim", description="Daily reward.")
 async def daily_cmd(interaction: discord.Interaction):
     if interaction.guild is None:
         await interaction.response.send_message(

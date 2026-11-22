@@ -34,6 +34,35 @@ All optional integrations default to disabled so a fresh checkout can be tested 
 
 ---
 
+## Gallery
+
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="assets/screenshots/01-getting-started.png" alt="Discord embed showing the Instigate Cafe Bot /ic getting-started Step 1 of 4 onboarding walkthrough with Previous Step and Next Step buttons" width="440"/><br/>
+      <sub><b>Onboarding Walkthrough</b> — <code>/ic getting-started</code> interactive 4-step guide</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="assets/screenshots/02-notes.png" alt="Discord embed showing /ic notes course study-guide results for MEC511 and COE528 with source attribution and live/cached freshness badges" width="440"/><br/>
+      <sub><b>Academic Course Notes</b> — <code>/ic notes</code> study links with live/cached freshness</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="assets/screenshots/03-jobs.png" alt="Discord embed showing the paginated /ic jobs Campus Job Board with employer locations, career levels, ATS sources, HTTPS apply links, and pagination buttons" width="440"/><br/>
+      <sub><b>Career Job Board</b> — <code>/ic jobs</code> paginated ATS listings with HTTPS apply links</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="assets/screenshots/04-icse-market.png" alt="Discord embed displaying the virtual Instigate Cafe Stock Exchange (/ic icse market) with synthetic ticker prices, weekly baselines, and simulated-points disclaimer" width="440"/><br/>
+      <sub><b>Virtual Stock Exchange</b> — <code>/ic icse market</code> synthetic campus market</sub>
+    </td>
+  </tr>
+</table>
+
+More verified captures (`/ic help`, `/ic casino blackjack`, `/ic sports boxing`): **[Full Screenshot Gallery](docs/gallery.md)** · Maintainer capture rules: [Screenshots Capture & Redaction Guide](docs/screenshots-guide.md).
+
+---
+
 ## Representative Commands
 
 All commands live under `/ic`. A few common starting points:
@@ -108,17 +137,10 @@ uv run python main.py --allow-gateway
 
 ---
 
-## Screenshots / Gallery
-
-*Reserved for verified, redacted screenshots captured on an owner-run staging server after development completes. No placeholder or AI-generated UI mockups are included here.*
-
-Maintainers preparing gallery captures should follow [Screenshots Capture & Redaction Guide](docs/screenshots-guide.md) to ensure user IDs, tokens, private channels, and personal records are cropped or redacted before committing images.
-
----
-
 ## Documentation & Community
 
 - [Documentation Index](docs/README.md) — Full map of user, operator, and contributor guides
+- [Screenshot Gallery](docs/gallery.md) — Full gallery of verified, redacted Discord UI captures
 - [Features & 53-Command Guide](docs/features.md) — Complete slash-command reference
 - [Configuration Reference](docs/configuration.md) — All environment variables and per-guild overrides
 - [Deployment & Recovery](docs/deployment.md) — Docker Compose, `systemd`, Railway, and SQLite WAL backups

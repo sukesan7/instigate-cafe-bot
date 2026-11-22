@@ -14,7 +14,7 @@ from icbot.permissions import can_manage_guild
 from icbot.registry import FEATURE_MANIFESTS, get_feature_registry
 
 
-@ic.command(name="serverinfo", description="Display server information.")
+@ic.command(name="serverinfo", description="Server info.")
 async def serverinfo(interaction: discord.Interaction):
     guild = interaction.guild
     if not guild:
@@ -60,7 +60,7 @@ async def serverinfo(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-@ic.command(name="botinfo", description="Display bot capabilities and information.")
+@ic.command(name="botinfo", description="Bot info.")
 async def botinfo(interaction: discord.Interaction):
     settings = await resolve_guild_settings(interaction.client, interaction)
 
@@ -165,9 +165,7 @@ async def botinfo(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed)
 
 
-@ic.command(
-    name="status", description="Display operational status and actionable diagnostics for server features."
-)
+@ic.command(name="status", description="Server status.")
 async def status_cmd(interaction: discord.Interaction, issue_report: bool = False):
     if interaction.guild is None:
         await interaction.response.send_message(

@@ -233,8 +233,8 @@ class NotesPaginationView(BasePaginationView):
         )
 
 
-@ic.command(name="notes", description="Search through available course notes and study resources.")
-@app_commands.describe(course="The course code (e.g. ELE888, CS 135, COMP-2404)")
+@ic.command(name="notes", description="Course notes.")
+@app_commands.describe(course="Course code")
 async def notes_cmd(interaction: discord.Interaction, course: str):
     if not await guard_feature(interaction, "academics"):
         return

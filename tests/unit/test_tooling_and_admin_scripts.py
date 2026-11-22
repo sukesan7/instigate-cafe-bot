@@ -33,6 +33,7 @@ def test_manual_probes_renamed_and_destructive_script_relocated() -> None:
     assert list(manual_dir.glob("test_*.py")) == [], "Manual live probes must not use test_*.py naming"
 
     expected_probes = {
+        "probe_job_boards.py",
         "probe_kh_notes.py",
         "probe_notes.py",
         "probe_rmp.py",
@@ -199,3 +200,41 @@ async def test_purge_script_execute_confirmed_and_redacts_error_tokens() -> None
     assert rc_fail == 1
     assert synthetic_token not in err_fail.getvalue()
     assert "[REDACTED]" in err_fail.getvalue()
+
+
+def test_probe_job_boards_import_is_offline_safe_and_updates_only_board_keys(tmp_path: Path) -> None:
+    """Verify scripts/manual/probe_job_boards.py imports offline and preserves non-board .env keys."""
+    script_path = PROJECT_ROOT / "scripts" / "manual" / "probe_job_boards.py"
+    assert script_path.is_file()
+    spec = importlib.util.spec_from_file_location("probe_job_boards", script_path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+
+    total_candidates = (
+        len(mod.CANDIDATE_GREENHOUSE_BOARDS)
+        + len(mod.CANDIDATE_LEVER_SITES)
+        + len(mod.CANDIDATE_WORKDAY_SITES)
+    )
+    assert total_candidates >= 90
+    assert any("NVIDIA|" in s for s in mod.CANDIDATE_WORKDAY_SITES)
+    assert any("AMD|" in s for s in mod.CANDIDATE_WORKDAY_SITES)
+    assert "palantir" in mod.CANDIDATE_LEVER_SITES
+
+    fake_env = tmp_path / ".env"
+    fake_env.write_text(
+        "DISCORD_TOKEN=keep-secret\nGREENHOUSE_BOARDS=old1\nLEVER_SITES=old2\nWORKDAY_SITES=old3\n",
+        encoding="utf-8",
+    )
+    mod.update_env_job_boards(
+        fake_env,
+        greenhouse_boards=["stripe", "databricks", "stripe"],
+        lever_sites=["palantir"],
+        workday_sites=["NVIDIA|https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"],
+    )
+    updated = fake_env.read_text(encoding="utf-8")
+    assert "DISCORD_TOKEN=keep-secret\n" in updated
+    assert "GREENHOUSE_BOARDS=stripe,databricks\n" in updated
+    assert "LEVER_SITES=palantir\n" in updated
+    assert "WORKDAY_SITES=NVIDIA|https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite\n" in updated

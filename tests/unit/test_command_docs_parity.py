@@ -121,5 +121,10 @@ def test_screenshots_guide_covers_prioritized_shot_list_and_safety_rules() -> No
     ):
         assert marker in guide_text, f"docs/screenshots-guide.md missing required section/rule: {marker}"
 
-    # README must keep gallery assets unreferenced until supplied and approved by owner
-    assert "assets/screenshots/" not in readme_text
+    # Every gallery screenshot referenced in README.md must exist on disk (zero broken/fake references)
+    import re
+
+    referenced = re.findall(r"assets/screenshots/[A-Za-z0-9_.-]+\.(?:png|webp)", readme_text)
+    assert len(referenced) >= 3, "README.md Gallery should reference at least 3 verified screenshots"
+    for rel in referenced:
+        assert (PROJECT_ROOT / rel).is_file(), f"README.md references missing screenshot: {rel}"

@@ -265,8 +265,8 @@ def generate_chart(course_title: str, professors: list[dict[str, Any]]) -> io.By
     return render_grade_distribution_chart(course_title, professors).to_bytes_io()
 
 
-@ic.command(name="grades", description="Fetch historical grade distributions when supported for this campus.")
-@app_commands.describe(course="The course code (e.g., ele888, cps109)")
+@ic.command(name="grades", description="Course grades.")
+@app_commands.describe(course="Course code")
 async def grades_command(interaction: discord.Interaction, course: str):
     await interaction.response.defer(thinking=True)
 

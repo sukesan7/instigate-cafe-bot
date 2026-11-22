@@ -536,8 +536,8 @@ class CampusBot(commands.Bot):
             self.commands_synced = False
             if self._raise_on_sync_error:
                 raise
-            log.warning(
-                "Initial command sync failed (%s); retaining in-memory /ic command tree.",
+            log.error(
+                "Initial command sync failed (%s); Discord will not receive updated /ic commands until fixed.",
                 format_exception_safe(exc, self._secrets()),
             )
             return []

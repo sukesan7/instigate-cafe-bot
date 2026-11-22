@@ -13,9 +13,10 @@ This guide defines the **manual owner-run procedure** for capturing clean, redac
 
 ## 1. Discord Desktop Capture Baseline
 
+- **Staging Isolation:** Follow [Staging Acceptance Runbook](staging-runbook.md) (dedicated staging Discord application and non-production `DISCORD_TOKEN`, private test guild/channel, isolated synthetic `DB_PATH`, explicit `--allow-gateway`).
 - **Discord Theme:** Standard Discord **Dark** theme (`100%` zoom, `16px` font scaling, window width `1000–1200 px`).
-- **Bot Visual Theme:** Default **`instigate_cafe`** preset (`BOT_DISPLAY_NAME="InstigateAI"`, accent `#A64DFF` / `0xA64DFF`, footer `Instigate Cafe`) unless explicitly capturing an alternate theme comparison (`campus_generic`, `student_clean`, `toronto_tmu`, `emerald_academic`).
-- **File Format:** Lossless `.png` under `assets/screenshots/`, EXIF/metadata stripped, ideally `< 500 KB` per image.
+- **Bot Visual Theme:** Default **`instigate_cafe`** preset (`BOT_DISPLAY_NAME="InstigateAI"`, accent `#A64DFF` / `0xA64DFF`, footer `Instigate Cafe`) consistently across all gallery captures unless explicitly capturing an alternate theme comparison (`campus_generic`, `student_clean`, `toronto_tmu`, `emerald_academic`).
+- **File Format & Size Budget:** Approved `.png` or `.webp` under `assets/screenshots/` (EXIF/metadata stripped, optimized with optional thumbnails while keeping text crisp and readable, ideally `< 500 KB` per image and compact total repository size).
 
 ---
 
@@ -143,13 +144,66 @@ Capture shots in priority order (Priorities 1–3 form the core README gallery; 
 
 ---
 
-## 3. Pre-Commit Verification & Future Gallery Template
+## 3. Pre-Commit Verification & Planned Gallery Layout
 
-Do **not** reference `assets/screenshots/*.png` in `README.md` until the sanitized files exist on disk and pass offline checks:
+Do **not** reference `assets/screenshots/*` in `README.md` until **3–5 real, sanitized captures** exist on disk and pass visual inspection plus offline checks:
 
 ```bash
 uv run python tools/scan_secrets.py --enforce-clean
 uv run python tools/check_docs.py
+uv run python tools/verify_offline.py
 ```
 
-Once approved PNGs are added under `assets/screenshots/`, replace the text note in `README.md`'s `Screenshots / Gallery` section with verified Markdown image links using the alt-text drafts above.
+Once 3–5 approved captures are optimized and placed under `assets/screenshots/`:
+- Add a concise `## Gallery` section near the top of `README.md` or directly after `## Features` (complementing, not duplicating, the feature matrix).
+- Use a restrained **2-column GitHub-compatible Markdown/HTML table layout** that collapses cleanly on mobile, with descriptive alt text, short captions, consistent crop/margins, and no giant full-width collage.
+- Cover **Help/Onboarding**, **Academic Exams/Notes**, **Career Job Board**, and optionally **Community Economy/Casino** or **Admin Status**.
+
+---
+
+## 4. Owner Action Required Checklist
+
+> [!NOTE]
+> **Status: Core gallery published (`7` verified, metadata-stripped captures under `assets/screenshots/`).**
+> Three optional captures (`exam-list`, `status`, and `resume`) were quarantined in the gitignored `assets/screenshots/raw/` folder because they contained unredacted Discord snowflake IDs, private channel names, or a real student resume review. Do **not** publish them until recaptured or redacted below.
+
+### Step 1 — Published & Verified Captures (`assets/screenshots/`)
+- [x] **Help / Onboarding:** `assets/screenshots/01-getting-started.png` (`/ic getting-started`) and `assets/screenshots/05-help.png` (`/ic help`)
+- [x] **Academics:** `assets/screenshots/02-notes.png` (`/ic notes`)
+- [x] **Career Job Board:** `assets/screenshots/03-jobs.png` (`/ic jobs`)
+- [x] **Community Economy / Casino:** `assets/screenshots/04-icse-market.png` (`/ic icse market`) and `assets/screenshots/06-blackjack.png` (`/ic casino blackjack`)
+- [x] **Sports Updates:** `assets/screenshots/07-sports.png` (`/ic sports boxing`)
+
+### Step 2 — Optional Follow-Up Captures Requiring Redaction / Recapture
+- [ ] **Exam Schedule (`/ic exam list`):** Recapture or mask raw `<@user_id>` snowflakes and real instructor names (use generic organizers like `CS Dept`).
+- [ ] **System Status (`/ic status`):** Recapture or mask the pinned Guild Snowflake ID, server name, and private channel names.
+- [ ] **AI Resume Consent Barrier (`/ic resume`):** Capture only the privacy disclosure prompt using an empty dummy `sample_resume.pdf`—never a real student resume or real AI review output.
+
+### Step 3 — Maintainer Visual & Privacy Inspection Gate (Per Supplied File)
+Every owner-supplied image must pass all checks below before optimization or inclusion; anything unsafe requires owner redaction or recapture (never silent substitution):
+- [x] Displays current **v1 UI** with consistent active theme (`instigate_cafe` default) and crisp, legible output
+- [x] Consistent crop and comfortable margins (~16 px); no Discord server sidebar, channel list, or member roster
+- [x] Zero real student data, zero real resumes, and zero unique identifying info (real usernames, avatars, or Discord snowflake IDs)
+- [x] Zero tokens, API keys, `.env` snippets, or secret material
+- [x] Zero non-public channel names, zero Discord account settings, and zero unredacted administrator metadata
+- [x] Optimized PNG/WebP with EXIF/metadata stripped and predictable descriptive filenames under `assets/screenshots/`
+
+### Step 4 — Intake Tracker
+
+| Slot | Target Command | Visual & Privacy QA | Repository Asset |
+| :--- | :--- | :--- | :--- |
+| Required 1: Onboarding | `/ic getting-started` | Approved (metadata stripped) | `assets/screenshots/01-getting-started.png` |
+| Required 2: Academics | `/ic notes` | Approved (metadata stripped) | `assets/screenshots/02-notes.png` |
+| Required 3: Career Job Board | `/ic jobs` | Approved (metadata stripped) | `assets/screenshots/03-jobs.png` |
+| Optional 4: Economy | `/ic icse market` | Approved (metadata stripped) | `assets/screenshots/04-icse-market.png` |
+| Optional 5: Help Directory | `/ic help` | Approved (metadata stripped) | `assets/screenshots/05-help.png` |
+| Optional 6: Casino | `/ic casino blackjack` | Approved (metadata stripped) | `assets/screenshots/06-blackjack.png` |
+| Optional 7: Sports | `/ic sports boxing` | Approved (metadata stripped) | `assets/screenshots/07-sports.png` |
+| Optional 8: Exam Schedule | `/ic exam list` | Quarantined — mask `<@id>` & instructor names | *Pending redacted capture* |
+| Optional 9: System Status | `/ic status` | Quarantined — mask Guild ID & channel names | *Pending redacted capture* |
+| Optional 10: Resume Consent | `/ic resume` | Quarantined — replace with dummy consent prompt | *Pending dummy consent capture* |
+
+### Step 5 — Final Gallery Publication Gate
+- [x] Inspect approved images and optimize into `assets/screenshots/` (metadata stripped, `< 500 KB` each)
+- [x] Publish the 2-column `Gallery` section in `README.md` and full [Screenshot Gallery](gallery.md) with descriptive alt text and small captions
+- [x] Verify asset links, GitHub/mobile layout assumptions, and `uv run python tools/verify_offline.py` pass cleanly

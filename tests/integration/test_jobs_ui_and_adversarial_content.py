@@ -479,3 +479,70 @@ async def test_adversarial_ats_content_https_validation_date_semantics_and_degra
     finally:
         await container.close()
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_jobs_explicit_query_location_override_and_degraded_ratio_threshold(
+    tmp_path: Path,
+    make_interaction,
+    make_member,
+) -> None:
+    """Verify explicit query/location filters narrow results over broad env allowlists and 1 dead board of many is not degraded."""
+    db_file = tmp_path / "jobs_filters.db"
+    db = Database(str(db_file))
+    await db.init()
+
+    s = Settings(
+        db_path=str(db_file),
+        greenhouse_boards=["stripe", "shopify", "figma", "databricks", "cloudflare", "airbnb"],
+        jobs_location_allowlist=["toronto", "new york", "seattle", "remote"],
+        jobs_keywords_allowlist=["software", "developer", "backend", "python"],
+    )
+    container = ServiceContainer.from_settings(s, db=db, clock=lambda: 1_700_000_600.0)
+    client = FakeClient(settings=s, db=db, services=container)
+    guild = SimpleNamespace(id=910000000000000077, name="Jobs Filter Guild")
+    member = make_member(user_id=870000000000000077, administrator=False)
+
+    await db.execute(
+        """
+        INSERT INTO job_seen (source, external_id, url, title, company, location, posted_unix, first_seen_unix, text_blob)
+        VALUES
+            ('greenhouse:stripe', '1', 'https://boards.greenhouse.io/stripe/jobs/1',
+             'Python Backend Intern', 'Stripe', 'Toronto, ON', 1700000000, 1700000000,
+             'python backend intern stripe toronto'),
+            ('greenhouse:shopify', '2', 'https://boards.greenhouse.io/shopify/jobs/2',
+             'Software Developer Intern', 'Shopify', 'Seattle, WA', 1700000000, 1700000000,
+             'software developer intern shopify seattle')
+        """
+    )
+
+    try:
+        # 1 bad source out of 6 configured boards must NOT flag the entire job board degraded
+        container.jobs_bad_sources.add("greenhouse:airbnb")
+        inter_q = make_interaction(user=member, guild=guild, command_name="ic jobs", client=client)
+        await jobs_cmd.callback(inter_q, preset="tech_swe", query="python")
+        emb_q = inter_q.followup.messages[0].embed
+        assert emb_q is not None
+        assert emb_q.color.value != 0xF39C12
+        assert len(emb_q.fields) == 1
+        assert "Python Backend Intern" in emb_q.fields[0].name
+
+        # Explicit location filter narrows results instead of being drowned out by env allowlist
+        inter_loc = make_interaction(user=member, guild=guild, command_name="ic jobs", client=client)
+        await jobs_cmd.callback(inter_loc, preset="tech_swe", location="Seattle")
+        emb_loc = inter_loc.followup.messages[0].embed
+        assert emb_loc is not None
+        assert len(emb_loc.fields) == 1
+        assert "Shopify" in emb_loc.fields[0].name
+
+        # Systemic failure (>= 50% of configured sources bad) DOES trigger degraded warning banner
+        container.jobs_bad_sources.update({"greenhouse:figma", "greenhouse:cloudflare"})
+        inter_sys = make_interaction(user=member, guild=guild, command_name="ic jobs", client=client)
+        await jobs_cmd.callback(inter_sys, preset="tech_swe")
+        emb_sys = inter_sys.followup.messages[0].embed
+        assert emb_sys is not None
+        assert emb_sys.color.value == 0xF39C12
+        assert "cooling down or unreachable" in (emb_sys.description or "")
+    finally:
+        await container.close()
+        await db.close()

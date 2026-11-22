@@ -65,11 +65,11 @@ PAYOUT_LABELS = {
 }
 
 
-@casino.command(name="roulette", description="Spin the roulette wheel. Place your bet!")
+@casino.command(name="roulette", description="Play roulette.")
 @app_commands.describe(
-    bet="Bet amount (integer)",
-    bet_type="Bet type: red, black, even, odd, high, low, dozen1, dozen2, dozen3, col1, col2, col3, straight",
-    number="Number to bet on (0-36 or 00). Only needed for 'straight' bets.",
+    bet="Bet amount",
+    bet_type="Bet type",
+    number="0-36 or 00",
 )
 async def roulette_cmd(
     interaction: discord.Interaction,

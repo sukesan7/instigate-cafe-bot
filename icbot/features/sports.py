@@ -272,26 +272,26 @@ async def _send_sport(interaction: discord.Interaction, sport: str, title: str):
     await interaction.followup.send(embed=emb)
 
 
-@sports.command(name="nba", description="Upcoming NBA games + latest headlines")
+@sports.command(name="nba", description="NBA updates.")
 async def nba(interaction: discord.Interaction):
     await _send_sport(interaction, "nba", "🏀 NBA")
 
 
-@sports.command(name="nfl", description="Upcoming NFL games + latest headlines")
+@sports.command(name="nfl", description="NFL updates.")
 async def nfl(interaction: discord.Interaction):
     await _send_sport(interaction, "nfl", "🏈 NFL")
 
 
-@sports.command(name="mma", description="Upcoming MMA events + latest headlines")
+@sports.command(name="mma", description="MMA updates.")
 async def mma(interaction: discord.Interaction):
     await _send_sport(interaction, "mma", "🥊 MMA")
 
 
-@sports.command(name="ufc", description="Upcoming UFC (MMA) events + latest headlines")
+@sports.command(name="ufc", description="UFC updates.")
 async def ufc(interaction: discord.Interaction):
     await _send_sport(interaction, "ufc", "🥋 UFC")
 
 
-@sports.command(name="boxing", description="Upcoming boxing bouts + latest headlines")
+@sports.command(name="boxing", description="Boxing updates.")
 async def boxing(interaction: discord.Interaction):
     await _send_sport(interaction, "boxing", "🥊 Boxing")

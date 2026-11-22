@@ -733,16 +733,13 @@ class ResumeReviewer:
             paginator.message = sent_msg
 
 
-@ic.command(
-    name="resume", description="Submit your resume for an AI review across campus career disciplines."
-)
+@ic.command(name="resume", description="AI resume review.")
 @app_commands.describe(
-    file="Your resume file (PDF, PNG, JPG up to 5MB)",
-    discipline="Career discipline preset or faculty focus",
-    role="Optional target role or goal (e.g. Software Developer, Accounting Analyst, Data Scientist)",
-    confirm="Skip disclosure prompt and submit directly for review (default: False)",
+    file="PDF/PNG/JPG <=5MB",
+    discipline="Career discipline",
+    role="Target role",
+    confirm="Skip prompt",
 )
-@app_commands.choices(discipline=DISCIPLINE_CHOICES)
 @app_commands.checks.cooldown(1, 1800, key=lambda i: i.user.id)
 async def resume_cmd(
     interaction: discord.Interaction,
@@ -785,3 +782,14 @@ async def resume_cmd(
         view=confirm_view,
         ephemeral=True,
     )
+
+
+@resume_cmd.autocomplete("discipline")
+async def resume_discipline_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    cur = (current or "").strip().lower()
+    return [c for c in DISCIPLINE_CHOICES if not cur or cur in c.name.lower() or cur in str(c.value).lower()][
+        :25
+    ]

@@ -168,3 +168,46 @@ def test_staging_runbook_enforces_isolation_railway_audit_matrix_and_unfilled_si
     # Must NOT fabricate an already-approved release banner
     assert "APPROVED FOR" not in content
     assert "CERTIFIED" not in content
+
+
+def test_discord_slash_command_payload_within_api_limits() -> None:
+    """Verify the serialized /ic command tree fits Discord's hard API limits (<=4000 chars, <=25 options/choices)."""
+    import discord
+    from discord import app_commands
+
+    from icbot.registry import get_root_group, load_feature_modules
+
+    load_feature_modules()
+    root = get_root_group()
+    client = discord.Client(intents=discord.Intents.none())
+    tree = app_commands.CommandTree(client)
+    tree.add_command(root)
+    payload = root.to_dict(tree)
+
+    def _count_discord_chars(obj: dict[str, object]) -> int:
+        total = len(str(obj.get("name", ""))) + len(str(obj.get("description", "")))
+        for ch in obj.get("choices", []) or []:  # type: ignore[attr-defined]
+            total += len(str(ch.get("name", "")))
+            if isinstance(ch.get("value"), str):
+                total += len(ch["value"])
+        for opt in obj.get("options", []) or []:  # type: ignore[attr-defined]
+            total += _count_discord_chars(opt)
+        return total
+
+    def _assert_node_limits(obj: dict[str, object], path: str) -> None:
+        name = str(obj.get("name", ""))
+        desc = str(obj.get("description", ""))
+        assert 1 <= len(name) <= 32, f"{path}: invalid name length {len(name)}"
+        assert 1 <= len(desc) <= 100, f"{path}: invalid description length {len(desc)}"
+        opts = obj.get("options", []) or []
+        choices = obj.get("choices", []) or []
+        assert len(opts) <= 25, f"{path}: {len(opts)} options exceeds Discord max 25"  # type: ignore[arg-type]
+        assert len(choices) <= 25, f"{path}: {len(choices)} choices exceeds Discord max 25"  # type: ignore[arg-type]
+        for opt in opts:  # type: ignore[attr-defined]
+            _assert_node_limits(opt, f"{path}/{opt.get('name')}")
+
+    _assert_node_limits(payload, f"/{payload['name']}")
+    total_chars = _count_discord_chars(payload)
+    assert total_chars <= 4000, (
+        f"/{payload['name']} serialized payload is {total_chars} chars, exceeding Discord's hard 4000-char limit."
+    )

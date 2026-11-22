@@ -73,8 +73,8 @@ __all__ = [
 ]
 
 
-@casino.command(name="blackjack", description="Start an interactive blackjack hand (buttons).")
-@app_commands.describe(bet="Bet amount (integer). Default 10.")
+@casino.command(name="blackjack", description="Play blackjack.")
+@app_commands.describe(bet="Bet amount")
 async def blackjack(interaction: discord.Interaction, bet: int = 10):
     if interaction.guild is None:
         await interaction.response.send_message(

@@ -22,7 +22,7 @@ def _now_stamp(tz_name: str, *, now_unix: float | None = None) -> str:
         return now_dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
-@ic.command(name="report", description="Generate the market report right now.")
+@ic.command(name="report", description="Market report.")
 async def report_cmd(interaction: discord.Interaction):
     if not await guard_feature(interaction, "market"):
         return

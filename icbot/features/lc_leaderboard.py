@@ -197,6 +197,6 @@ async def _send_interactive_leaderboard(interaction: discord.Interaction) -> Non
     view.message = msg
 
 
-@ic.command(name="leaderboard", description="Interactive balance & assets leaderboard.")
+@ic.command(name="leaderboard", description="Balance leaderboard.")
 async def leaderboard_root(interaction: discord.Interaction):
     await _send_interactive_leaderboard(interaction)

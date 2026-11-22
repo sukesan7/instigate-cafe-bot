@@ -16,6 +16,7 @@ def test_compact_public_docs_index_and_scope_clarity() -> None:
     content = index_path.read_text(encoding="utf-8")
     for expected_doc in (
         "features.md",
+        "gallery.md",
         "configuration.md",
         "deployment.md",
         "troubleshooting.md",
@@ -85,14 +86,50 @@ def test_readme_restrained_landing_page_and_honest_boundaries() -> None:
     assert "uv run pytest" in content
     assert "--allow-gateway" in content
 
-    # Reserved Screenshots / Gallery section without fake image URLs
-    assert "Screenshots / Gallery" in content
+    # Verified 2-column Gallery with real local optimized screenshots (zero placeholder/unredacted leaks)
+    assert "## Gallery" in content
+    assert "docs/gallery.md" in content
     assert "docs/screenshots-guide.md" in content
-    assert "assets/screenshots/" not in content, "README must not link nonexistent screenshots yet"
+    for img_rel in (
+        "assets/screenshots/01-getting-started.png",
+        "assets/screenshots/02-notes.png",
+        "assets/screenshots/03-jobs.png",
+        "assets/screenshots/04-icse-market.png",
+    ):
+        assert img_rel in content, f"README.md Gallery missing verified screenshot: {img_rel}"
+        img_path = PROJECT_ROOT / img_rel
+        assert img_path.is_file(), f"Referenced screenshot does not exist: {img_rel}"
+        raw = img_path.read_bytes()
+        assert len(raw) < 500_000, f"Screenshot exceeds 500 KB budget: {img_rel}"
+        assert b"eXIf" not in raw and b"tEXt" not in raw and b"iTXt" not in raw
+
+    # Full gallery page includes additional verified screenshots and excludes unredacted captures
+    gallery_content = (PROJECT_ROOT / "docs/gallery.md").read_text(encoding="utf-8")
+    for extra_rel in (
+        "assets/screenshots/05-help.png",
+        "assets/screenshots/06-blackjack.png",
+        "assets/screenshots/07-sports.png",
+    ):
+        assert extra_rel in gallery_content, f"docs/gallery.md missing verified screenshot: {extra_rel}"
+        extra_path = PROJECT_ROOT / extra_rel
+        assert extra_path.is_file(), f"Referenced gallery screenshot missing: {extra_rel}"
+        raw = extra_path.read_bytes()
+        assert len(raw) < 500_000
+        assert b"eXIf" not in raw and b"tEXt" not in raw and b"iTXt" not in raw
+
+    for unsafe_name in ("exam-list.png", "status.png", "resume.png"):
+        assert unsafe_name not in content, f"Unredacted capture {unsafe_name} must not appear in README.md"
+        assert unsafe_name not in gallery_content, (
+            f"Unredacted capture {unsafe_name} must not appear in docs/gallery.md"
+        )
+        assert not (PROJECT_ROOT / "assets" / unsafe_name).exists(), (
+            f"Unredacted capture assets/{unsafe_name} must not remain tracked in assets/"
+        )
 
     # Key doc links
     for link_target in (
         "docs/README.md",
+        "docs/gallery.md",
         "docs/features.md",
         "docs/configuration.md",
         "docs/deployment.md",
@@ -107,7 +144,7 @@ def test_readme_restrained_landing_page_and_honest_boundaries() -> None:
 
 
 def test_screenshots_guide_defines_redaction_and_owner_only_capture() -> None:
-    """Verify docs/screenshots-guide.md specifies command states, redaction rules, and owner-only boundary."""
+    """Verify docs/screenshots-guide.md specifies capture rules, redaction checks, and owner intake checklist."""
     guide_path = PROJECT_ROOT / "docs/screenshots-guide.md"
     assert guide_path.is_file(), "docs/screenshots-guide.md is missing"
     content = guide_path.read_text(encoding="utf-8")
@@ -118,6 +155,12 @@ def test_screenshots_guide_defines_redaction_and_owner_only_capture() -> None:
     assert "/ic resume" in content
     assert "/ic exam list" in content
     assert "/ic admin setup" in content
+    assert "staging-runbook.md" in content
+    assert "## 4. Owner Action Required Checklist" in content
+    assert "Core gallery published" in content
+    assert "non-public channel names" in content
+    assert "account settings" in content
+    assert "administrator metadata" in content
 
 
 def test_public_docs_contain_zero_sensitive_tokens() -> None:

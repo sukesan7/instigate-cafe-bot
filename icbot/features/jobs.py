@@ -206,13 +206,13 @@ class JobPaginationView(BasePaginationView):
 # ---------------------------------------------------------------------------
 
 
-@ic.command(name="jobs", description="Search through cached job postings with pagination and filters.")
+@ic.command(name="jobs", description="Search cached jobs.")
 @app_commands.describe(
-    limit="How many jobs to scan (max 25).",
-    preset="Discipline filter preset (e.g. tech_swe, business_finance, accounting, design_ux, all).",
-    query="Optional keyword search on role title or employer.",
-    location="Optional location query (e.g. 'Toronto' or 'Remote').",
-    use_my_preferences="Filter results using your personal saved job preferences.",
+    limit="Max scan (1-25)",
+    preset="Discipline preset",
+    query="Keyword filter",
+    location="Location filter",
+    use_my_preferences="Use saved prefs",
 )
 async def jobs_cmd(
     interaction: discord.Interaction,
@@ -236,7 +236,16 @@ async def jobs_cmd(
     settings = await resolve_guild_settings(bot, interaction)
     container = get_container(bot)
     now_unix = int(container.clock())
-    is_degraded = bool(container.jobs_bad_sources or container.workday_bad_sources)
+    configured_sources = (
+        len(getattr(settings, "greenhouse_boards", None) or ())
+        + len(getattr(settings, "lever_sites", None) or ())
+        + len(getattr(settings, "workday_sites", None) or ())
+    )
+    bad_source_count = len(container.jobs_bad_sources) + len(container.workday_bad_sources)
+    if configured_sources <= 2:
+        is_degraded = bad_source_count > 0
+    else:
+        is_degraded = bad_source_count >= configured_sources or (bad_source_count * 2 >= configured_sources)
 
     try:
         cols = await _table_columns(db, "job_seen")
@@ -332,10 +341,12 @@ async def jobs_cmd(
     if not chosen_preset or chosen_preset not in DISCIPLINE_PRESETS:
         chosen_preset = "tech_swe"
 
-    if location:
-        loc_allow.append(location.strip())
-    if query:
-        kw_allow.append(query.strip())
+    explicit_location = (location or "").strip()
+    explicit_query = (query or "").strip()
+    if explicit_location:
+        loc_allow = [explicit_location]
+    if explicit_query:
+        kw_allow = [explicit_query]
 
     criteria = JobFilterCriteria(
         location_allowlist=tuple(loc_allow),
@@ -454,15 +465,12 @@ async def jobs_preset_autocomplete(
 # ---------------------------------------------------------------------------
 
 
-@ic.command(
-    name="job_subscribe",
-    description="[Admin] Manage server job alert channel subscriptions and presets.",
-)
+@ic.command(name="job_subscribe", description="Manage job alerts.")
 @app_commands.describe(
-    action="Subscription action: 'subscribe' to add/update, 'unsubscribe' to remove, or 'list' to view all.",
-    channel="The Discord channel to broadcast job alerts to.",
-    preset="Discipline preset (e.g. tech_swe, business_finance, accounting, design_ux, all).",
-    role="Optional role to mention with alerts.",
+    action="Action",
+    channel="Alert channel",
+    preset="Discipline preset",
+    role="Alert role",
 )
 async def job_subscribe_cmd(
     interaction: discord.Interaction,
@@ -622,16 +630,13 @@ async def job_subscribe_preset_autocomplete(
 # ---------------------------------------------------------------------------
 
 
-@ic.command(
-    name="job_preferences",
-    description="View or update your private job notification and search preferences.",
-)
+@ic.command(name="job_preferences", description="Saved job prefs.")
 @app_commands.describe(
-    preset="Your preferred discipline preset (e.g. tech_swe, business_finance, accounting, design_ux, all).",
-    locations="Comma-separated location allowlist (e.g. 'Toronto, Remote').",
-    keywords="Comma-separated keywords of interest (e.g. 'python, intern').",
-    remote_only="Whether to exclusively search for remote positions.",
-    clear="Reset and remove all your saved preferences.",
+    preset="Discipline preset",
+    locations="CSV locations",
+    keywords="CSV keywords",
+    remote_only="Remote only",
+    clear="Clear prefs",
 )
 async def job_preferences_cmd(
     interaction: discord.Interaction,
@@ -747,16 +752,13 @@ async def job_preferences_preset_autocomplete(
 # ---------------------------------------------------------------------------
 
 
-@ic.command(
-    name="job_preview",
-    description="Test job filter criteria against a sample posting with an explainable trace.",
-)
+@ic.command(name="job_preview", description="Test job filters.")
 @app_commands.describe(
-    title="Role or job title to test (e.g. 'Financial Analyst Intern').",
-    employer="Company name (e.g. 'Stripe' or 'RBC').",
-    location="Location text (e.g. 'Toronto, ON' or 'Remote').",
-    preset="Discipline preset (e.g. tech_swe, business_finance, accounting, design_ux, all).",
-    require_early_career="Whether early-career / student status is strictly required.",
+    title="Job title",
+    employer="Employer",
+    location="Location",
+    preset="Discipline preset",
+    require_early_career="Early career only",
 )
 async def job_preview_cmd(
     interaction: discord.Interaction,

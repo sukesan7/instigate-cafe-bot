@@ -432,12 +432,12 @@ async def _exam_course_autocomplete(
     return [app_commands.Choice(name=label[:100], value=code[:100]) for code, label in suggestions[:25]]
 
 
-@exam.command(name="list", description="Show the current exam schedule.")
+@exam.command(name="list", description="List exams.")
 @app_commands.describe(
-    course="Optional course code or title filter",
-    term="Optional academic term filter (e.g., Fall 2026)",
-    upcoming_only="Show only upcoming exams (hide past exams)",
-    include_private="Include your private exams or admin-visible private exams (makes response ephemeral)",
+    course="Course filter",
+    term="Term filter",
+    upcoming_only="Upcoming only",
+    include_private="Include private",
 )
 @app_commands.autocomplete(course=_exam_course_autocomplete)
 async def exams_cmd(
@@ -541,20 +541,20 @@ async def exams_cmd(
     await interaction.followup.send(embed=e, ephemeral=response_ephemeral)
 
 
-@exam.command(name="add", description="(Admin) Add an exam to the schedule.")
+@exam.command(name="add", description="Add exam.")
 @app_commands.describe(
-    course_code="e.g., COE817, CS 135, HIST-2010",
-    course_name="e.g., Applied Cryptography",
+    course_code="Course code",
+    course_name="Course title",
     date="YYYY-MM-DD",
-    start_time="HH:MM (24h) — omit or pass 'all-day' when all_day=True",
-    end_time="HH:MM (24h) (optional)",
-    location="Room / building / online link",
-    notes="Optional notes (allowed materials, seating, etc.)",
-    organizer="Optional instructor, department, or study group organizer",
-    visibility="Exam schedule visibility (guild, public, or private)",
-    term="Optional academic term (e.g., Fall 2026)",
-    all_day="Mark as an all-day event (no specific start/end clock time)",
-    dst_resolution="How to resolve ambiguous DST fall-back times (reject, earlier, or later)",
+    start_time="Start HH:MM",
+    end_time="End HH:MM",
+    location="Room or link",
+    notes="Notes",
+    organizer="Organizer",
+    visibility="Visibility",
+    term="Term",
+    all_day="All-day event",
+    dst_resolution="DST rule",
 )
 @app_commands.autocomplete(course_code=_exam_course_autocomplete)
 async def exams_add_cmd(
@@ -688,8 +688,8 @@ async def exams_add_cmd(
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
-@exam.command(name="remove", description="(Admin) Remove an exam by ID.")
-@app_commands.describe(exam_id="The exam ID shown in /ic exam list.")
+@exam.command(name="remove", description="Remove exam.")
+@app_commands.describe(exam_id="Exam ID")
 async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> None:
     if not await guard_feature(interaction, "academics"):
         return
@@ -720,10 +720,10 @@ async def exams_remove_cmd(interaction: discord.Interaction, exam_id: int) -> No
     await interaction.followup.send(f"Removed exam ID {removed.id}.", ephemeral=True)
 
 
-@exam.command(name="clear", description="(Admin) Remove exams for this server (requires confirmation).")
+@exam.command(name="clear", description="Clear exams.")
 @app_commands.describe(
-    term="Optional term filter — only clear exams in this term",
-    preserve_manual="Keep manually created exams and remove only imported exams",
+    term="Term filter",
+    preserve_manual="Keep manual",
 )
 async def exams_clear_cmd(
     interaction: discord.Interaction,
@@ -791,12 +791,12 @@ async def exams_clear_cmd(
     view.message = sent_msg
 
 
-@exam.command(name="import", description="(Admin) Import exams from a CSV or ICS file/snippet (offline).")
+@exam.command(name="import", description="Import exams.")
 @app_commands.describe(
-    fmt="Input format: csv or ics",
-    file="Optional uploaded CSV/ICS file (max 128 KiB, no external downloads)",
-    data="Optional inline CSV/ICS text snippet",
-    dst_resolution="How to resolve ambiguous DST fall-back times (reject, earlier, or later)",
+    fmt="Format",
+    file="CSV/ICS file",
+    data="Inline text",
+    dst_resolution="DST rule",
 )
 async def exams_import_cmd(
     interaction: discord.Interaction,
@@ -888,13 +888,13 @@ async def exams_import_cmd(
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-@exam.command(name="export", description="Export this server's exam schedule as CSV or ICS.")
+@exam.command(name="export", description="Export exams.")
 @app_commands.describe(
-    fmt="Output format: ics or csv",
-    course="Optional course filter",
-    term="Optional academic term filter",
-    upcoming_only="Export only upcoming exams",
-    include_private="Include your private exams or admin-visible private exams (default: False)",
+    fmt="Format",
+    course="Course filter",
+    term="Term filter",
+    upcoming_only="Upcoming only",
+    include_private="Include private",
 )
 @app_commands.autocomplete(course=_exam_course_autocomplete)
 async def exams_export_cmd(

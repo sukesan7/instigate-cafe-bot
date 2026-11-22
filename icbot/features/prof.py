@@ -236,8 +236,8 @@ def build_prof_record_embed(
     return embed
 
 
-@ic.command(name="prof", description="Lookup a professor's rating via the campus professor provider.")
-@app_commands.describe(name="The name of the professor to lookup.")
+@ic.command(name="prof", description="Professor ratings.")
+@app_commands.describe(name="Professor name")
 async def prof_cmd(interaction: discord.Interaction, name: str):
     await interaction.response.defer(thinking=True)
 
