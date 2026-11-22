@@ -76,18 +76,23 @@ For claim-by-claim test traceability and unverified live-staging items, see [Rel
 
 ## Quick Start
 
-Requires **Python 3.12 or 3.13** (3.11 is also tested in CI) and [`uv`](https://docs.astral.sh/uv/).
+Requires **Python 3.12** (recommended managed environment; 3.11 and 3.13 are also tested in CI; Python 3.14+ is not yet supported) and [`uv`](https://docs.astral.sh/uv/).
 
-### 1. Install and Verify Offline (No Tokens Required)
+### 1. Canonical Setup & Offline Verification (No Tokens Required)
 
 ```bash
 git clone https://github.com/sukesan7/instigate-cafe-bot.git
 cd instigate-cafe-bot
 
-uv sync --dev
-uv run python tools/smoke_offline.py
-uv run pytest
+# Provision managed Python 3.12 (avoids conflicts on Arch/Garuda hosts with system Python 3.14)
+uv venv --python 3.12
+uv sync --frozen --dev
+
+# Run the full no-network, no-token contributor verification suite
+uv run python tools/verify_offline.py
 ```
+
+*(Fallback without `uv`: create a Python 3.12 virtual environment and install the generated runtime lock with `python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt` — or `--require-hashes -r requirements.lock` — then run `.venv/bin/python tools/smoke_offline.py` and `uv run pytest` / `.venv/bin/pytest`.)*
 
 ### 2. Configure and Run Locally
 

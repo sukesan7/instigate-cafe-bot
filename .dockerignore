@@ -1,51 +1,78 @@
 # ==============================================================================
 # Docker / Container Ignore Rules for Instigate Cafe Bot
-# Guarantees that private SQLite databases, secrets, and lore are never baked
-# into production Docker or Railway images.
+# Guarantees only required runtime files enter the Docker build context and no
+# credentials, SQLite DBs, private lore, tests, docs, or scratch captures leak.
 # ==============================================================================
 
-# Secrets and environment files
+# Secrets, Environment Files & Key Material
 .env
 .env.*
 .envrc
 !.env.example
+*.pem
+*.key
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*client_secret*.json
+*credentials*.json
 
-# SQLite Databases, WAL Journals, and Local State
+# SQLite Databases, WAL/SHM Journals & Backups
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
 *.sqlite
 *.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
 *.db.bak
+*.db.bak.*
 ic_stock.db
 tmu_grades.db
 ic_stock-dev.db
 
-# Private Community Lore & Local Personality Files
-tools/lore.tmu_files.json
+# Private Community Lore
 tools/lore.json
-lore.tmu_files.json
+tools/lore.*.json
 lore.json
+lore.*.json
 !tools/lore.example.json
-!tests/fixtures/synthetic_lore.json
 
-# Local scratch and test artifacts
+# Non-Runtime Repo Directories & Working Captures
+.git/
+.github/
+docs/
+tests/
+scripts/
 scratch/
+artifacts/
 assets/temp/
+assets/screenshots/
+benchmark_results*.json
+status_issue_report*.md
 distribution.png
 tmu_raw.html
 *.log
+Makefile
+.pre-commit-config.yaml
 
-# Git and virtual environments
-.git/
+# Virtual Environments, Caches & IDE State
 .venv/
 venv/
+env/
 __pycache__/
-*.pyc
-*.pyo
+*.py[codz]
 .pytest_cache/
-.coverage
-htmlcov/
 .mypy_cache/
 .ruff_cache/
-
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.vscode/
+.idea/
+.DS_Store

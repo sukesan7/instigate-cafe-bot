@@ -57,6 +57,7 @@ WORKDIR /app
 COPY --from=builder --chown=campusbot:campusbot /app/.venv /app/.venv
 COPY --chown=campusbot:campusbot icbot /app/icbot
 COPY --chown=campusbot:campusbot tools /app/tools
+COPY --chown=campusbot:campusbot assets/ic_logo.png /app/assets/ic_logo.png
 COPY --chown=campusbot:campusbot main.py /app/main.py
 
 # Create persistent state directory with campusbot ownership and strict 0700 permissions

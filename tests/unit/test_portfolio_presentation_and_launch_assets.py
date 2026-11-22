@@ -78,7 +78,8 @@ def test_readme_restrained_landing_page_and_honest_boundaries() -> None:
     # Fresh-checkout Quick Start with Python 3.12/3.13, .env.example, and offline test command
     assert "3.12" in content and "3.13" in content
     assert ".env.example" in content
-    assert "uv sync --dev" in content
+    assert "uv sync --frozen --dev" in content
+    assert "tools/verify_offline.py" in content
     assert "uv run pytest" in content
     assert "--allow-gateway" in content
 

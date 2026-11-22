@@ -32,7 +32,7 @@ SAFE_ENV := env \
 STYLE_PATHS := .
 TYPECHECK_PATHS := .
 
-.PHONY: help format format-check lint lint-baseline typecheck typecheck-baseline smoke-offline test test-cov precommit audit check
+.PHONY: help format format-check lint lint-baseline typecheck typecheck-baseline smoke-offline test test-cov precommit verify export-requirements audit check
 
 help:
 	@echo "Instigate Cafe Bot — Offline Developer Tooling"
@@ -50,6 +50,8 @@ help:
 	@echo "  make test                Run offline pytest suite (excludes live_smoke)"
 	@echo "  make test-cov            Run offline pytest suite with branch coverage on icbot/"
 	@echo "  make precommit           Validate & run offline secret/hygiene/lint pre-commit hooks"
+	@echo "  make verify              Run single-command offline contributor verification with diagnostics"
+	@echo "  make export-requirements Regenerate requirements.lock and requirements.txt from uv.lock"
 	@echo "  make check               Run full offline CI quality gate locally"
 	@echo ""
 	@echo "Tier 3 (Controlled network — PyPI Advisory DB only, never Discord/Railway):"
@@ -86,6 +88,13 @@ precommit:
 	$(PYTHON) tools/scan_secrets.py --enforce-clean
 	$(PRE_COMMIT) validate-config .pre-commit-config.yaml
 	$(PRE_COMMIT) run --all-files
+
+verify:
+	$(SAFE_ENV) $(PYTHON) tools/verify_offline.py
+
+export-requirements:
+	uv export --frozen --no-dev --no-emit-project -o requirements.lock
+	uv export --frozen --no-dev --no-hashes --no-emit-project -o requirements.txt
 
 audit:
 	@echo "[Tier 3] Querying PyPI Advisory DB via pip-audit against requirements.lock..."
