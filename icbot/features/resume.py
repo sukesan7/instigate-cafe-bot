@@ -11,11 +11,11 @@ import discord
 from discord import app_commands
 
 from icbot.app import ic
-from icbot.config import Settings
+from icbot.config import Settings, resolve_ai_access
 from icbot.container import extract_guild_id, get_container, resolve_guild_settings
 from icbot.embeds import system as system_embed
 from icbot.errors import safe_error_summary
-from icbot.registry import guard_feature
+from icbot.registry import guard_feature, is_llm_killed
 from icbot.services.gemini_client import GeminiError, ModelRole
 from icbot.ui import (
     DEFAULT_PAGINATOR_TIMEOUT_SECONDS,
@@ -404,7 +404,7 @@ class ResumeReviewPaginationView(BasePaginationView):
             current_page=0,
             owner_id=user_id,
             guild_id=guild_id,
-            feature_key="careers",
+            feature_key="ai",
             timeout=timeout,
             expired_message="⏳ This resume review session has expired. Run `/ic resume` again.",
             guild_mismatch_message="❌ Command context mismatch.",
@@ -461,7 +461,7 @@ class ResumeConfirmView(discord.ui.View):
             timed_out=self._timed_out,
             guild_id=self.guild_id,
             owner_id=self.user_id,
-            feature_key="careers",
+            feature_key=None,
             fallback_settings=self.settings,
             expired_message="⏳ This privacy disclosure prompt has expired. Run `/ic resume` again.",
             guild_mismatch_message="❌ Command context mismatch.",
@@ -513,6 +513,41 @@ class ResumeConfirmView(discord.ui.View):
         for child in self.children:
             child.disabled = True  # type: ignore[attr-defined]
         self.stop()
+
+        eff_settings = await resolve_guild_settings(interaction.client, interaction)
+        access = resolve_ai_access(eff_settings, llm_killed=is_llm_killed(interaction.client))
+        if not access.allowed:
+            if access.status == "paused":
+                await safe_edit_view_message(
+                    interaction,
+                    content=(
+                        "🛑 **Resume features are currently paused by an administrator.** "
+                        "Your document was not read or transmitted."
+                    ),
+                    embed=None,
+                    view=None,
+                )
+            elif access.status == "missing_config":
+                checklist_emb = build_offline_checklist_embed(
+                    eff_settings, self.discipline_title, self.target_role
+                )
+                await safe_edit_view_message(
+                    interaction,
+                    content="❌ Gemini API is not configured. Here is our offline self-review checklist instead:",
+                    embed=checklist_emb,
+                    view=None,
+                )
+            else:
+                await safe_edit_view_message(
+                    interaction,
+                    content=(
+                        "⚠️ **AI resume review is currently disabled in this server.** "
+                        "Your document was not read or transmitted."
+                    ),
+                    embed=None,
+                    view=None,
+                )
+            return
 
         await safe_edit_view_message(
             interaction,
@@ -566,19 +601,30 @@ class ResumeReviewer:
 
         disc_key, disc_title = normalize_discipline(discipline)
 
-        # 1. Configuration & Killswitch checks
-        if not base_settings or not settings.gemini_api_key:
-            checklist_emb = build_offline_checklist_embed(settings, disc_title, role)
+        # 1. Unified single-source-of-truth AI policy, killswitch & API key checks
+        #    (always evaluated BEFORE reading attachment bytes or calling Gemini)
+        llm_killed = bool(container.llm_killed or is_llm_killed(interaction.client))
+        access = resolve_ai_access(settings, llm_killed=llm_killed)
+
+        if access.status == "disabled":
             await interaction.followup.send(
-                content="❌ Gemini API is not configured. Here is our offline self-review checklist instead:",
-                embed=checklist_emb,
+                "⚠️ **AI resume review is currently disabled.** Your document was not read or transmitted.",
                 ephemeral=True,
             )
             return
 
-        if container.llm_killed or getattr(interaction.client, "_llm_killed", False):
+        if access.status == "paused":
             await interaction.followup.send(
                 "🛑 **Resume features are currently paused by an administrator.** Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        if not base_settings or access.status == "missing_config":
+            checklist_emb = build_offline_checklist_embed(settings, disc_title, role)
+            await interaction.followup.send(
+                content="❌ Gemini API is not configured. Here is our offline self-review checklist instead:",
+                embed=checklist_emb,
                 ephemeral=True,
             )
             return
@@ -749,12 +795,30 @@ async def resume_cmd(
     confirm: bool = False,
 ) -> None:
     """Submit a resume for multi-criteria career review with privacy disclosures and fallback support."""
-    if not await guard_feature(interaction, "ai"):
+    if not await guard_feature(interaction, "ai", allow_missing_config=True):
         return
 
     settings = await resolve_guild_settings(interaction.client, interaction)
     disc_val = str(discipline or "general")
     disc_key, disc_title = normalize_discipline(disc_val)
+
+    access = resolve_ai_access(settings, llm_killed=is_llm_killed(interaction.client))
+    if access.status == "missing_config":
+        checklist_emb = build_offline_checklist_embed(settings, disc_title, role.strip())
+        await interaction.response.send_message(
+            content="❌ Gemini API is not configured. Here is our offline self-review checklist instead:",
+            embed=checklist_emb,
+            ephemeral=True,
+        )
+        return
+    if not access.allowed:
+        msg = (
+            "🛑 **Resume features are currently paused by an administrator.** Please try again later."
+            if access.status == "paused"
+            else "⚠️ **AI resume review is currently disabled in this server.**"
+        )
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
 
     # If the user chose to bypass the disclosure prompt, defer and execute directly
     if confirm:

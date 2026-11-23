@@ -11,7 +11,7 @@ from icbot.embeds import system as system_embed
 from icbot.errors import redact_secrets
 from icbot.logging import BOT_VERSION, generate_sanitized_issue_report
 from icbot.permissions import can_manage_guild
-from icbot.registry import FEATURE_MANIFESTS, get_feature_registry
+from icbot.registry import FEATURE_MANIFESTS, get_feature_registry, is_llm_killed
 
 
 @ic.command(name="serverinfo", description="Server info.")
@@ -69,7 +69,8 @@ async def botinfo(interaction: discord.Interaction):
         or "gemini-2.5-flash"
     )
 
-    caps = settings.capabilities()
+    llm_killed = is_llm_killed(interaction.client)
+    caps = settings.capabilities(llm_killed=llm_killed)
     cap_labels = (
         ("llm_assistant", "LLM Assistant"),
         ("resume_review", "Resume Review"),
@@ -89,7 +90,10 @@ async def botinfo(interaction: discord.Interaction):
         if st.available:
             badge = "✅ Ready"
         elif st.configured:
-            badge = f"⚠️ Misconfigured ({st.reason})" if st.reason else "⚠️ Misconfigured"
+            if "llm_stop" in (st.reason or "").lower():
+                badge = f"🛑 Paused ({st.reason})"
+            else:
+                badge = f"⚠️ Misconfigured ({st.reason})" if st.reason else "⚠️ Misconfigured"
         else:
             badge = "⚪ Disabled"
         cap_lines.append(f"• **{label}:** {badge}")
@@ -216,11 +220,17 @@ async def status_cmd(interaction: discord.Interaction, issue_report: bool = Fals
     actionable_fixes: list[str] = []
     feature_statuses: dict[str, str] = {}
 
+    llm_killed = is_llm_killed(interaction.client)
     for mod_id, manifest in FEATURE_MANIFESTS.items():
-        fh = reg.resolve_feature_health(mod_id, settings)
+        fh = reg.resolve_feature_health(mod_id, settings, llm_killed=llm_killed if mod_id == "ai" else False)
         feature_statuses[mod_id] = fh.status
         if fh.status == "ready":
             badge = "🟢 **Working**"
+        elif fh.status == "paused":
+            badge = "🛑 **Paused**"
+            actionable_fixes.append(
+                f"• **{fh.display_name}**: {fh.reason}. Run `/ic admin llm_start` to resume."
+            )
         elif fh.status == "degraded":
             badge = "🟡 **Degraded**"
             actionable_fixes.append(f"• **{fh.display_name}**: {fh.reason}")
