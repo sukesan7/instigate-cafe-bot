@@ -11,9 +11,10 @@ from typing import Any
 import aiohttp
 import discord
 
-from icbot.config import Settings
+from icbot.config import Settings, resolve_ai_access
 from icbot.container import get_container, resolve_guild_settings
 from icbot.errors import format_exception_safe
+from icbot.registry import is_llm_killed
 from icbot.services.gemini_client import GeminiError
 
 log = logging.getLogger(__name__)
@@ -423,21 +424,19 @@ async def maybe_handle_llm_mention(
     settings: Settings = await resolve_guild_settings(bot, message)
     container = get_container(bot)
 
-    # 2. Strict no-DM default check
+    # 2. Unified single-source-of-truth AI policy, module gate, killswitch & key check
+    llm_killed = bool(container.llm_killed or is_llm_killed(bot))
+    access = resolve_ai_access(settings, llm_killed=llm_killed)
+    if not access.allowed:
+        return False
+
+    # 3. Strict no-DM default check
     if not message.guild and not getattr(settings, "llm_allow_dm", False):
         log.debug("LLM mention in DM ignored (llm_allow_dm=False)")
         return False
 
-    # 3. Provider enablement & API key check
-    llm_enabled = bool(getattr(settings, "llm_enabled", False))
     api_key = str(getattr(settings, "gemini_api_key", "") or "").strip()
     model = str(getattr(settings, "gemini_model", "") or "").strip() or "gemini-2.5-flash"
-    if not llm_enabled or not api_key:
-        return False
-
-    # 4. Check runtime killswitch
-    if container.llm_killed or getattr(bot, "_llm_killed", False):
-        return False
 
     # 5. Only trigger when THIS bot is mentioned
     if bot.user not in (message.mentions or []):
