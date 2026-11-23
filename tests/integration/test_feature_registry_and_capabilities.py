@@ -127,8 +127,12 @@ def test_presets_and_capabilities_resolution():
     assert reg.is_feature_enabled("core", tmu_settings) is True
     assert reg.is_feature_enabled("casino", tmu_settings) is False
 
-    # community_full: all modules enabled in preset
-    full_settings = Settings(feature_profile="community_full", gemini_api_key="synthetic_gemini")
+    # community_full: all modules enabled in preset (AI still requires LLM_ENABLED=true master opt-in)
+    full_off = Settings(feature_profile="community_full", gemini_api_key="synthetic_gemini")
+    assert reg.is_feature_enabled("ai", full_off) is False
+    full_settings = Settings(
+        feature_profile="community_full", llm_enabled=True, gemini_api_key="synthetic_gemini"
+    )
     assert reg.is_feature_enabled("casino", full_settings) is True
     assert reg.is_feature_enabled("market", full_settings) is True
     assert reg.is_feature_enabled("ai", full_settings) is True
@@ -172,8 +176,8 @@ def test_missing_optional_and_required_keys():
     assert h_transit.status == "degraded"
     assert "GO_API_KEY not configured" in h_transit.reason
 
-    # AI without GEMINI_API_KEY: missing_config and unavailable
-    ai_no_key = Settings(feature_profile="community_full", gemini_api_key="")
+    # AI without GEMINI_API_KEY (when explicitly opted in via LLM_ENABLED=true): missing_config
+    ai_no_key = Settings(feature_profile="community_full", llm_enabled=True, gemini_api_key="")
     h_ai = reg.resolve_feature_health("ai", ai_no_key)
     assert h_ai.enabled is True
     assert h_ai.available is False

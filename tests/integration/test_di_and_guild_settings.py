@@ -565,7 +565,9 @@ async def test_app_command_error_handler_and_resume_redacts_secrets(
 ):
     gem_secret = _synth_gemini_key()
     odds_secret = _synth_odds_key()
-    base = _make_base_settings(tmp_path, gemini_api_key=gem_secret, odds_api_key=odds_secret)
+    base = _make_base_settings(
+        tmp_path, llm_enabled=True, gemini_api_key=gem_secret, odds_api_key=odds_secret
+    )
     bot = create_bot(base, register_commands=False, sync_commands=False)
 
     @dataclass

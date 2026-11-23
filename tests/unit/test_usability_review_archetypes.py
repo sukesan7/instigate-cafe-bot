@@ -16,6 +16,7 @@ async def audit_runner(tmp_db: Database):
     settings = Settings(
         guild_id=900_000_000_000_000_001,
         token="synth-token-usability-test",
+        llm_enabled=True,
         gemini_api_key="synth-gemini-key-test",
         allow_gateway=False,
     )

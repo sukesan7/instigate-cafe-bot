@@ -247,7 +247,9 @@ async def test_resume_review_lifecycle_end_to_end_ephemeral():
             "After: Architected async FastAPI backend serving 10k req/sec with <50ms latency."
         )
 
-    settings = Settings(token="", gemini_api_key="AIzaSyValidTestKey", bot_display_name="InstigateBot")
+    settings = Settings(
+        token="", llm_enabled=True, gemini_api_key="AIzaSyValidTestKey", bot_display_name="InstigateBot"
+    )
     bot = _make_bot(settings, _mock_gemini)
     member = build_fake_member(user_id=123456789, display_name="StudentApplicant")
     inter = FakeInteraction(user=member, client=bot)
@@ -288,7 +290,7 @@ async def test_resume_review_ats_rejection_reason():
         calls.append(kwargs)
         return "FAIL Document appears to be a class syllabus, not a candidate resume."
 
-    settings = Settings(token="", gemini_api_key="AIzaSyValidTestKey")
+    settings = Settings(token="", llm_enabled=True, gemini_api_key="AIzaSyValidTestKey")
     bot = _make_bot(settings, _mock_ats_fail)
     inter = FakeInteraction(user=build_fake_member(), client=bot)
     await inter.response.defer(thinking=True, ephemeral=True)
@@ -320,7 +322,7 @@ async def test_resume_review_oversized_output_pagination_and_file():
         )
         return section * 45
 
-    settings = Settings(token="", gemini_api_key="AIzaSyValidTestKey")
+    settings = Settings(token="", llm_enabled=True, gemini_api_key="AIzaSyValidTestKey")
     bot = _make_bot(settings, _mock_long_review)
     inter = FakeInteraction(user=build_fake_member(user_id=987654321), client=bot)
     await inter.response.defer(thinking=True, ephemeral=True)
@@ -371,7 +373,7 @@ async def test_resume_review_provider_timeout_and_error_handling():
         raise TimeoutError("Deadline exceeded connecting to Gemini endpoint")
 
     gem_secret = "AIzaSySecretApiKey999"
-    settings = Settings(token="", gemini_api_key=gem_secret)
+    settings = Settings(token="", llm_enabled=True, gemini_api_key=gem_secret)
     bot = _make_bot(settings, _mock_timeout)
     inter = FakeInteraction(user=build_fake_member(), client=bot)
     await inter.response.defer(thinking=True, ephemeral=True)
@@ -440,7 +442,7 @@ async def test_resume_confirm_view_buttons():
 @pytest.mark.asyncio
 async def test_unconfigured_gemini_falls_back_to_checklist():
     """If Gemini is not configured, automatically provide the offline checklist."""
-    settings = Settings(token="", gemini_api_key="")  # Unconfigured API key
+    settings = Settings(token="", llm_enabled=True, gemini_api_key="")  # Unconfigured API key
     bot = _make_bot(settings, MagicMock())
     inter = FakeInteraction(user=build_fake_member(), client=bot)
     await inter.response.defer(thinking=True, ephemeral=True)
@@ -463,7 +465,7 @@ async def test_unconfigured_gemini_falls_back_to_checklist():
 @pytest.mark.asyncio
 async def test_admin_killswitch_blocks_resume_review():
     """If LLM features are administratively paused, block execution immediately."""
-    settings = Settings(token="", gemini_api_key="AIzaSyValidKey")
+    settings = Settings(token="", llm_enabled=True, gemini_api_key="AIzaSyValidKey")
     bot = _make_bot(settings, MagicMock())
     bot.services.llm_killed = True  # Administrative killswitch activated
 
