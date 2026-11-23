@@ -99,7 +99,7 @@ flowchart LR
 ### 4.1 Operator Disablement & Log Redaction Controls
 | Control | Environment Variable / Command | Effect |
 | :--- | :--- | :--- |
-| **Disable All AI Processing** | `LLM_ENABLED=false` or `/ic admin llm_stop` | Halts `@mention` Q&A and `/ic resume` AI calls immediately; zero content leaves to Google Gemini. |
+| **Disable All AI Processing** | `LLM_ENABLED=false` *(default)*, `DISABLED_FEATURES=ai`, or `/ic admin llm_stop` | Deny-first master disable halting all `@mention` Q&A and `/ic resume` Gemini calls (without reading attachments or channel history); setting `GEMINI_API_KEY` alone never enables AI traffic. |
 | **Disable Channel Context Window** | `LLM_CHANNEL_HISTORY_ENABLED=false` *(default)* | `@mention` processes only the invoking message (and direct reply), never surrounding channel history. |
 | **Restrict Command Channels** | `USER_COMMAND_CHANNEL_ID` / `LLM_ALLOWED_CHANNEL_IDS` | Scopes command and AI access to approved channels only. |
 | **Disable Background Pollers** | `MARKET_WATCH_ENABLED=false`, `BTC_WATCH_ENABLED=false`, `JOBS_POLL_SECONDS=0` | Stops autonomous outbound polling and checkpoint storage. |

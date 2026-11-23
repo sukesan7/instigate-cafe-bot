@@ -74,8 +74,8 @@ The Instigate Cafe Bot uses strict runtime configuration validation via the `Set
 
 | Environment Variable | Settings Field | Type | Default | Description & Security / Cost Risk | Example |
 |---|---|---|---|---|---|
-| `LLM_ENABLED` | `llm_enabled` | boolean | `false` | Master toggle for Gemini-powered mention assistant and AI resume review (`/ic resume`). | `true` |
-| `GEMINI_API_KEY` | `gemini_api_key` | string | `""` | Google AI Studio API key. **COST RISK:** Unbounded usage incurs API costs. Set billing alerts in Google Cloud. | `AIzaSy...` |
+| `LLM_ENABLED` | `llm_enabled` | boolean | `false` | Global master switch for **all** Gemini AI features (`@mention` assistant and `/ic resume` AI critique). Defaults to `false` (deny-first): setting `GEMINI_API_KEY` alone never enables AI calls, and per-guild overrides cannot bypass a host `LLM_ENABLED=false`. `DISABLED_FEATURES=ai`, restrictive `FEATURE_PROFILE`s, and `/ic admin llm_stop` take deny-first precedence. | `true` |
+| `GEMINI_API_KEY` | `gemini_api_key` | string | `""` | Google AI Studio API key (required only when `LLM_ENABLED=true`; key presence alone never enables AI). **COST RISK:** Unbounded usage incurs API costs. Set billing alerts in Google Cloud. | `AIzaSy...` |
 | `GEMINI_MODEL` | `gemini_model` | string | `gemini-2.5-flash` | Gemini model name used for general chat interactions. | `gemini-2.5-flash` |
 | `GEMINI_RESUME_MODEL` | `gemini_resume_model` | string | `gemini-2.5-pro` | High-reasoning model utilized for confidential PDF resume critique. | `gemini-2.5-pro` |
 | `GEMINI_RESUME_PROMPT` | `gemini_resume_prompt` | string | `""` | Optional system prompt override for general software engineering resume reviews. | `Custom prompt...` |
