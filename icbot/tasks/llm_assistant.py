@@ -484,6 +484,19 @@ async def maybe_handle_llm_mention(
     max_msgs = int(getattr(settings, "llm_max_messages", 25) or 25)
     max_chars = int(getattr(settings, "llm_max_chars", 12000) or 12000)
     channel_history_opt_in = bool(getattr(settings, "llm_channel_history_enabled", False))
+    bot_intents = getattr(bot, "intents", None)
+    if (
+        channel_history_opt_in
+        and bot_intents is not None
+        and not bool(getattr(bot_intents, "message_content", True))
+    ):
+        log.warning(
+            "[LLM] Channel history requested but process started without privileged MESSAGE_CONTENT intent; "
+            "skipping channel history and answering direct @mention only. Enable Message Content Intent in "
+            "the Discord Developer Portal, set LLM_ENABLED=true and LLM_CHANNEL_HISTORY_ENABLED=true in "
+            "process startup config, and restart the bot."
+        )
+        channel_history_opt_in = False
 
     context_lines: list[str] = []
     ref_message_line = ""
