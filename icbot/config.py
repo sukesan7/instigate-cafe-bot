@@ -58,6 +58,42 @@ KNOWN_FEATURE_PROFILES: frozenset[str] = frozenset(
 KNOWN_MODULE_IDS: frozenset[str] = frozenset(
     {"core", "academics", "careers", "transit", "economy", "casino", "market", "ai", "sports"}
 )
+FEATURE_PROFILE_PRESETS: dict[str, tuple[str, ...]] = {
+    "default": (
+        "core",
+        "academics",
+        "careers",
+        "transit",
+        "economy",
+        "casino",
+        "market",
+    ),
+    "student_core": (
+        "core",
+        "academics",
+        "careers",
+        "transit",
+        "economy",
+    ),
+    "toronto_tmu": (
+        "core",
+        "academics",
+        "careers",
+        "transit",
+        "economy",
+    ),
+    "community_full": (
+        "core",
+        "academics",
+        "careers",
+        "transit",
+        "economy",
+        "casino",
+        "market",
+        "ai",
+        "sports",
+    ),
+}
 
 # Re-export compatibility references for internal/test callers
 _CONFIG_PARSER_EXPORTS = (
@@ -324,6 +360,121 @@ class CapabilityStatus:
     configured: bool
     available: bool
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class AIAccessDecision:
+    """Single-source-of-truth effective AI feature permission and readiness evaluation.
+
+    Deny-first policy:
+    1. ``disabled_features`` containing ``"ai"`` always denies AI.
+    2. Feature-profile / ``enabled_features`` module gates must permit ``"ai"``;
+       a non-empty ``GEMINI_API_KEY`` alone NEVER counts as operator consent.
+    3. ``LLM_ENABLED`` is the global master switch (defaults to ``False``).
+    4. Persisted admin killswitch (``/ic admin llm_stop`` / ``llm_killed=True``)
+       pauses all AI calls immediately with deny-first precedence.
+    5. ``GEMINI_API_KEY`` must be non-empty before provider calls are allowed.
+    """
+
+    allowed: bool
+    enabled: bool
+    configured: bool
+    key_present: bool
+    killed: bool
+    status: Literal["ready", "disabled", "paused", "missing_config"]
+    reason: str
+
+
+def resolve_ai_access(
+    settings: Settings,
+    *,
+    llm_killed: bool = False,
+) -> AIAccessDecision:
+    """Evaluate effective AI access centrally for registry, UI, scheduler, mentions, and resume."""
+    key_present = bool((getattr(settings, "gemini_api_key", "") or "").strip())
+    master_enabled = bool(getattr(settings, "llm_enabled", False))
+    killed = bool(llm_killed)
+
+    disabled = set(getattr(settings, "disabled_features", None) or ())
+    if "ai" in disabled:
+        return AIAccessDecision(
+            allowed=False,
+            enabled=False,
+            configured=False,
+            key_present=key_present,
+            killed=killed,
+            status="disabled",
+            reason="AI module is disabled in disabled_features",
+        )
+
+    enabled_feats = set(getattr(settings, "enabled_features", None) or ())
+    profile = (getattr(settings, "feature_profile", "default") or "default").strip().lower()
+    if "ai" in enabled_feats:
+        module_allowed = True
+    elif profile not in FEATURE_PROFILE_PRESETS or profile == "default":
+        # Default profile enables "ai" ONLY via explicit LLM_ENABLED master switch (never key presence).
+        module_allowed = master_enabled
+    else:
+        module_allowed = "ai" in FEATURE_PROFILE_PRESETS[profile]
+
+    if not module_allowed:
+        reason = (
+            "LLM_ENABLED=false (AI master switch is disabled)"
+            if not master_enabled
+            else f"AI module is disabled by feature profile '{profile}'"
+        )
+        return AIAccessDecision(
+            allowed=False,
+            enabled=False,
+            configured=False,
+            key_present=key_present,
+            killed=killed,
+            status="disabled",
+            reason=reason,
+        )
+
+    if not master_enabled:
+        return AIAccessDecision(
+            allowed=False,
+            enabled=False,
+            configured=False,
+            key_present=key_present,
+            killed=killed,
+            status="disabled",
+            reason="LLM_ENABLED=false (AI master switch is disabled)",
+        )
+
+    if killed:
+        return AIAccessDecision(
+            allowed=False,
+            enabled=True,
+            configured=True,
+            key_present=key_present,
+            killed=True,
+            status="paused",
+            reason="Paused via /ic admin llm_stop",
+        )
+
+    if not key_present:
+        return AIAccessDecision(
+            allowed=False,
+            enabled=True,
+            configured=True,
+            key_present=False,
+            killed=False,
+            status="missing_config",
+            reason="LLM_ENABLED is true without GEMINI_API_KEY",
+        )
+
+    return AIAccessDecision(
+        allowed=True,
+        enabled=True,
+        configured=True,
+        key_present=True,
+        killed=False,
+        status="ready",
+        reason="Ready",
+    )
 
 
 @dataclass(frozen=True)
@@ -901,10 +1052,10 @@ class Settings:
         )
         return self.job_alerts_channel_id
 
-    def capabilities(self) -> dict[str, CapabilityStatus]:
+    def capabilities(self, *, llm_killed: bool = False) -> dict[str, CapabilityStatus]:
         """Return per-feature readiness without exposing secret values."""
         has_token = bool((self.token or "").strip())
-        has_gemini = bool((self.gemini_api_key or "").strip())
+        ai_access = resolve_ai_access(self, llm_killed=llm_killed)
         has_go_key = bool((self.go_api_key or "").strip())
         has_odds = bool((self.odds_api_key or "").strip())
 
@@ -935,19 +1086,15 @@ class Settings:
             ),
             "llm_assistant": CapabilityStatus(
                 name="llm_assistant",
-                configured=self.llm_enabled,
-                available=bool(self.llm_enabled and has_gemini),
-                reason=(
-                    ""
-                    if (not self.llm_enabled or has_gemini)
-                    else "LLM_ENABLED is true without GEMINI_API_KEY"
-                ),
+                configured=ai_access.configured,
+                available=ai_access.allowed,
+                reason="" if ai_access.allowed else ai_access.reason,
             ),
             "resume_review": CapabilityStatus(
                 name="resume_review",
-                configured=has_gemini,
-                available=has_gemini,
-                reason="" if has_gemini else "GEMINI_API_KEY not configured",
+                configured=ai_access.configured,
+                available=ai_access.allowed,
+                reason="" if ai_access.allowed else ai_access.reason,
             ),
             "odds_api": CapabilityStatus(
                 name="odds_api",

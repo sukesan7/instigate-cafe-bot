@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from icbot.config import POLL_INTERVAL_BOUNDS, Settings
+from icbot.config import POLL_INTERVAL_BOUNDS, Settings, resolve_ai_access
 from icbot.errors import extract_http_error_info, format_exception_safe, redact_secrets
 
 log = logging.getLogger(__name__)
@@ -394,14 +394,9 @@ def build_default_task_specs(
         return True, ""
 
     def _llm_enabled(s: Settings, llm_killed: bool) -> tuple[bool, str]:
-        if not is_feature_enabled("ai", s):
-            return False, "AI feature is disabled"
-        if not bool(getattr(s, "llm_enabled", False)):
-            return False, "LLM_ENABLED=false"
-        if not (getattr(s, "gemini_api_key", "") or "").strip():
-            return False, "Missing GEMINI_API_KEY"
-        if llm_killed:
-            return False, "Paused via /ic admin llm_stop"
+        access = resolve_ai_access(s, llm_killed=llm_killed)
+        if not access.allowed:
+            return False, access.reason
         return True, ""
 
     return (
@@ -569,10 +564,10 @@ class TaskSupervisor:
             enabled, reason = spec.is_enabled(eff, llm_killed)
             h.enabled = enabled
             h.reason = redact_secrets(reason, secrets)
-            configured_llm = bool(
-                getattr(eff, "llm_enabled", False) and (getattr(eff, "gemini_api_key", "") or "").strip()
+            ai_access = resolve_ai_access(eff, llm_killed=llm_killed)
+            h.paused = bool(
+                not enabled and spec.capability == "llm_assistant" and ai_access.status == "paused"
             )
-            h.paused = bool(not enabled and llm_killed and configured_llm)
             if not enabled:
                 h.state = "paused" if h.paused else "disabled"
             elif h.state in ("disabled", "paused", "stopped"):

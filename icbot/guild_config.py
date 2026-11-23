@@ -408,7 +408,12 @@ def resolve_effective_settings(base: Settings, guild_cfg: GuildSettings | None) 
         }
         merged_overrides = {**preset_defaults, **validated}
     else:
-        merged_overrides = validated
+        merged_overrides = dict(validated)
+
+    # Global master disable (process LLM_ENABLED=false) is strictly deny-first:
+    # per-guild overrides may disable AI locally when host allows it, never bypass a host disable.
+    if not base.llm_enabled and merged_overrides.get("llm_enabled") is True:
+        merged_overrides["llm_enabled"] = False
 
     return dataclasses.replace(base, **merged_overrides)
 

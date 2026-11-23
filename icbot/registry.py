@@ -21,7 +21,12 @@ from discord import app_commands
 
 import icbot.features as _features_pkg
 from icbot.app import ic
-from icbot.config import Settings
+from icbot.config import (
+    FEATURE_PROFILE_PRESETS,
+    AIAccessDecision,
+    Settings,
+    resolve_ai_access,
+)
 
 log = logging.getLogger(__name__)
 
@@ -82,42 +87,20 @@ class FeatureHealth:
     missing_dependencies: tuple[str, ...] = ()
 
 
-PRESETS: dict[str, tuple[str, ...]] = {
-    "default": (
-        "core",
-        "academics",
-        "careers",
-        "transit",
-        "economy",
-        "casino",
-        "market",
-    ),
-    "student_core": (
-        "core",
-        "academics",
-        "careers",
-        "transit",
-        "economy",
-    ),
-    "toronto_tmu": (
-        "core",
-        "academics",
-        "careers",
-        "transit",
-        "economy",
-    ),
-    "community_full": (
-        "core",
-        "academics",
-        "careers",
-        "transit",
-        "economy",
-        "casino",
-        "market",
-        "ai",
-        "sports",
-    ),
-}
+PRESETS: dict[str, tuple[str, ...]] = FEATURE_PROFILE_PRESETS
+
+
+def is_llm_killed(client: Any) -> bool:
+    """Return True if the administrative ``/ic admin llm_stop`` killswitch is active on ``client``."""
+    if client is None:
+        return False
+    services = getattr(client, "services", None)
+    if services is not None and bool(getattr(services, "llm_killed", False)):
+        return True
+    return bool(getattr(client, "_llm_killed", False))
+
+
+_AI_ACCESS_EXPORT = AIAccessDecision
 
 FEATURE_MANIFESTS: dict[str, FeatureManifest] = {
     "core": FeatureManifest(
@@ -455,6 +438,9 @@ class FeatureRegistry:
         if manifest is None:
             return False
 
+        if module_id == "ai":
+            return resolve_ai_access(settings).enabled
+
         # Blacklist takes highest precedence
         disabled = set(settings.disabled_features or ())
         if module_id in disabled:
@@ -467,11 +453,8 @@ class FeatureRegistry:
         else:
             profile = (settings.feature_profile or "default").strip().lower()
             preset = PRESETS.get(profile, PRESETS["default"])
-            if profile == "default" and module_id in ("ai", "sports"):
-                if module_id == "ai":
-                    candidate = bool(settings.llm_enabled or (settings.gemini_api_key or "").strip())
-                else:  # sports
-                    candidate = bool((settings.odds_api_key or "").strip())
+            if profile == "default" and module_id == "sports":
+                candidate = bool((settings.odds_api_key or "").strip())
             else:
                 candidate = module_id in preset
 
@@ -489,6 +472,8 @@ class FeatureRegistry:
         self,
         module_id: str,
         settings: Settings,
+        *,
+        llm_killed: bool = False,
     ) -> FeatureHealth:
         """Resolve full operational health, missing configuration, and dependency status."""
         manifest = self.get_manifest(module_id)
@@ -500,6 +485,18 @@ class FeatureRegistry:
                 available=False,
                 status="disabled",
                 reason=f"Unknown module {module_id!r}",
+            )
+
+        if module_id == "ai":
+            ai = resolve_ai_access(settings, llm_killed=llm_killed)
+            return FeatureHealth(
+                module_id=module_id,
+                display_name=manifest.display_name,
+                enabled=ai.enabled,
+                available=ai.allowed,
+                status=ai.status,
+                reason=ai.reason,
+                missing_secrets=("gemini_api_key",) if ai.status == "missing_config" else (),
             )
 
         # 1. Check administrative enabled state (ignoring dependencies first)
@@ -631,9 +628,14 @@ def is_feature_enabled(
     )
 
 
-def resolve_feature_health(module_id: str, settings: Settings) -> FeatureHealth:
+def resolve_feature_health(
+    module_id: str,
+    settings: Settings,
+    *,
+    llm_killed: bool = False,
+) -> FeatureHealth:
     """Convenience helper resolving health from the global ``FeatureRegistry``."""
-    return get_feature_registry().resolve_feature_health(module_id, settings)
+    return get_feature_registry().resolve_feature_health(module_id, settings, llm_killed=llm_killed)
 
 
 async def guard_feature(
@@ -641,11 +643,12 @@ async def guard_feature(
     module_id: str,
     *,
     settings: Settings | None = None,
+    allow_missing_config: bool = False,
 ) -> bool:
     """Check if ``module_id`` is enabled/available for the interaction, responding ephemerally if not.
 
     Prevents execution, data collection, and DB mutations when a feature or its
-    dependency is disabled in the guild.
+    dependency is disabled or paused in the guild.
     """
     client = getattr(interaction, "client", None)
     if settings is not None:
@@ -659,9 +662,17 @@ async def guard_feature(
             eff_settings = getattr(client, "settings", None) or Settings()
 
     reg = get_feature_registry()
-    health = reg.resolve_feature_health(module_id, eff_settings)
+    health = reg.resolve_feature_health(
+        module_id,
+        eff_settings,
+        llm_killed=is_llm_killed(client) if module_id == "ai" else False,
+    )
+    if allow_missing_config and health.status == "missing_config":
+        return True
     if not health.available:
-        if health.status == "missing_dependency":
+        if health.status == "paused":
+            msg = f"🛑 The **{health.display_name}** feature is currently paused by an administrator."
+        elif health.status == "missing_dependency":
             dep_labels: list[str] = []
             for dep in health.missing_dependencies:
                 man = reg.get_manifest(dep)
@@ -716,7 +727,12 @@ async def check_command_gate(
     if module_id is None:
         return True
 
-    return await guard_feature(interaction, module_id, settings=settings)
+    return await guard_feature(
+        interaction,
+        module_id,
+        settings=settings,
+        allow_missing_config=(qname == "ic resume"),
+    )
 
 
 # ---------------------------------------------------------------------------
