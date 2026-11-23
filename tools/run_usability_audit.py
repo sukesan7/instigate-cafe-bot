@@ -833,6 +833,7 @@ async def main() -> None:
     settings = Settings(
         guild_id=900_000_000_000_000_001,
         token="synth-token-for-audit-only",
+        llm_enabled=True,
         gemini_api_key="synth-gemini-key-audit",
         allow_gateway=False,
     )
