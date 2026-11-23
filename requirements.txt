@@ -70,7 +70,7 @@ python-dotenv==1.2.4
     # via campus-bot
 soupsieve==2.10 ; python_full_version < '3.11.5'
     # via beautifulsoup4
-soupsieve==4.1 ; python_full_version >= '3.11.5'
+soupsieve==4.1.2 ; python_full_version >= '3.11.5'
     # via beautifulsoup4
 typing-extensions==4.16.0
     # via
