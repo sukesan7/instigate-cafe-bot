@@ -8,7 +8,7 @@ This guide covers the canonical local development environment, operational safet
 
 | Python Version | Metadata (`pyproject.toml`) | Offline CI Matrix | Notes |
 | :--- | :--- | :--- | :--- |
-| `< 3.11` | Unsupported at runtime | Not run | Runtime imports Python 3.11+ `datetime.UTC`; `requires-python` ceiling remains `<3.14` (bump floor from `>=3.10` to `>=3.11` on the next online `uv lock`). |
+| `< 3.11` | Unsupported (`>=3.11,<3.14`) | Not run | Runtime imports Python 3.11+ `datetime.UTC`; `requires-python = ">=3.11,<3.14"` rejects Python 3.10 and earlier at install time. |
 | `3.11` | Supported | Tested | Matches Ruff `target-version = "py311"`. |
 | `3.12` | **Recommended Managed Default** | Tested | Matches `[tool.mypy] python_version = "3.12"` and container runtime (`Dockerfile`). |
 | `3.13` | Supported | Tested | Uses `audioop-lts>=0.2.2; python_version >= '3.13'` because stdlib `audioop` was removed in 3.13. |

@@ -105,6 +105,7 @@ sudo useradd -r -s /bin/false -U -m -d /opt/campus-bot campusbot
 # 2. Clone repository and sync locked runtime dependencies
 cd /opt/campus-bot
 sudo -u campusbot git clone https://github.com/sukesan7/instigate-cafe-bot.git .
+sudo -u campusbot uv venv --python 3.12
 sudo -u campusbot uv sync --frozen --no-dev
 sudo -u campusbot mkdir -p data && sudo chmod 700 /opt/campus-bot/data
 
