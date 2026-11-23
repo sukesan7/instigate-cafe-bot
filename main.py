@@ -12,9 +12,15 @@ import argparse
 import os
 from collections.abc import Sequence
 
+import discord
 import dotenv
 
-from icbot.bot import CampusBot, create_bot, validate_gateway_launch
+from icbot.bot import (
+    CampusBot,
+    create_bot,
+    format_privileged_intents_error,
+    validate_gateway_launch,
+)
 from icbot.config import Settings
 from icbot.errors import ConfigValidationError, redact_secrets
 
@@ -51,7 +57,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("Missing DISCORD_TOKEN in environment or .env")
 
     bot = create_bot(settings)
-    bot.run(settings.token)
+    try:
+        bot.run(settings.token)
+    except discord.PrivilegedIntentsRequired as exc:
+        raise SystemExit(format_privileged_intents_error(bot.intent_policy)) from exc
     return 0
 
 
