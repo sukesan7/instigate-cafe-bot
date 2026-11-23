@@ -13,6 +13,7 @@ import logging
 import math
 import sqlite3
 from collections.abc import Callable, Coroutine, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
@@ -53,13 +54,106 @@ from icbot.tasks.ttc_alerts import poll_and_post_ttc
 log = logging.getLogger(__name__)
 
 
-def build_intents() -> discord.Intents:
-    """Return the gateway intents required by Instigate Cafe Bot."""
+@dataclass(frozen=True)
+class IntentPolicy:
+    """Resolved process-startup Gateway intent policy for ``CampusBot``.
+
+    Gateway intents are negotiated once on connection (``IDENTIFY``) from startup
+    process ``Settings`` (never mutable per-guild overrides). Changing privileged
+    intents requires updating the Discord Developer Portal and restarting the bot.
+    """
+
+    guilds: bool = True
+    messages: bool = True
+    message_content: bool = False
+    members: bool = False
+    presences: bool = False
+    explicit_override: bool = False
+    reason: str = "least-privilege default (zero privileged intents)"
+
+    @property
+    def privileged_intents(self) -> tuple[str, ...]:
+        """Return names of any privileged Gateway intents requested by this policy."""
+        enabled: list[str] = []
+        if self.message_content:
+            enabled.append("message_content")
+        if self.members:
+            enabled.append("members")
+        if self.presences:
+            enabled.append("presences")
+        return tuple(enabled)
+
+
+def resolve_intent_policy(
+    settings: Settings | None = None,
+    *,
+    explicit_intents: discord.Intents | None = None,
+) -> IntentPolicy:
+    """Derive a least-privilege startup Gateway intent policy from process ``Settings``.
+
+    - Slash commands (``/ic``), ``/ic resume``, and ``/ic help`` require zero privileged intents.
+    - Unprivileged ``guilds`` and ``messages`` (``guild_messages`` + ``dm_messages``) stay enabled
+      so ``on_message`` can receive direct ``@mention`` events (whose content is delivered by
+      Discord's mention-message exception without the privileged ``MESSAGE_CONTENT`` bit).
+    - Privileged ``MESSAGE_CONTENT`` is requested ONLY when process startup explicitly enables
+      both ``LLM_ENABLED=true`` and ``LLM_CHANNEL_HISTORY_ENABLED=true`` to read surrounding
+      channel messages. Non-empty API keys or enabled feature profiles never silently enable it.
+    """
+    if explicit_intents is not None:
+        return IntentPolicy(
+            guilds=bool(explicit_intents.guilds),
+            messages=bool(explicit_intents.messages),
+            message_content=bool(explicit_intents.message_content),
+            members=bool(explicit_intents.members),
+            presences=bool(explicit_intents.presences),
+            explicit_override=True,
+            reason="explicit caller-supplied discord.Intents",
+        )
+
+    eff = settings if settings is not None else Settings()
+    need_message_content = bool(eff.llm_enabled and eff.llm_channel_history_enabled)
+    if need_message_content:
+        reason = "LLM_ENABLED=true and LLM_CHANNEL_HISTORY_ENABLED=true at process startup"
+    elif eff.llm_enabled:
+        reason = "least-privilege default (direct @mentions use unprivileged messages intent)"
+    else:
+        reason = "least-privilege default (zero privileged intents)"
+
+    return IntentPolicy(
+        guilds=True,
+        messages=True,
+        message_content=need_message_content,
+        members=False,
+        presences=False,
+        explicit_override=False,
+        reason=reason,
+    )
+
+
+def build_intents(settings: Settings | None = None) -> discord.Intents:
+    """Return the least-privilege Gateway intents for Instigate Cafe Bot startup ``Settings``."""
+    policy = resolve_intent_policy(settings)
     intents = discord.Intents.default()
-    intents.guilds = True
-    intents.messages = True  # needed for message-count tracking and @mention context
-    intents.message_content = True  # required for @bot mentions and chat context
+    intents.guilds = policy.guilds
+    intents.messages = policy.messages
+    intents.message_content = policy.message_content
+    intents.members = policy.members
+    intents.presences = policy.presences
     return intents
+
+
+def format_privileged_intents_error(policy: IntentPolicy) -> str:
+    """Build an actionable operator diagnostic when Discord rejects privileged intents."""
+    requested = ", ".join(policy.privileged_intents) or "message_content"
+    return (
+        f"Discord rejected privileged Gateway intent(s) ({requested}) requested by startup policy "
+        f"({policy.reason}). To fix this, either:\n"
+        "  1. Enable 'Message Content Intent' in the Discord Developer Portal "
+        "(Application -> Bot -> Privileged Gateway Intents) and restart the bot, OR\n"
+        "  2. Set LLM_CHANNEL_HISTORY_ENABLED=false in process configuration and restart to run "
+        "with zero privileged intents (/ic slash commands, /ic resume, and direct @mention replies "
+        "remain available)."
+    )
 
 
 def validate_gateway_launch(settings: Settings, *, allow_gateway: bool = False) -> None:
@@ -202,17 +296,24 @@ class CampusBot(commands.Bot):
         **options: Any,
     ) -> None:
         default_allowed_mentions = options.pop("allowed_mentions", discord.AllowedMentions.none())
+        if services is not None:
+            eff_settings = settings if settings is not None else services.settings
+        else:
+            eff_settings = settings if settings is not None else Settings()
+
+        intent_policy = resolve_intent_policy(eff_settings, explicit_intents=intents)
+        resolved_intents = intents if intents is not None else build_intents(eff_settings)
+
         super().__init__(
             command_prefix=command_prefix,
             help_command=None,
-            intents=intents if intents is not None else build_intents(),
+            intents=resolved_intents,
             tree_cls=_CafeCommandTree,
             allowed_mentions=default_allowed_mentions,
             **options,
         )
         if services is not None:
             self.services: ServiceContainer = services
-            eff_settings = settings if settings is not None else services.settings
             eff_db = (
                 db
                 if db is not None
@@ -224,7 +325,6 @@ class CampusBot(commands.Bot):
             if self.services.guild_settings is None and self.services.db is not None:
                 self.services.guild_settings = GuildSettingsStore(self.services.db, clock=self.services.clock)
         else:
-            eff_settings = settings if settings is not None else Settings()
             eff_db = db if db is not None else Database(eff_settings.db_path)
             self.services = ServiceContainer.from_settings(
                 eff_settings,
@@ -235,6 +335,7 @@ class CampusBot(commands.Bot):
 
         self.settings: Settings = eff_settings
         self.db: Database = eff_db
+        self.intent_policy: IntentPolicy = intent_policy
         self.http_session: aiohttp.ClientSession | None = self.services.http_session
 
         self._register_commands_enabled = register_commands
@@ -370,6 +471,23 @@ class CampusBot(commands.Bot):
 
     def _log_startup_config(self) -> None:
         settings = self.settings
+        pol = self.intent_policy
+        log.info(
+            "[INTENTS] guilds=%s messages=%s message_content=%s members=%s presences=%s (%s)",
+            pol.guilds,
+            pol.messages,
+            pol.message_content,
+            pol.members,
+            pol.presences,
+            pol.reason,
+        )
+        if bool(getattr(settings, "llm_channel_history_enabled", False)) and not bool(
+            getattr(settings, "llm_enabled", False)
+        ):
+            log.warning(
+                "[INTENTS] LLM_CHANNEL_HISTORY_ENABLED=true has no effect while LLM_ENABLED=false; "
+                "MESSAGE_CONTENT privileged intent was not requested."
+            )
         try:
             caps = settings.capabilities()
             cap_summary = ", ".join(

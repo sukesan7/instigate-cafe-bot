@@ -1250,6 +1250,12 @@ class Settings:
                 )
 
         # Enabled integration prerequisite warnings (non-fatal degradation)
+        if self.llm_channel_history_enabled and not self.llm_enabled:
+            _warn(
+                "llm_channel_history_enabled",
+                "LLM_CHANNEL_HISTORY_ENABLED=true has no effect while LLM_ENABLED=false "
+                "(privileged MESSAGE_CONTENT intent is not requested).",
+            )
         caps = self.capabilities()
         for cap_name in (
             "llm_assistant",
