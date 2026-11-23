@@ -14,7 +14,7 @@ Before deploying or sharing the bot, distinguish clearly between the two operati
 | **How It Works** | Each club/server clones this repo, creates its own Discord Application, and runs its own container/service. | One central operator hosts a shared multi-tenant instance and publishes an OAuth2 invite URL. |
 | **Data Ownership & Controller** | 100% local sovereignty; SQLite database (`DB_PATH`) stays on the server's own disk. Self-hoster is the sole Data Controller. | Shared database across guilds; central maintainer is the Data Controller and handles cross-guild deletion requests. |
 | **Discord Verification** | Not required (`<100` servers). | Mandatory Discord Bot Verification at `>=100` servers. |
-| **Privileged Intents** | Slash commands need **zero** privileged intents; Message Content Intent is optional (only for `@mention` AI). | Discord strictly restricts Message Content Intent at scale; must operate exclusively via `/ic` slash commands. |
+| **Privileged Intents** | **Zero privileged intents by default** (slash commands, `/ic resume`, and direct `@mention` replies use only unprivileged `guilds` + `messages`). Message Content Intent is requested *only* when both `LLM_ENABLED=true` and `LLM_CHANNEL_HISTORY_ENABLED=true` are set at process startup. | Discord restricts Message Content Intent at scale; run with `LLM_CHANNEL_HISTORY_ENABLED=false` (zero privileged intents). |
 | **API Keys & Quotas** | Self-hoster supplies optional keys (`GEMINI_API_KEY`, `GO_API_KEY`, `ODDS_API_KEY`) under their own billing caps. | Maintainer absorbs all API costs and must enforce strict per-guild rate limits. |
 
 ---
@@ -44,9 +44,10 @@ Always pin `replicas: 1` in Docker Compose and Railway, and mount local SSD/bloc
    - `Read Message History` (`0x00010000`) — interaction context and message updates
    - `Use Slash Commands` (`0x80000000`) — `/ic` application commands
    - `Add Reactions` (`0x00000040`) — interactive feedback cues
-3. **Privileged Gateway Intents:**
-   - **Message Content Intent:** **Not required** for `/ic` slash commands. Required *only* if enabling `@mention` AI assistance (`LLM_ENABLED=true`). Leave disabled if you do not use `@mention` Q&A.
-   - **Server Members Intent & Presence Intent:** **Not required.**
+3. **Privileged Gateway Intents (Least-Privilege Startup Policy):**
+   - **Default (`0` privileged intents):** `CampusBot` requests only unprivileged `guilds` and `messages` (`guild_messages` + `dm_messages`) intents at startup. All 53 `/ic` slash commands, `/ic resume`, and direct `@mention` AI replies work with **Message Content Intent OFF** (Discord delivers content on messages directly mentioning the bot or in DMs without the privileged bit).
+   - **Message Content Intent (Optional):** Requested at process startup **only** when the operator explicitly sets both `LLM_ENABLED=true` and `LLM_CHANNEL_HISTORY_ENABLED=true` to read surrounding channel history. Enabling this requires toggling **Message Content Intent ON** in the Discord Developer Portal (*Application → Bot → Privileged Gateway Intents*) and **restarting the bot process**. Per-guild database overrides cannot request privileged intents at runtime; if a guild enables channel history on a process started without `MESSAGE_CONTENT`, channel history degrades cleanly while direct `@mention` replies continue working.
+   - **Server Members Intent & Presence Intent:** **Not required** (always disabled by default).
 
 ---
 

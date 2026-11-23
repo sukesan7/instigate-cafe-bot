@@ -47,7 +47,7 @@ Start every investigation with in-Discord diagnostics:
 | `"This feature is disabled in this server"` | Module disabled by `FEATURE_PROFILE` or `DISABLED_FEATURES` / guild override | Run `/ic admin features` to inspect active modules and enable the desired subsystem. |
 | `"Only the user who ran this command can interact..."` | Another member clicked buttons on an actor-bound pagination/confirmation view | Expected security isolation (see [UI Style & Interaction-Audience Matrix](ui-style.md#6-interaction-audience-matrix-component-lifetimes)). Run your own command to open a personal view. |
 | `"This command can only be used within a server"` | Economy, casino, ICSE, or admin command invoked in Direct Messages | Run the command inside a guild text channel. |
-| `@mention` AI assistant does not reply | `LLM_ENABLED=false`, `/ic admin llm_stop` active, missing `GEMINI_API_KEY`, or **Message Content Intent** disabled in Discord Developer Portal | Enable `LLM_ENABLED=true`, supply `GEMINI_API_KEY`, run `/ic admin llm_start`, and enable Message Content Intent in the Developer Portal (self-hosted servers only). |
+| `@mention` AI assistant does not reply or skips channel history | `LLM_ENABLED=false`, `/ic admin llm_stop` active, missing `GEMINI_API_KEY`, or `LLM_CHANNEL_HISTORY_ENABLED=true` without **Message Content Intent** at startup | Enable `LLM_ENABLED=true`, supply `GEMINI_API_KEY`, and run `/ic admin llm_start`. Direct `@mention` replies need zero privileged intents; if enabling `LLM_CHANNEL_HISTORY_ENABLED=true` (or seeing `PrivilegedIntentsRequired`), enable Message Content Intent in the Discord Developer Portal and restart the bot (or set `LLM_CHANNEL_HISTORY_ENABLED=false`). |
 
 ---
 

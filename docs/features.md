@@ -185,4 +185,4 @@ Configured via environment variables ([Configuration Reference](configuration.md
 - **Job Pollers (`jobs`, `workday`)** — Global; no API key required; requires `JOB_ALERTS_CHANNEL_ID`, board/site lists, and poll interval `> 0`.
 - **Market Watch & Daily Report (`market_watch`, `daily_market_report`)** — Global; no API key required; disabled by default.
 - **Bitcoin Address Watch (`btc_watch`)** — Global; no API key required; disabled by default.
-- **Mention Assistant (`llm_assistant`)** — Global; requires `LLM_ENABLED=true`, `GEMINI_API_KEY`, and Discord Message Content Intent; `LLM_CHANNEL_HISTORY_ENABLED=false` by default.
+- **Mention Assistant (`llm_assistant`)** — Global; requires `LLM_ENABLED=true` and `GEMINI_API_KEY`. Uses unprivileged `messages` intent for direct `@mention` replies by default (`LLM_CHANNEL_HISTORY_ENABLED=false`, zero privileged intents); requests privileged Discord Message Content Intent only when `LLM_CHANNEL_HISTORY_ENABLED=true` at process startup.

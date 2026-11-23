@@ -33,7 +33,7 @@ Before starting any staging session (or pushing release commits), manually verif
 3. Use **least-privilege OAuth2 scopes and permissions**:
    - Scopes: `bot`, `applications.commands`
    - Permission bitmask: **`277025507392`** (`Send Messages`, `Embed Links`, `Attach Files`, `Read Message History`, `Use Slash Commands`, `Add Reactions`)
-   - **Privileged Gateway Intents:** Leave `Server Members Intent` and `Presence Intent` **OFF**. Leave `Message Content Intent` **OFF** unless explicitly testing optional `@mention` AI replies.
+   - **Privileged Gateway Intents:** Leave `Server Members Intent` and `Presence Intent` **OFF**. Leave `Message Content Intent` **OFF** by default (all `/ic` slash commands and direct `@mention` replies work without it); enable it in the Discord Developer Portal and restart the bot *only* if explicitly testing `LLM_ENABLED=true` with `LLM_CHANNEL_HISTORY_ENABLED=true`.
 
 ---
 

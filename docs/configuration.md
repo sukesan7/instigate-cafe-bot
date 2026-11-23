@@ -91,7 +91,7 @@ The Instigate Cafe Bot uses strict runtime configuration validation via the `Set
 | `LLM_ALLOW_DM` | `llm_allow_dm` | boolean | `false` | Allows mention assistant interactions in Direct Messages. | `false` |
 | `LLM_ALLOWED_CHANNEL_IDS`| `llm_allowed_channel_ids`| list[int] | `[]` | Channel ID allowlist for AI interactions (empty allows all channels). | `900000000000000004` |
 | `LLM_ALLOWED_ROLE_IDS` | `llm_allowed_role_ids` | list[int] | `[]` | Role ID allowlist for AI interactions (empty allows all roles). | `111222333` |
-| `LLM_CHANNEL_HISTORY_ENABLED`| `llm_channel_history_enabled`| boolean | `false` | Privacy flag: whether to read surrounding channel message history. | `false` |
+| `LLM_CHANNEL_HISTORY_ENABLED`| `llm_channel_history_enabled`| boolean | `false` | Privacy flag: whether to read surrounding channel message history on `@mention`. Setting `true` alongside `LLM_ENABLED=true` at process startup requests Discord's privileged **Message Content Intent** (requires enabling it in the Discord Developer Portal and restarting the bot; per-guild overrides cannot enable it if the process started without `MESSAGE_CONTENT`). | `false` |
 | `LLM_DEBUG` | `llm_debug` | boolean | `false` | Enables verbose prompt debugging in console logs. Redaction filter still applies. | `false` |
 
 ---
