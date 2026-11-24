@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
+import secrets
 import sqlite3
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
-from icbot.db import Database, Transaction
+from icbot.db import Database, Transaction, _is_memory_path
 from icbot.errors import BotError, IdempotencyConflict
 from icbot.errors import InsufficientBalanceError as BaseInsufficientBalanceError
 
@@ -21,24 +22,93 @@ DEFAULT_EXPORT_MAX_ROWS: int = 5000
 
 
 _ALPHA_HEX = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
+_LEGACY_ANON_TOKEN_RE = re.compile(r"anon_[a-p]{12}")
 
 
-def _scrub_uid_token(raw: str | None, uid: int, *, guild_id: int | None = None) -> str | None:
-    """Replace occurrences of ``uid`` in transaction IDs, reference IDs, or notes with irreversible tokens."""
+def _new_tombstone_tx_id() -> str:
+    """Generate an unpredictable per-row CSPRNG ledger tombstone ID (128-bit entropy, zero digits)."""
+    return f"tombstone:{secrets.token_hex(16).translate(_ALPHA_HEX)}"
+
+
+def _new_tombstone_token() -> str:
+    """Generate an unpredictable CSPRNG inline tombstone token (96-bit entropy, zero digits)."""
+    return f"del_{secrets.token_hex(12).translate(_ALPHA_HEX)}"
+
+
+def _scrub_uid_token(
+    raw: str | None,
+    uid: int,
+    *,
+    guild_id: int | None = None,
+    token: str | None = None,
+    boundary_only: bool = False,
+) -> str | None:
+    """Replace occurrences of ``uid`` with an unpredictable CSPRNG tombstone token.
+
+    Unlike deterministic hashing, generated tokens carry CSPRNG entropy and are never derived
+    from ``uid`` or ``guild_id`` (``guild_id`` is accepted solely for signature compatibility),
+    with no retained reidentification map.
+
+    Args:
+        raw: Input string or ``None``.
+        uid: Numeric user ID to scrub.
+        guild_id: Unused (retained for backwards-compatible call signatures).
+        token: Optional pre-generated CSPRNG tombstone token (defaults to a fresh token per call).
+        boundary_only: When ``True``, replaces only exact numeric token boundaries
+            (``(?<![0-9])uid(?![0-9])``) so longer adjacent numeric IDs are never corrupted.
+    """
+    _ = guild_id  # Intentionally unused: never derive tokens from predictable guild/user IDs
     if raw is None:
         return None
     s = str(raw)
     uid_str = str(int(uid))
     if uid_str not in s:
         return s
-    gid_part = f"{int(guild_id)}:" if guild_id is not None else ""
-    digest = hashlib.sha256(f"icbot-anon:{gid_part}{uid_str}".encode()).hexdigest()[:12].translate(_ALPHA_HEX)
-    # Replace exact token boundaries (colon-delimited, <@uid>, or word boundary)
+
     pattern = re.compile(rf"(?<![0-9]){re.escape(uid_str)}(?![0-9])")
-    scrubbed = pattern.sub(f"anon_{digest}", s)
-    if uid_str in scrubbed:
-        scrubbed = scrubbed.replace(uid_str, digest)
+    replacement = token if token is not None else _new_tombstone_token()
+    scrubbed = pattern.sub(replacement, s)
+    if not boundary_only and uid_str in scrubbed:
+        fallback_fragment = secrets.token_hex(8).translate(_ALPHA_HEX)
+        scrubbed = scrubbed.replace(uid_str, fallback_fragment)
     return scrubbed
+
+
+def _scrub_uid_in_json(raw: str, uid: int, *, token: str | None = None) -> str:
+    """Scrub exact ``uid`` integers and boundary-matched string tokens inside a JSON payload safely.
+
+    Always preserves valid JSON syntax and avoids corrupting longer neighboring numeric IDs.
+    """
+    tombstone_tok = token if token is not None else _new_tombstone_token()
+    uid_int = int(uid)
+    uid_str = str(uid_int)
+    if uid_str not in raw:
+        return raw
+
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return _scrub_uid_token(raw, uid_int, token=tombstone_tok, boundary_only=True) or raw
+
+    def _walk(obj: Any) -> Any:
+        if isinstance(obj, bool) or obj is None:
+            return obj
+        if isinstance(obj, int):
+            return tombstone_tok if obj == uid_int else obj
+        if isinstance(obj, str):
+            return _scrub_uid_token(obj, uid_int, token=tombstone_tok, boundary_only=True)
+        if isinstance(obj, list):
+            return [_walk(item) for item in obj]
+        if isinstance(obj, dict):
+            return {
+                (_scrub_uid_token(str(k), uid_int, token=tombstone_tok, boundary_only=True) or str(k)): _walk(
+                    v
+                )
+                for k, v in obj.items()
+            }
+        return obj
+
+    return json.dumps(_walk(parsed), sort_keys=True)
 
 
 @dataclass(frozen=True)
@@ -985,9 +1055,9 @@ class UserStore:
         delete_global_preferences: bool = False,
         retain_admin_actor_audit: bool = True,
     ) -> dict[str, int]:
-        """Delete or irreversibly de-identify user-addressable records (Right-to-be-Forgotten).
+        """Delete or tombstone-deidentify user-addressable records (Right-to-be-Forgotten).
 
-        Scope & Privacy Contract:
+        Scope & Privacy Contract (Honest Boundaries):
             1. Hard-Deleted (Guild-Scoped Personal State):
                - ``users``: Deletes the user's profile, display_name, avatar_url, balance, and daily_claim_ts.
                - ``blackjack_users``: Deletes the user's blackjack bankroll and win/loss/reset counters.
@@ -997,33 +1067,41 @@ class UserStore:
                  when the user has no remaining guild profiles in ``users``, or when
                  ``delete_global_preferences=True`` is explicitly passed. Preserved if the user still has
                  active profiles in other guilds and ``delete_global_preferences=False``.
-            3. Tombstone-Anonymized (Financial Ledgers & Shared Community Content):
-               - ``economy_ledger``: Preserves all rows and exact token amounts so aggregate token supply
-                 reconciles, while replacing ``user_id`` with ``0`` (``ANONYMIZED_USER_ID``) and scrubbing
-                 embedded ``user_id`` substrings from ``transaction_id`` and ``reference_id`` when
-                 ``anonymize_ledger=True``.
+            3. Unlinkable Tombstones (Financial Ledgers & Shared Community Content):
+               - ``economy_ledger``: Preserves all rows and exact token amounts so aggregate guild supply
+                 reconciles, while replacing ``user_id`` with ``0`` (``ANONYMIZED_USER_ID``). Any
+                 ``transaction_id`` containing ``user_id`` is replaced with an unpredictable per-row
+                 CSPRNG tombstone (``tombstone:<32-alpha>``, 128-bit entropy, zero retained
+                 reidentification map) while remapping in-batch ``reference_id`` links atomically.
+                 Opaque caller-provided ``transaction_id`` values that do not contain ``user_id`` are
+                 preserved under ``user_id = 0`` so late retries fail closed with
+                 :class:`IdempotencyConflict`. Exact timestamps, amounts, and ``balance_after``
+                 remain in the ledger for accounting and retain residual correlation risk.
                - ``fun_trades``: Preserves trade volume/price history for market integrity while setting
                  ``user_id = 0`` and ``note = '[ANONYMIZED_USER]'`` (when ``anonymize_ledger=True``;
                  otherwise hard-deleted).
                - ``fun_stock_events`` & ``stock_events``: Replaces ``user_id`` with ``0`` and scrubs any
                  user-identifying reason string.
-               - ``fun_market_weeks``: Sets ``settled_by = NULL`` where ``settled_by = user_id``.
+               - ``fun_market_weeks``: Sets ``settled_by = NULL`` and boundary-scrubs ``user_id`` from
+                 ``notes`` where ``settled_by = user_id``.
                - ``exams``: Sets ``created_by = 0`` where ``created_by = user_id`` so shared guild exam
                  calendars remain intact without creator attribution.
                - ``academic_resources``: Sets ``added_by = 0`` where ``added_by = user_id`` so shared course
                  links remain intact without contributor attribution.
             4. Security & Administrative Audit Logs:
-               - ``admin_audit_log``: Scrubs ``target_user_id = NULL`` and redacts ``user_id`` from
-                 ``details_json`` where the user was the target of an action. If
-                 ``retain_admin_actor_audit=False``, also anonymizes ``admin_user_id = 0`` and
-                 ``guild_settings_audit.actor_id = 0``; when ``retain_admin_actor_audit=True`` (default),
-                 privileged administrator actor IDs are retained for security accountability.
+               - ``admin_audit_log``: Sets ``target_user_id = NULL`` and JSON-safely scrubs ``user_id``
+                 from ``details_json`` using unpredictable per-erasure CSPRNG tokens (``del_<24-alpha>``).
+                 If ``retain_admin_actor_audit=False``, also zeroes ``admin_user_id = 0`` (scrubbing
+                 ``details_json``) and ``guild_settings_audit.actor_id = 0``; when
+                 ``retain_admin_actor_audit=True`` (default), privileged administrator actor IDs are
+                 retained for security accountability.
                - Deletion Audit Event: Records a ``user_data_delete`` event in ``admin_audit_log`` with
                  ``target_user_id = NULL`` and an opaque random ``erasure_receipt`` UUID (never re-inserting
                  the deleted ``user_id`` into the audit log).
         """
         now = self._now()
         uid = int(user_id)
+        uid_str = str(uid)
         gid = self._resolve_gid(guild_id)
         deleted_counts: dict[str, int] = {}
 
@@ -1042,7 +1120,7 @@ class UserStore:
             cur_pos = await tx.execute("DELETE FROM fun_positions WHERE guild_id=? AND user_id=?", (gid, uid))
             deleted_counts["fun_positions"] = cur_pos.rowcount if cur_pos.rowcount >= 0 else 0
 
-            # 4. Handle fun_trades (anonymize to preserve market trade tape or delete if anonymize_ledger=False)
+            # 4. Handle fun_trades (tombstone to preserve market trade tape or delete if anonymize_ledger=False)
             if anonymize_ledger:
                 cur_tr_anom = await tx.execute(
                     "UPDATE fun_trades SET user_id=?, note=? WHERE guild_id=? AND user_id=?",
@@ -1081,11 +1159,19 @@ class UserStore:
             )
             deleted_counts["stock_events_anonymized"] = cur_se.rowcount if cur_se.rowcount >= 0 else 0
 
-            cur_fmw = await tx.execute(
-                "UPDATE fun_market_weeks SET settled_by=NULL WHERE guild_id=? AND settled_by=?",
+            fmw_rows = await tx.fetchall(
+                "SELECT week_key, notes FROM fun_market_weeks WHERE guild_id=? AND settled_by=?",
                 (gid, uid),
             )
-            deleted_counts["fun_market_weeks_anonymized"] = cur_fmw.rowcount if cur_fmw.rowcount >= 0 else 0
+            for wk_key, wk_notes in fmw_rows:
+                scrubbed_notes = (
+                    _scrub_uid_token(str(wk_notes), uid, boundary_only=True) if wk_notes is not None else None
+                )
+                await tx.execute(
+                    "UPDATE fun_market_weeks SET settled_by=NULL, notes=? WHERE guild_id=? AND week_key=?",
+                    (scrubbed_notes, gid, str(wk_key)),
+                )
+            deleted_counts["fun_market_weeks_anonymized"] = len(fmw_rows)
 
             # 6. Cross-guild user_job_preferences scope check
             other_guilds_row = await tx.fetchone(
@@ -1110,49 +1196,62 @@ class UserStore:
                     1 if pref_exists is not None else 0
                 )
 
-            # 7. Economy ledger preservation & irreversible de-identification
+            # 7. Economy ledger preservation & unlinkable per-row CSPRNG tombstoning (no retained map)
             ledger_rows = await tx.fetchall(
                 "SELECT id, transaction_id, reference_id FROM economy_ledger WHERE guild_id=? AND user_id=?",
                 (gid, uid),
             )
             ledger_count = len(ledger_rows)
             if anonymize_ledger and ledger_rows:
-                # Build old->new transaction_id mapping so any reference_id pointing to an earlier tx stays linked
+                # Ephemeral in-memory map held strictly for this transaction to preserve in-batch
+                # reference_id -> transaction_id linkage; discarded immediately after commit.
                 tx_id_map: dict[str, str] = {}
-                for row_id, orig_tx_id, _orig_ref in ledger_rows:
-                    scrubbed_tx = _scrub_uid_token(str(orig_tx_id), uid, guild_id=gid) or str(orig_tx_id)
-                    if scrubbed_tx == str(orig_tx_id):
-                        tx_id_map[str(orig_tx_id)] = scrubbed_tx
+                rewritten_tx_ids: dict[str, str] = {}
+                for _row_id, orig_tx_id_raw, _orig_ref in ledger_rows:
+                    orig_tx_id = str(orig_tx_id_raw)
+                    if uid_str in orig_tx_id:
+                        new_tx = _new_tombstone_tx_id()
+                        tx_id_map[orig_tx_id] = new_tx
+                        rewritten_tx_ids[orig_tx_id] = new_tx
                     else:
-                        row_tag = f"{int(row_id):x}".translate(_ALPHA_HEX)
-                        tx_id_map[str(orig_tx_id)] = f"{scrubbed_tx}:{row_tag}"
+                        # Opaque key with no embedded uid: keep intact under user_id=0 so late
+                        # retries fail closed with IdempotencyConflict instead of resurrecting user.
+                        tx_id_map[orig_tx_id] = orig_tx_id
 
-                for row_id, orig_tx_id, orig_ref in ledger_rows:
-                    new_tx_id = tx_id_map[str(orig_tx_id)]
+                for row_id, orig_tx_id_raw, orig_ref in ledger_rows:
+                    orig_tx_id = str(orig_tx_id_raw)
+                    new_tx_id = tx_id_map[orig_tx_id]
                     if orig_ref is not None and str(orig_ref) in tx_id_map:
                         new_ref_id: str | None = tx_id_map[str(orig_ref)]
                     else:
                         new_ref_id = _scrub_uid_token(
                             str(orig_ref) if orig_ref is not None else None,
                             uid,
-                            guild_id=gid,
+                            boundary_only=False,
                         )
                     await tx.execute(
                         "UPDATE economy_ledger SET user_id=?, transaction_id=?, reference_id=? WHERE id=?",
                         (ANONYMIZED_USER_ID, new_tx_id, new_ref_id, int(row_id)),
+                    )
+
+                # Defensively remap any cross-row reference_id in this guild pointing to a rewritten tx_id
+                for orig_tx_id, new_tx_id in rewritten_tx_ids.items():
+                    await tx.execute(
+                        "UPDATE economy_ledger SET reference_id=? WHERE guild_id=? AND reference_id=?",
+                        (new_tx_id, gid, orig_tx_id),
                     )
                 deleted_counts["economy_ledger_anonymized"] = ledger_count
             else:
                 deleted_counts["economy_ledger_anonymized"] = 0
             deleted_counts["economy_ledger_preserved"] = ledger_count
 
-            # 8. Admin & settings audit logs: de-identify target_user_id and optional actor_id
+            # 8. Admin & settings audit logs: JSON-safe boundary scrub of target_user_id and optional actor_id
             target_audit_rows = await tx.fetchall(
                 "SELECT id, details_json FROM admin_audit_log WHERE guild_id=? AND target_user_id=?",
                 (gid, uid),
             )
             for audit_id, details_raw in target_audit_rows:
-                scrubbed_details = _scrub_uid_token(str(details_raw or "{}"), uid, guild_id=gid) or "{}"
+                scrubbed_details = _scrub_uid_in_json(str(details_raw or "{}"), uid)
                 await tx.execute(
                     "UPDATE admin_audit_log SET target_user_id=NULL, details_json=? WHERE id=?",
                     (scrubbed_details, int(audit_id)),
@@ -1160,13 +1259,17 @@ class UserStore:
             deleted_counts["admin_audit_target_anonymized"] = len(target_audit_rows)
 
             if not retain_admin_actor_audit:
-                cur_adm_actor = await tx.execute(
-                    "UPDATE admin_audit_log SET admin_user_id=0 WHERE guild_id=? AND admin_user_id=?",
+                actor_audit_rows = await tx.fetchall(
+                    "SELECT id, details_json FROM admin_audit_log WHERE guild_id=? AND admin_user_id=?",
                     (gid, uid),
                 )
-                deleted_counts["admin_audit_actor_anonymized"] = (
-                    cur_adm_actor.rowcount if cur_adm_actor.rowcount >= 0 else 0
-                )
+                for audit_id, details_raw in actor_audit_rows:
+                    scrubbed_actor_details = _scrub_uid_in_json(str(details_raw or "{}"), uid)
+                    await tx.execute(
+                        "UPDATE admin_audit_log SET admin_user_id=0, details_json=? WHERE id=?",
+                        (scrubbed_actor_details, int(audit_id)),
+                    )
+                deleted_counts["admin_audit_actor_anonymized"] = len(actor_audit_rows)
                 cur_gs_actor = await tx.execute(
                     "UPDATE guild_settings_audit SET actor_id=0 WHERE guild_id=? AND actor_id=?",
                     (gid, uid),
@@ -1216,3 +1319,165 @@ class UserStore:
                 )
 
         return deleted_counts
+
+    async def upgrade_legacy_erasure_tombstones(
+        self,
+        *,
+        guild_id: int | None = None,
+        dry_run: bool = True,
+        confirmed: bool = False,
+        backup_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Forward-only, operator-approved upgrade for legacy SHA-256 ``anon_<12-alpha>`` tombstones.
+
+        Replaces predictable legacy SHA-256 pseudonyms in **already-tombstoned** rows only
+        (``economy_ledger`` where ``user_id = 0`` and ``admin_audit_log`` where
+        ``target_user_id IS NULL``) with fresh unpredictable CSPRNG tombstones while preserving
+        internal ``reference_id -> transaction_id`` links and economic totals. Active user rows
+        are never modified.
+
+        Safety gates:
+            - Defaults to ``dry_run=True`` (read-only preview with zero writes).
+            - Requires explicit ``confirmed=True`` when ``dry_run=False``.
+            - On file-backed SQLite databases, requires ``backup_path`` and writes/verifies an
+              online backup via :meth:`Database.backup` before mutating any row.
+        """
+        scope_gid = int(guild_id) if guild_id is not None else None
+
+        if scope_gid is not None:
+            ledger_candidates = await self.db.fetchall(
+                """
+                SELECT id, guild_id, transaction_id, reference_id
+                FROM economy_ledger
+                WHERE user_id = ? AND guild_id = ?
+                  AND (transaction_id LIKE '%anon_%' OR COALESCE(reference_id, '') LIKE '%anon_%')
+                ORDER BY id ASC
+                """,
+                (ANONYMIZED_USER_ID, scope_gid),
+            )
+            audit_candidates = await self.db.fetchall(
+                """
+                SELECT id, details_json
+                FROM admin_audit_log
+                WHERE target_user_id IS NULL AND guild_id = ? AND details_json LIKE '%anon_%'
+                ORDER BY id ASC
+                """,
+                (scope_gid,),
+            )
+        else:
+            ledger_candidates = await self.db.fetchall(
+                """
+                SELECT id, guild_id, transaction_id, reference_id
+                FROM economy_ledger
+                WHERE user_id = ?
+                  AND (transaction_id LIKE '%anon_%' OR COALESCE(reference_id, '') LIKE '%anon_%')
+                ORDER BY id ASC
+                """,
+                (ANONYMIZED_USER_ID,),
+            )
+            audit_candidates = await self.db.fetchall(
+                """
+                SELECT id, details_json
+                FROM admin_audit_log
+                WHERE target_user_id IS NULL AND details_json LIKE '%anon_%'
+                ORDER BY id ASC
+                """,
+            )
+
+        matched_ledger = [
+            (int(r[0]), int(r[1]), str(r[2]), str(r[3]) if r[3] is not None else None)
+            for r in ledger_candidates
+            if _LEGACY_ANON_TOKEN_RE.search(str(r[2])) or _LEGACY_ANON_TOKEN_RE.search(str(r[3] or ""))
+        ]
+        matched_audit = [
+            (int(r[0]), str(r[1] or "{}"))
+            for r in audit_candidates
+            if _LEGACY_ANON_TOKEN_RE.search(str(r[1] or ""))
+        ]
+
+        if dry_run:
+            return {
+                "mode": "dry_run",
+                "guild_id": scope_gid,
+                "legacy_economy_ledger_rows": len(matched_ledger),
+                "legacy_admin_audit_rows": len(matched_audit),
+                "backup_path": None,
+                "upgraded_economy_ledger_rows": 0,
+                "upgraded_admin_audit_rows": 0,
+                "integrity_ok": True,
+            }
+
+        if not confirmed:
+            raise ValueError(
+                "Forward-only legacy tombstone migration requires explicit owner approval "
+                "(confirmed=True) after reviewing a dry-run preview."
+            )
+
+        resolved_backup: str | None = None
+        if not _is_memory_path(self.db.path):
+            if backup_path is None:
+                raise ValueError(
+                    "A verified backup_path is required before running a forward-only tombstone "
+                    "migration on a file-backed database."
+                )
+            bkp_dest = await self.db.backup(str(backup_path), verify_integrity=True)
+            resolved_backup = str(bkp_dest)
+        elif backup_path is not None:
+            bkp_dest = await self.db.backup(str(backup_path), verify_integrity=True)
+            resolved_backup = str(bkp_dest)
+
+        upgraded_ledger = 0
+        upgraded_audit = 0
+
+        if matched_ledger or matched_audit:
+            async with self.db.write_transaction() as tx:
+                tx_id_map: dict[str, str] = {}
+                rewritten_by_guild: list[tuple[int, str, str]] = []
+                for _row_id, row_gid, orig_tx, _orig_ref in matched_ledger:
+                    if _LEGACY_ANON_TOKEN_RE.search(orig_tx):
+                        new_tx = _new_tombstone_tx_id()
+                        tx_id_map[orig_tx] = new_tx
+                        rewritten_by_guild.append((row_gid, orig_tx, new_tx))
+                    else:
+                        tx_id_map[orig_tx] = orig_tx
+
+                for row_id, _row_gid, orig_tx, orig_ref in matched_ledger:
+                    new_tx = tx_id_map[orig_tx]
+                    if orig_ref is not None and orig_ref in tx_id_map:
+                        new_ref: str | None = tx_id_map[orig_ref]
+                    elif orig_ref is not None and _LEGACY_ANON_TOKEN_RE.search(orig_ref):
+                        new_ref = _LEGACY_ANON_TOKEN_RE.sub(lambda _m: _new_tombstone_token(), orig_ref)
+                    else:
+                        new_ref = orig_ref
+                    await tx.execute(
+                        "UPDATE economy_ledger SET transaction_id=?, reference_id=? WHERE id=? AND user_id=?",
+                        (new_tx, new_ref, row_id, ANONYMIZED_USER_ID),
+                    )
+                    upgraded_ledger += 1
+
+                for row_gid, orig_tx, new_tx in rewritten_by_guild:
+                    await tx.execute(
+                        "UPDATE economy_ledger SET reference_id=? WHERE guild_id=? AND reference_id=?",
+                        (new_tx, row_gid, orig_tx),
+                    )
+
+                for audit_id, details_raw in matched_audit:
+                    new_details = _LEGACY_ANON_TOKEN_RE.sub(lambda _m: _new_tombstone_token(), details_raw)
+                    await tx.execute(
+                        "UPDATE admin_audit_log SET details_json=? WHERE id=? AND target_user_id IS NULL",
+                        (new_details, audit_id),
+                    )
+                    upgraded_audit += 1
+
+            await self.db.check_integrity()
+
+        return {
+            "mode": "applied",
+            "guild_id": scope_gid,
+            "legacy_economy_ledger_rows": len(matched_ledger),
+            "legacy_admin_audit_rows": len(matched_audit),
+            "backup_path": resolved_backup,
+            "upgraded_economy_ledger_rows": upgraded_ledger,
+            "upgraded_admin_audit_rows": upgraded_audit,
+            "integrity_ok": True,
+        }
