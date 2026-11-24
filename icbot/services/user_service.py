@@ -3,14 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
-from icbot.db import Database
-from icbot.errors import BotError
+from icbot.db import Database, Transaction
+from icbot.errors import BotError, IdempotencyConflict
 from icbot.errors import InsufficientBalanceError as BaseInsufficientBalanceError
 
 ANONYMIZED_USER_ID: int = 0
@@ -66,6 +67,147 @@ class LedgerEntry:
 
 class InsufficientBalanceError(BaseInsufficientBalanceError):
     pass
+
+
+OperationDirection = Literal["credit", "debit", "neutral"]
+
+
+@dataclass(frozen=True)
+class LedgerIdempotencyIdentity:
+    """Immutable semantic identity of an idempotent virtual-currency ledger mutation.
+
+    Idempotency & Legacy Compatibility Policy:
+        - ``economy_ledger.transaction_id`` retains its global ``UNIQUE`` constraint;
+          historical rows and game-settlement ``reference_id`` links are never rewritten
+          or retroactively rejected on read/audit/migration.
+        - An existing row matching ``transaction_id`` is accepted as an idempotent no-op
+          ONLY when every semantic field matches: ``guild_id``, ``user_id``, signed
+          ``amount``, operation direction (``credit`` / ``debit`` / ``neutral``),
+          ``category``, and ``reference_id``. Any discrepancy raises
+          :class:`IdempotencyConflict` with no state mutation and no secret/user data in
+          public error messages.
+        - ``UserStore.add_balance``, ``UserStore.subtract_balance``, and
+          ``UserStore.claim_daily`` enforce strict exact category equality. Callers
+          reconciling historical rows that used legacy synonymous categories (e.g.
+          ``BlackjackStore`` accepting ``bet`` / ``blackjack_wager``) must opt in
+          explicitly via ``legacy_categories`` while still validating ``guild_id``,
+          ``user_id``, signed ``amount``, direction, and ``reference_id``.
+    """
+
+    guild_id: int
+    user_id: int
+    amount: int
+    category: str
+    reference_id: str | None = None
+    operation_type: OperationDirection | None = None
+    legacy_categories: frozenset[str] = frozenset()
+    check_amount: bool = True
+
+    @property
+    def effective_operation_type(self) -> OperationDirection:
+        if self.operation_type is not None:
+            return self.operation_type
+        if self.amount > 0:
+            return "credit"
+        if self.amount < 0:
+            return "debit"
+        return "neutral"
+
+
+@dataclass(frozen=True)
+class IdempotentLedgerMatch:
+    """Validated existing ``economy_ledger`` row returned on an exact idempotent retry."""
+
+    amount: int
+    balance_after: int
+    created_at: int
+    category: str
+    reference_id: str | None
+
+
+def is_ledger_tx_id_unique_error(exc: sqlite3.IntegrityError) -> bool:
+    """Return True when ``exc`` represents a UNIQUE constraint race on ``economy_ledger.transaction_id``."""
+    err_code = getattr(exc, "sqlite_errorcode", None)
+    unique_code = getattr(sqlite3, "SQLITE_CONSTRAINT_UNIQUE", None)
+    if unique_code is not None and err_code == unique_code:
+        return True
+    msg = str(exc)
+    return "UNIQUE constraint failed" in msg and "economy_ledger.transaction_id" in msg
+
+
+def validate_ledger_idempotency_row(
+    row: tuple[Any, ...],
+    expected: LedgerIdempotencyIdentity,
+) -> IdempotentLedgerMatch:
+    """Validate an existing ``economy_ledger`` row against ``expected`` semantic identity.
+
+    Expects row columns:
+    ``(guild_id, user_id, amount, balance_after, category, reference_id, created_at)``.
+
+    Raises:
+        IdempotencyConflict: If any identity or effect field does not match.
+    """
+    row_gid = int(row[0])
+    row_uid = int(row[1])
+    row_amount = int(row[2])
+    row_balance_after = int(row[3])
+    row_category = str(row[4])
+    row_ref = str(row[5]) if row[5] is not None else None
+    row_created_at = int(row[6])
+
+    mismatches: list[str] = []
+    if row_gid != int(expected.guild_id):
+        mismatches.append("guild_id")
+    if row_uid != int(expected.user_id):
+        mismatches.append("user_id")
+
+    row_op: OperationDirection = "credit" if row_amount > 0 else ("debit" if row_amount < 0 else "neutral")
+    if expected.check_amount:
+        if row_op != expected.effective_operation_type:
+            mismatches.append("operation_type")
+        if row_amount != int(expected.amount):
+            mismatches.append("amount")
+    elif expected.operation_type is not None and row_op != expected.operation_type:
+        mismatches.append("operation_type")
+
+    allowed_categories = {str(expected.category), *expected.legacy_categories}
+    if row_category not in allowed_categories:
+        mismatches.append("category")
+
+    expected_ref = str(expected.reference_id) if expected.reference_id is not None else None
+    if row_ref != expected_ref:
+        mismatches.append("reference_id")
+
+    if mismatches:
+        raise IdempotencyConflict(mismatched_fields=tuple(mismatches))
+
+    return IdempotentLedgerMatch(
+        amount=row_amount,
+        balance_after=row_balance_after,
+        created_at=row_created_at,
+        category=row_category,
+        reference_id=row_ref,
+    )
+
+
+async def lookup_idempotent_ledger_entry(
+    tx: Transaction,
+    transaction_id: str,
+    expected: LedgerIdempotencyIdentity,
+) -> IdempotentLedgerMatch | None:
+    """Look up ``transaction_id`` in ``economy_ledger`` and strictly validate its semantic identity."""
+    cur = await tx.execute(
+        """
+        SELECT guild_id, user_id, amount, balance_after, category, reference_id, created_at
+        FROM economy_ledger
+        WHERE transaction_id=?
+        """,
+        (str(transaction_id),),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    return validate_ledger_idempotency_row(tuple(row), expected)
 
 
 class DailyAlreadyClaimedError(BotError, RuntimeError):
@@ -210,7 +352,8 @@ class UserStore:
     ) -> int:
         """Add to balance (winnings, payouts, claims). Returns new balance.
 
-        Coupled with atomic conditional SQL and ledger recording.
+        Coupled with atomic conditional SQL, strict semantic idempotency validation,
+        and savepoint-protected ledger recording under ``BEGIN IMMEDIATE``.
         """
         amount = int(amount)
         if amount <= 0:
@@ -218,40 +361,64 @@ class UserStore:
         uid = int(user_id)
         gid = self._resolve_gid(guild_id)
         now = self._now()
+        cat_str = str(category)
+        ref_str = str(reference_id) if reference_id is not None else None
+        key = str(idempotency_key) if idempotency_key else None
+        expected = (
+            LedgerIdempotencyIdentity(
+                guild_id=gid,
+                user_id=uid,
+                amount=amount,
+                category=cat_str,
+                reference_id=ref_str,
+                operation_type="credit",
+            )
+            if key is not None
+            else None
+        )
 
         async with self.db.write_transaction() as tx:
-            # Idempotency check: return recorded balance_after if this key was already processed
-            if idempotency_key:
-                cur_idem = await tx.execute(
-                    "SELECT balance_after FROM economy_ledger WHERE transaction_id=?",
-                    (str(idempotency_key),),
+            if key is not None and expected is not None:
+                matched = await lookup_idempotent_ledger_entry(tx, key, expected)
+                if matched is not None:
+                    return matched.balance_after
+
+            await tx.execute("SAVEPOINT balance_add")
+            try:
+                await tx.execute(
+                    "INSERT OR IGNORE INTO users (guild_id, user_id, balance, created_at) VALUES (?, ?, ?, ?)",
+                    (gid, uid, self.starting_balance, now),
                 )
-                idem_row = await cur_idem.fetchone()
-                if idem_row is not None:
-                    return int(idem_row[0])
+                await tx.execute(
+                    "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
+                    (amount, gid, uid),
+                )
+                cur = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
+                row = await cur.fetchone()
+                new_balance = int(row[0]) if row is not None else self.starting_balance + amount
 
-            await tx.execute(
-                "INSERT OR IGNORE INTO users (guild_id, user_id, balance, created_at) VALUES (?, ?, ?, ?)",
-                (gid, uid, self.starting_balance, now),
-            )
-            await tx.execute(
-                "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
-                (amount, gid, uid),
-            )
-            cur = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
-            row = await cur.fetchone()
-            new_balance = int(row[0]) if row is not None else self.starting_balance + amount
-
-            tx_id = (
-                str(idempotency_key) if idempotency_key else f"credit:{gid}:{uid}:{now}:{time.monotonic_ns()}"
-            )
-            await tx.execute(
-                """
-                INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (tx_id, gid, uid, amount, new_balance, str(category), reference_id, now),
-            )
+                tx_id = (
+                    key
+                    if key is not None
+                    else f"credit:{gid}:{uid}:{now}:{time.monotonic_ns()}:{uuid.uuid4().hex[:8]}"
+                )
+                await tx.execute(
+                    """
+                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (tx_id, gid, uid, amount, new_balance, cat_str, ref_str, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                await tx.execute("ROLLBACK TO SAVEPOINT balance_add")
+                await tx.execute("RELEASE SAVEPOINT balance_add")
+                if key is not None and expected is not None and is_ledger_tx_id_unique_error(exc):
+                    matched = await lookup_idempotent_ledger_entry(tx, key, expected)
+                    if matched is not None:
+                        return matched.balance_after
+                raise
+            else:
+                await tx.execute("RELEASE SAVEPOINT balance_add")
 
         return new_balance
 
@@ -267,8 +434,8 @@ class UserStore:
     ) -> int:
         """Subtract from balance (bets, purchases). Raises InsufficientBalanceError.
 
-        Uses atomic conditional SQL (balance = balance - ? WHERE balance >= ?)
-        and records a transactionally coupled ledger entry.
+        Uses atomic conditional SQL (``balance = balance - ? WHERE balance >= ?``),
+        strict semantic idempotency validation, and savepoint-protected ledger recording.
         """
         amount = int(amount)
         if amount <= 0:
@@ -276,50 +443,74 @@ class UserStore:
         uid = int(user_id)
         gid = self._resolve_gid(guild_id)
         now = self._now()
+        cat_str = str(category)
+        ref_str = str(reference_id) if reference_id is not None else None
+        key = str(idempotency_key) if idempotency_key else None
+        expected = (
+            LedgerIdempotencyIdentity(
+                guild_id=gid,
+                user_id=uid,
+                amount=-amount,
+                category=cat_str,
+                reference_id=ref_str,
+                operation_type="debit",
+            )
+            if key is not None
+            else None
+        )
 
         async with self.db.write_transaction() as tx:
-            # Idempotency check: return recorded balance_after if this key was already processed
-            if idempotency_key:
-                cur_idem = await tx.execute(
-                    "SELECT balance_after FROM economy_ledger WHERE transaction_id=?",
-                    (str(idempotency_key),),
+            if key is not None and expected is not None:
+                matched = await lookup_idempotent_ledger_entry(tx, key, expected)
+                if matched is not None:
+                    return matched.balance_after
+
+            await tx.execute("SAVEPOINT balance_sub")
+            try:
+                await tx.execute(
+                    "INSERT OR IGNORE INTO users (guild_id, user_id, balance, created_at) VALUES (?, ?, ?, ?)",
+                    (gid, uid, self.starting_balance, now),
                 )
-                idem_row = await cur_idem.fetchone()
-                if idem_row is not None:
-                    return int(idem_row[0])
 
-            await tx.execute(
-                "INSERT OR IGNORE INTO users (guild_id, user_id, balance, created_at) VALUES (?, ?, ?, ?)",
-                (gid, uid, self.starting_balance, now),
-            )
-
-            # Atomic conditional update prevents balance overdraft without Python-level read-modify-write
-            cur_upd = await tx.execute(
-                "UPDATE users SET balance = balance - ? WHERE guild_id=? AND user_id=? AND balance >= ?",
-                (amount, gid, uid, amount),
-            )
-            if cur_upd.rowcount == 0:
-                cur_bal = await tx.execute(
-                    "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                # Atomic conditional update prevents balance overdraft without Python-level read-modify-write
+                cur_upd = await tx.execute(
+                    "UPDATE users SET balance = balance - ? WHERE guild_id=? AND user_id=? AND balance >= ?",
+                    (amount, gid, uid, amount),
                 )
-                bal_row = await cur_bal.fetchone()
-                current = int(bal_row[0]) if bal_row is not None else self.starting_balance
-                raise InsufficientBalanceError(f"Insufficient balance. Need ${amount}, have ${current}.")
+                if cur_upd.rowcount == 0:
+                    cur_bal = await tx.execute(
+                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                    )
+                    bal_row = await cur_bal.fetchone()
+                    current = int(bal_row[0]) if bal_row is not None else self.starting_balance
+                    raise InsufficientBalanceError(f"Insufficient balance. Need ${amount}, have ${current}.")
 
-            cur = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
-            row = await cur.fetchone()
-            new_balance = int(row[0]) if row is not None else 0
+                cur = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
+                row = await cur.fetchone()
+                new_balance = int(row[0]) if row is not None else 0
 
-            tx_id = (
-                str(idempotency_key) if idempotency_key else f"debit:{gid}:{uid}:{now}:{time.monotonic_ns()}"
-            )
-            await tx.execute(
-                """
-                INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (tx_id, gid, uid, -amount, new_balance, str(category), reference_id, now),
-            )
+                tx_id = (
+                    key
+                    if key is not None
+                    else f"debit:{gid}:{uid}:{now}:{time.monotonic_ns()}:{uuid.uuid4().hex[:8]}"
+                )
+                await tx.execute(
+                    """
+                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (tx_id, gid, uid, -amount, new_balance, cat_str, ref_str, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                await tx.execute("ROLLBACK TO SAVEPOINT balance_sub")
+                await tx.execute("RELEASE SAVEPOINT balance_sub")
+                if key is not None and expected is not None and is_ledger_tx_id_unique_error(exc):
+                    matched = await lookup_idempotent_ledger_entry(tx, key, expected)
+                    if matched is not None:
+                        return matched.balance_after
+                raise
+            else:
+                await tx.execute("RELEASE SAVEPOINT balance_sub")
 
         return new_balance
 
@@ -347,7 +538,7 @@ class UserStore:
                 "UPDATE users SET balance=? WHERE guild_id=? AND user_id=?",
                 (amount, gid, uid),
             )
-            tx_id = f"admin_set:{gid}:{uid}:{now}:{time.monotonic_ns()}"
+            tx_id = f"admin_set:{gid}:{uid}:{now}:{time.monotonic_ns()}:{uuid.uuid4().hex[:8]}"
             await tx.execute(
                 """
                 INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
@@ -370,59 +561,85 @@ class UserStore:
     ) -> tuple[int, int]:
         """Claim daily reward. Returns (amount_claimed, new_balance).
 
-        Raises DailyAlreadyClaimedError if cooldown has not elapsed.
+        Raises DailyAlreadyClaimedError if cooldown has not elapsed, or
+        IdempotencyConflict if ``idempotency_key`` collides with a non-equivalent transaction.
         """
         now = self._now()
         uid = int(user_id)
         gid = self._resolve_gid(guild_id)
+        key = str(idempotency_key) if idempotency_key else None
+        expected = (
+            LedgerIdempotencyIdentity(
+                guild_id=gid,
+                user_id=uid,
+                amount=self.daily_claim_amount,
+                category="daily",
+                reference_id=None,
+                operation_type="credit",
+            )
+            if key is not None
+            else None
+        )
 
         async with self.db.write_transaction() as tx:
-            if idempotency_key:
-                cur_idem = await tx.execute(
-                    "SELECT amount, balance_after FROM economy_ledger WHERE transaction_id=?",
-                    (str(idempotency_key),),
+            if key is not None and expected is not None:
+                matched = await lookup_idempotent_ledger_entry(tx, key, expected)
+                if matched is not None:
+                    return matched.amount, matched.balance_after
+
+            await tx.execute("SAVEPOINT daily_claim")
+            try:
+                await tx.execute(
+                    "INSERT OR IGNORE INTO users (guild_id, user_id, balance, created_at) VALUES (?, ?, ?, ?)",
+                    (gid, uid, self.starting_balance, now),
                 )
-                idem_row = await cur_idem.fetchone()
-                if idem_row is not None:
-                    return int(idem_row[0]), int(idem_row[1])
 
-            await tx.execute(
-                "INSERT OR IGNORE INTO users (guild_id, user_id, balance, created_at) VALUES (?, ?, ?, ?)",
-                (gid, uid, self.starting_balance, now),
-            )
-
-            # Atomic conditional update checks cooldown in the DB engine without race windows
-            cur_upd = await tx.execute(
-                """
-                UPDATE users
-                SET balance = balance + ?, daily_claim_ts = ?
-                WHERE guild_id = ? AND user_id = ? AND (? - daily_claim_ts >= ?)
-                """,
-                (self.daily_claim_amount, now, gid, uid, now, DAILY_COOLDOWN_SECONDS),
-            )
-            if cur_upd.rowcount == 0:
-                cur_u = await tx.execute(
-                    "SELECT daily_claim_ts FROM users WHERE guild_id=? AND user_id=?",
-                    (gid, uid),
+                # Atomic conditional update checks cooldown in the DB engine without race windows
+                cur_upd = await tx.execute(
+                    """
+                    UPDATE users
+                    SET balance = balance + ?, daily_claim_ts = ?
+                    WHERE guild_id = ? AND user_id = ? AND (? - daily_claim_ts >= ?)
+                    """,
+                    (self.daily_claim_amount, now, gid, uid, now, DAILY_COOLDOWN_SECONDS),
                 )
-                row_u = await cur_u.fetchone()
-                last_claim = int(row_u[0]) if row_u is not None else 0
-                next_available = last_claim + DAILY_COOLDOWN_SECONDS
-                raise DailyAlreadyClaimedError(next_claim_ts=next_available)
+                if cur_upd.rowcount == 0:
+                    cur_u = await tx.execute(
+                        "SELECT daily_claim_ts FROM users WHERE guild_id=? AND user_id=?",
+                        (gid, uid),
+                    )
+                    row_u = await cur_u.fetchone()
+                    last_claim = int(row_u[0]) if row_u is not None else 0
+                    next_available = last_claim + DAILY_COOLDOWN_SECONDS
+                    raise DailyAlreadyClaimedError(next_claim_ts=next_available)
 
-            cur = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
-            row = await cur.fetchone()
-            new_balance = int(row[0]) if row is not None else self.starting_balance + self.daily_claim_amount
+                cur = await tx.execute("SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid))
+                row = await cur.fetchone()
+                new_balance = (
+                    int(row[0]) if row is not None else self.starting_balance + self.daily_claim_amount
+                )
 
-            day_bucket = now // DAILY_COOLDOWN_SECONDS
-            tx_id = str(idempotency_key) if idempotency_key else f"claim:{gid}:{uid}:{day_bucket}:{now}"
-            await tx.execute(
-                """
-                INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
-                VALUES (?, ?, ?, ?, ?, 'daily', NULL, ?)
-                """,
-                (tx_id, gid, uid, self.daily_claim_amount, new_balance, now),
-            )
+                day_bucket = now // DAILY_COOLDOWN_SECONDS
+                tx_id = (
+                    key if key is not None else f"claim:{gid}:{uid}:{day_bucket}:{now}:{uuid.uuid4().hex[:8]}"
+                )
+                await tx.execute(
+                    """
+                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'daily', NULL, ?)
+                    """,
+                    (tx_id, gid, uid, self.daily_claim_amount, new_balance, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                await tx.execute("ROLLBACK TO SAVEPOINT daily_claim")
+                await tx.execute("RELEASE SAVEPOINT daily_claim")
+                if key is not None and expected is not None and is_ledger_tx_id_unique_error(exc):
+                    matched = await lookup_idempotent_ledger_entry(tx, key, expected)
+                    if matched is not None:
+                        return matched.amount, matched.balance_after
+                raise
+            else:
+                await tx.execute("RELEASE SAVEPOINT daily_claim")
 
         return self.daily_claim_amount, new_balance
 

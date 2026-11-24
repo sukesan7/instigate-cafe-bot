@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
 import uuid
 from collections.abc import Callable
@@ -8,7 +9,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from icbot.db import Database
-from icbot.errors import BotError, InsufficientBalanceError
+from icbot.errors import BotError, IdempotencyConflict, InsufficientBalanceError
+from icbot.services.user_service import (
+    LedgerIdempotencyIdentity,
+    is_ledger_tx_id_unique_error,
+    lookup_idempotent_ledger_entry,
+)
 
 # Economy constants: strictly virtual play-money with zero real-world exchange value.
 MIN_WAGER: int = 1
@@ -165,81 +171,107 @@ class CasinoService:
         gid = self._resolve_gid(guild_id)
         now_ts = self._now()
 
+        added_lock = False
         async with self._lock:
             key = (gid, uid)
             if key in self._active_wagers and not idempotency_key:
                 raise ConcurrentWagerError(
                     "You already have an active game or wager in progress. Please finish it before placing another bet."
                 )
-            self._active_wagers.add(key)
+            if key not in self._active_wagers:
+                self._active_wagers.add(key)
+                added_lock = True
 
         tx_id = (
             str(idempotency_key)
             if idempotency_key
             else f"game:{game_type}:{gid}:{uid}:{now_ts}:{uuid.uuid4().hex[:8]}"
         )
+        expected = LedgerIdempotencyIdentity(
+            guild_id=gid,
+            user_id=uid,
+            amount=-valid_amount,
+            category=f"{game_type}_wager",
+            reference_id=None,
+            operation_type="debit",
+        )
 
         try:
             async with self.db.write_transaction() as tx:
-                # Idempotency check: if this transaction was already processed, return existing reservation
-                cur_idem = await tx.execute(
-                    "SELECT balance_after, amount FROM economy_ledger WHERE transaction_id=?",
-                    (tx_id,),
-                )
-                idem_row = await cur_idem.fetchone()
-                if idem_row is not None:
+                matched = await lookup_idempotent_ledger_entry(tx, tx_id, expected)
+                if matched is not None:
                     return WagerReservation(
                         transaction_id=tx_id,
                         guild_id=gid,
                         user_id=uid,
                         amount=valid_amount,
                         game_type=game_type,
-                        balance_after=int(idem_row[0]),
-                        created_at=now_ts,
+                        balance_after=matched.balance_after,
+                        created_at=matched.created_at,
                     )
 
-                # Ensure user exists
-                await tx.execute(
-                    """
-                    INSERT INTO users (guild_id, user_id, display_name, avatar_url, balance, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(guild_id, user_id) DO UPDATE SET
-                        display_name = CASE WHEN excluded.display_name != '' THEN excluded.display_name ELSE users.display_name END,
-                        avatar_url   = CASE WHEN excluded.avatar_url != '' THEN excluded.avatar_url ELSE users.avatar_url END
-                    """,
-                    (gid, uid, str(display_name), str(avatar_url), self.starting_bankroll, now_ts),
-                )
-
-                # Atomic conditional decrement
-                cur = await tx.execute(
-                    "UPDATE users SET balance = balance - ? WHERE guild_id=? AND user_id=? AND balance >= ?",
-                    (valid_amount, gid, uid, valid_amount),
-                )
-                if cur.rowcount == 0:
-                    cur_bal = await tx.execute(
-                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?",
-                        (gid, uid),
-                    )
-                    bal_row = await cur_bal.fetchone()
-                    available = int(bal_row[0]) if bal_row is not None else self.starting_bankroll
-                    raise InsufficientBalanceError(
-                        f"Insufficient balance. You have **${available}**, need **${valid_amount}**."
+                await tx.execute("SAVEPOINT casino_reserve")
+                try:
+                    # Ensure user exists
+                    await tx.execute(
+                        """
+                        INSERT INTO users (guild_id, user_id, display_name, avatar_url, balance, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(guild_id, user_id) DO UPDATE SET
+                            display_name = CASE WHEN excluded.display_name != '' THEN excluded.display_name ELSE users.display_name END,
+                            avatar_url   = CASE WHEN excluded.avatar_url != '' THEN excluded.avatar_url ELSE users.avatar_url END
+                        """,
+                        (gid, uid, str(display_name), str(avatar_url), self.starting_bankroll, now_ts),
                     )
 
-                cur_after = await tx.execute(
-                    "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
-                )
-                after_row = await cur_after.fetchone()
-                new_bal = int(after_row[0]) if after_row is not None else 0
+                    # Atomic conditional decrement
+                    cur = await tx.execute(
+                        "UPDATE users SET balance = balance - ? WHERE guild_id=? AND user_id=? AND balance >= ?",
+                        (valid_amount, gid, uid, valid_amount),
+                    )
+                    if cur.rowcount == 0:
+                        cur_bal = await tx.execute(
+                            "SELECT balance FROM users WHERE guild_id=? AND user_id=?",
+                            (gid, uid),
+                        )
+                        bal_row = await cur_bal.fetchone()
+                        available = int(bal_row[0]) if bal_row is not None else self.starting_bankroll
+                        raise InsufficientBalanceError(
+                            f"Insufficient balance. You have **${available}**, need **${valid_amount}**."
+                        )
 
-                # Record reservation in ledger
-                await tx.execute(
-                    """
-                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (tx_id, gid, uid, -valid_amount, new_bal, f"{game_type}_wager", None, now_ts),
-                )
+                    cur_after = await tx.execute(
+                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                    )
+                    after_row = await cur_after.fetchone()
+                    new_bal = int(after_row[0]) if after_row is not None else 0
+
+                    # Record reservation in ledger
+                    await tx.execute(
+                        """
+                        INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (tx_id, gid, uid, -valid_amount, new_bal, f"{game_type}_wager", None, now_ts),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    await tx.execute("ROLLBACK TO SAVEPOINT casino_reserve")
+                    await tx.execute("RELEASE SAVEPOINT casino_reserve")
+                    if is_ledger_tx_id_unique_error(exc):
+                        matched = await lookup_idempotent_ledger_entry(tx, tx_id, expected)
+                        if matched is not None:
+                            return WagerReservation(
+                                transaction_id=tx_id,
+                                guild_id=gid,
+                                user_id=uid,
+                                amount=valid_amount,
+                                game_type=game_type,
+                                balance_after=matched.balance_after,
+                                created_at=matched.created_at,
+                            )
+                    raise
+                else:
+                    await tx.execute("RELEASE SAVEPOINT casino_reserve")
 
                 return WagerReservation(
                     transaction_id=tx_id,
@@ -251,8 +283,9 @@ class CasinoService:
                     created_at=now_ts,
                 )
         except Exception:
-            async with self._lock:
-                self._active_wagers.discard((gid, uid))
+            if added_lock:
+                async with self._lock:
+                    self._active_wagers.discard((gid, uid))
             raise
 
     async def settle_wager(
@@ -275,16 +308,21 @@ class CasinoService:
         uid = reservation.user_id
         now_ts = self._now()
         settle_id = str(idempotency_key) if idempotency_key else f"settle:{reservation.transaction_id}"
+        category = f"{reservation.game_type}_payout" if payout > 0 else f"{reservation.game_type}_settle"
+        expected = LedgerIdempotencyIdentity(
+            guild_id=gid,
+            user_id=uid,
+            amount=payout,
+            category=category,
+            reference_id=reservation.transaction_id,
+            operation_type="credit" if payout > 0 else "neutral",
+        )
+        conflict_raised = False
 
         try:
             async with self.db.write_transaction() as tx:
-                # Idempotency check on settlement key
-                cur_idem = await tx.execute(
-                    "SELECT balance_after FROM economy_ledger WHERE transaction_id=?",
-                    (settle_id,),
-                )
-                idem_row = await cur_idem.fetchone()
-                if idem_row is not None:
+                matched = await lookup_idempotent_ledger_entry(tx, settle_id, expected)
+                if matched is not None:
                     return SettlementResult(
                         settlement_id=settle_id,
                         transaction_id=reservation.transaction_id,
@@ -293,35 +331,56 @@ class CasinoService:
                         wager_amount=reservation.amount,
                         payout_amount=payout,
                         net_delta=net,
-                        balance_after=int(idem_row[0]),
+                        balance_after=matched.balance_after,
                         outcome=outcome,
                         already_settled=True,
                         details=details or {},
                     )
 
-                if payout > 0:
-                    await tx.execute(
-                        "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
-                        (payout, gid, uid),
+                await tx.execute("SAVEPOINT casino_settle")
+                try:
+                    if payout > 0:
+                        await tx.execute(
+                            "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
+                            (payout, gid, uid),
+                        )
+
+                    cur_bal = await tx.execute(
+                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?",
+                        (gid, uid),
                     )
+                    row_bal = await cur_bal.fetchone()
+                    new_bal = int(row_bal[0]) if row_bal is not None else reservation.balance_after + payout
 
-                cur_bal = await tx.execute(
-                    "SELECT balance FROM users WHERE guild_id=? AND user_id=?",
-                    (gid, uid),
-                )
-                row_bal = await cur_bal.fetchone()
-                new_bal = int(row_bal[0]) if row_bal is not None else reservation.balance_after + payout
-
-                category = (
-                    f"{reservation.game_type}_payout" if payout > 0 else f"{reservation.game_type}_settle"
-                )
-                await tx.execute(
-                    """
-                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (settle_id, gid, uid, payout, new_bal, category, reservation.transaction_id, now_ts),
-                )
+                    await tx.execute(
+                        """
+                        INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (settle_id, gid, uid, payout, new_bal, category, reservation.transaction_id, now_ts),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    await tx.execute("ROLLBACK TO SAVEPOINT casino_settle")
+                    await tx.execute("RELEASE SAVEPOINT casino_settle")
+                    if is_ledger_tx_id_unique_error(exc):
+                        matched = await lookup_idempotent_ledger_entry(tx, settle_id, expected)
+                        if matched is not None:
+                            return SettlementResult(
+                                settlement_id=settle_id,
+                                transaction_id=reservation.transaction_id,
+                                guild_id=gid,
+                                user_id=uid,
+                                wager_amount=reservation.amount,
+                                payout_amount=payout,
+                                net_delta=net,
+                                balance_after=matched.balance_after,
+                                outcome=outcome,
+                                already_settled=True,
+                                details=details or {},
+                            )
+                    raise
+                else:
+                    await tx.execute("RELEASE SAVEPOINT casino_settle")
 
                 return SettlementResult(
                     settlement_id=settle_id,
@@ -336,9 +395,13 @@ class CasinoService:
                     already_settled=False,
                     details=details or {},
                 )
+        except IdempotencyConflict:
+            conflict_raised = True
+            raise
         finally:
-            async with self._lock:
-                self._active_wagers.discard((gid, uid))
+            if not conflict_raised:
+                async with self._lock:
+                    self._active_wagers.discard((gid, uid))
 
     async def refund_wager(
         self,
@@ -352,49 +415,72 @@ class CasinoService:
         uid = reservation.user_id
         now_ts = self._now()
         refund_id = str(idempotency_key) if idempotency_key else f"refund:{reservation.transaction_id}"
+        expected = LedgerIdempotencyIdentity(
+            guild_id=gid,
+            user_id=uid,
+            amount=reservation.amount,
+            category=f"{reservation.game_type}_refund",
+            reference_id=reservation.transaction_id,
+            operation_type="credit",
+        )
+        conflict_raised = False
 
         try:
             async with self.db.write_transaction() as tx:
-                cur_idem = await tx.execute(
-                    "SELECT balance_after FROM economy_ledger WHERE transaction_id=?",
-                    (refund_id,),
-                )
-                idem_row = await cur_idem.fetchone()
-                if idem_row is not None:
-                    return int(idem_row[0])
+                matched = await lookup_idempotent_ledger_entry(tx, refund_id, expected)
+                if matched is not None:
+                    return matched.balance_after
 
-                await tx.execute(
-                    "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
-                    (reservation.amount, gid, uid),
-                )
-                cur_bal = await tx.execute(
-                    "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
-                )
-                row_bal = await cur_bal.fetchone()
-                new_bal = (
-                    int(row_bal[0]) if row_bal is not None else reservation.balance_after + reservation.amount
-                )
+                await tx.execute("SAVEPOINT casino_refund")
+                try:
+                    await tx.execute(
+                        "UPDATE users SET balance = balance + ? WHERE guild_id=? AND user_id=?",
+                        (reservation.amount, gid, uid),
+                    )
+                    cur_bal = await tx.execute(
+                        "SELECT balance FROM users WHERE guild_id=? AND user_id=?", (gid, uid)
+                    )
+                    row_bal = await cur_bal.fetchone()
+                    new_bal = (
+                        int(row_bal[0])
+                        if row_bal is not None
+                        else reservation.balance_after + reservation.amount
+                    )
 
-                await tx.execute(
-                    """
-                    INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        refund_id,
-                        gid,
-                        uid,
-                        reservation.amount,
-                        new_bal,
-                        f"{reservation.game_type}_refund",
-                        reservation.transaction_id,
-                        now_ts,
-                    ),
-                )
+                    await tx.execute(
+                        """
+                        INSERT INTO economy_ledger (transaction_id, guild_id, user_id, amount, balance_after, category, reference_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            refund_id,
+                            gid,
+                            uid,
+                            reservation.amount,
+                            new_bal,
+                            f"{reservation.game_type}_refund",
+                            reservation.transaction_id,
+                            now_ts,
+                        ),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    await tx.execute("ROLLBACK TO SAVEPOINT casino_refund")
+                    await tx.execute("RELEASE SAVEPOINT casino_refund")
+                    if is_ledger_tx_id_unique_error(exc):
+                        matched = await lookup_idempotent_ledger_entry(tx, refund_id, expected)
+                        if matched is not None:
+                            return matched.balance_after
+                    raise
+                else:
+                    await tx.execute("RELEASE SAVEPOINT casino_refund")
                 return new_bal
+        except IdempotencyConflict:
+            conflict_raised = True
+            raise
         finally:
-            async with self._lock:
-                self._active_wagers.discard((gid, uid))
+            if not conflict_raised:
+                async with self._lock:
+                    self._active_wagers.discard((gid, uid))
 
     async def forfeit_wager(
         self,
