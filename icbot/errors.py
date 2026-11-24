@@ -141,6 +141,25 @@ class ConcurrencyConflictError(BotError, RuntimeError):
     """Raised when a concurrent update or active session lock blocks a duplicate operation."""
 
 
+class IdempotencyConflict(ConcurrencyConflictError):
+    """Raised when an idempotency key collides with an existing transaction whose semantic identity differs.
+
+    Public messages intentionally omit user IDs, guild IDs, raw keys, balances, and reference strings
+    to avoid leaking sensitive or cross-tenant data.
+    """
+
+    DEFAULT_MESSAGE = "Idempotency key conflict: request parameters do not match the existing transaction."
+
+    def __init__(
+        self,
+        message: str = DEFAULT_MESSAGE,
+        *,
+        mismatched_fields: Iterable[str] = (),
+    ) -> None:
+        super().__init__(message)
+        self.mismatched_fields: tuple[str, ...] = tuple(str(f) for f in mismatched_fields)
+
+
 class InsufficientBalanceError(BotError, RuntimeError):
     """Raised when a user lacks sufficient virtual currency for an operation."""
 
