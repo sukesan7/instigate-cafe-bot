@@ -1046,6 +1046,146 @@ class UserStore:
             "warnings": export_warnings,
         }
 
+    async def preview_delete_user_data(
+        self,
+        user_id: int,
+        *,
+        guild_id: int | None = None,
+        anonymize_ledger: bool = True,
+        delete_global_preferences: bool = False,
+        retain_admin_actor_audit: bool = True,
+    ) -> dict[str, Any]:
+        """Read-only dry-run preview enumerating affected table counts for ``delete_user_data()``.
+
+        Returns only integer counts and policy flags (never private row contents or PII) and
+        performs zero database writes.
+        """
+        uid = int(user_id)
+        gid = self._resolve_gid(guild_id)
+
+        async def _count(sql: str, params: tuple[Any, ...]) -> int:
+            row = await self.db.fetchone(sql, params)
+            return int(row[0]) if row and row[0] is not None else 0
+
+        users_cnt = await _count(
+            "SELECT COUNT(1) FROM users WHERE guild_id=? AND user_id=?",
+            (gid, uid),
+        )
+        bj_cnt = await _count(
+            "SELECT COUNT(1) FROM blackjack_users WHERE guild_id=? AND user_id=?",
+            (gid, uid),
+        )
+        pos_cnt = await _count(
+            "SELECT COUNT(1) FROM fun_positions WHERE guild_id=? AND user_id=?",
+            (gid, uid),
+        )
+        trades_cnt = await _count(
+            "SELECT COUNT(1) FROM fun_trades WHERE guild_id=? AND user_id=?",
+            (gid, uid),
+        )
+        exams_cnt = await _count(
+            "SELECT COUNT(1) FROM exams WHERE guild_id=? AND created_by=?",
+            (gid, uid),
+        )
+        resources_cnt = await _count(
+            "SELECT COUNT(1) FROM academic_resources WHERE guild_id=? AND added_by=?",
+            (gid, uid),
+        )
+        fse_cnt = await _count(
+            "SELECT COUNT(1) FROM fun_stock_events WHERE guild_id=? AND user_id=?",
+            (gid, uid),
+        )
+        se_cnt = await _count(
+            "SELECT COUNT(1) FROM stock_events WHERE guild_id=? AND user_id=?",
+            (gid, uid),
+        )
+        fmw_cnt = await _count(
+            "SELECT COUNT(1) FROM fun_market_weeks WHERE guild_id=? AND settled_by=?",
+            (gid, uid),
+        )
+        other_guild_profiles = await _count(
+            "SELECT COUNT(1) FROM users WHERE user_id=? AND guild_id!=?",
+            (uid, gid),
+        )
+        has_prefs = (
+            await _count(
+                "SELECT COUNT(1) FROM user_job_preferences WHERE user_id=?",
+                (uid,),
+            )
+            > 0
+        )
+        will_delete_prefs = has_prefs and (delete_global_preferences or other_guild_profiles == 0)
+
+        ledger_cnt = await _count(
+            "SELECT COUNT(1) FROM economy_ledger WHERE guild_id=? AND user_id=?",
+            (gid, uid),
+        )
+        audit_target_cnt = await _count(
+            "SELECT COUNT(1) FROM admin_audit_log WHERE guild_id=? AND target_user_id=?",
+            (gid, uid),
+        )
+        audit_actor_cnt = (
+            0
+            if retain_admin_actor_audit
+            else await _count(
+                "SELECT COUNT(1) FROM admin_audit_log WHERE guild_id=? AND admin_user_id=?",
+                (gid, uid),
+            )
+        )
+        gs_actor_cnt = (
+            0
+            if retain_admin_actor_audit
+            else await _count(
+                "SELECT COUNT(1) FROM guild_settings_audit WHERE guild_id=? AND actor_id=?",
+                (gid, uid),
+            )
+        )
+
+        counts: dict[str, int] = {
+            "users_to_delete": users_cnt,
+            "blackjack_users_to_delete": bj_cnt,
+            "fun_positions_to_delete": pos_cnt,
+            "fun_trades_to_anonymize": trades_cnt if anonymize_ledger else 0,
+            "fun_trades_to_delete": 0 if anonymize_ledger else trades_cnt,
+            "exams_to_anonymize": exams_cnt,
+            "academic_resources_to_anonymize": resources_cnt,
+            "fun_stock_events_to_anonymize": fse_cnt,
+            "stock_events_to_anonymize": se_cnt,
+            "fun_market_weeks_to_anonymize": fmw_cnt,
+            "user_job_preferences_to_delete": 1 if will_delete_prefs else 0,
+            "user_job_preferences_retained_cross_guild": (1 if (has_prefs and not will_delete_prefs) else 0),
+            "economy_ledger_preserved": ledger_cnt,
+            "economy_ledger_to_tombstone": ledger_cnt if anonymize_ledger else 0,
+            "admin_audit_target_to_scrub": audit_target_cnt,
+            "admin_audit_actor_to_zero": audit_actor_cnt,
+            "guild_settings_audit_actor_to_zero": gs_actor_cnt,
+        }
+        mutation_keys = (
+            "users_to_delete",
+            "blackjack_users_to_delete",
+            "fun_positions_to_delete",
+            "fun_trades_to_anonymize",
+            "fun_trades_to_delete",
+            "exams_to_anonymize",
+            "academic_resources_to_anonymize",
+            "fun_stock_events_to_anonymize",
+            "stock_events_to_anonymize",
+            "fun_market_weeks_to_anonymize",
+            "user_job_preferences_to_delete",
+            "economy_ledger_to_tombstone",
+            "admin_audit_target_to_scrub",
+            "admin_audit_actor_to_zero",
+            "guild_settings_audit_actor_to_zero",
+        )
+        return {
+            "counts": counts,
+            "other_guild_profiles": other_guild_profiles,
+            "would_mutate": any(counts[k] > 0 for k in mutation_keys),
+            "anonymize_ledger": anonymize_ledger,
+            "delete_global_preferences": delete_global_preferences,
+            "retain_admin_actor_audit": retain_admin_actor_audit,
+        }
+
     async def delete_user_data(
         self,
         user_id: int,
