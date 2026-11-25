@@ -160,9 +160,15 @@ def _reset_service_globals() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_environment(monkeypatch: pytest.MonkeyPatch):
+def _isolate_environment(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
     """Ensure tests run with empty credentials, disabled pollers, and clean caches."""
-    cleared_vars = (
+    is_live_smoke_enabled = (
+        request.node.get_closest_marker("live_smoke") is not None
+        and os.getenv("ICBOT_ALLOW_LIVE_SMOKE", "") == "1"
+        and os.getenv("ICBOT_LIVE_SMOKE_OPT_IN", "").lower() == "true"
+    )
+
+    always_cleared_vars = (
         "DISCORD_TOKEN",
         "GUILD_ID",
         "ALLOWED_ROLE_IDS",
@@ -175,22 +181,28 @@ def _isolate_environment(monkeypatch: pytest.MonkeyPatch):
         "MARKET_DAILY_REPORT_CHANNEL_ID",
         "BTC_WATCH_CHANNEL_ID",
         "GEMINI_API_KEY",
-        "GO_API_KEY",
-        "ODDS_API_KEY",
         "GREENHOUSE_BOARDS",
         "LEVER_SITES",
         "WORKDAY_SITES",
         "NOTES_SITES",
         "LORE_PATH",
-        "TTC_MASTODON_BASE",
-        "TTC_MASTODON_ACCT",
         "BTC_WATCH_ADDRESSES",
         "FEATURE_PROFILE",
         "ENABLED_FEATURES",
         "DISABLED_FEATURES",
     )
-    for var in cleared_vars:
+    for var in always_cleared_vars:
         monkeypatch.setenv(var, "")
+
+    if not is_live_smoke_enabled:
+        for var in (
+            "GO_API_KEY",
+            "GO_API_BASE",
+            "ODDS_API_KEY",
+            "TTC_MASTODON_BASE",
+            "TTC_MASTODON_ACCT",
+        ):
+            monkeypatch.setenv(var, "")
 
     disabled_flags = (
         "LLM_ENABLED",

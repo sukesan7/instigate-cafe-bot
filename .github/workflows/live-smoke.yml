@@ -1,21 +1,32 @@
-name: Live Provider Smoke Check (Optional)
+name: Live Provider Smoke Check (Manual Opt-In Only)
 
-# Distinct optional scheduled smoke checks for live third-party endpoints.
-# - Gated by explicit repository secrets / workflow dispatch.
-# - NEVER part of required PR tests.
-# - Zero Discord gateway activity (never starts main.py or bot.run).
-# - Zero Railway deployment steps.
+# Strictly manual opt-in diagnostics for official/public third-party endpoints.
+# - Manual workflow_dispatch ONLY (no schedule, no pull_request, no push).
+# - Inert by default unless BOTH confirm_live_network=true AND secrets.OPT_IN_LIVE_SMOKE=='true'.
+# - Mere presence of GO_API_KEY or other secrets never triggers automatic network calls.
+# - Zero Discord gateway activity (DISCORD_TOKEN="", ICBOT_ALLOW_GATEWAY="false").
+# - Zero paid Gemini AI calls (GEMINI_API_KEY="", LLM_ENABLED="false").
+# - Zero production DB or Railway deployment steps.
 
 on:
   workflow_dispatch:
     inputs:
+      confirm_live_network:
+        description: "Set to true to explicitly authorize bounded live provider HTTP checks"
+        type: boolean
+        required: true
+        default: false
       provider:
-        description: "Provider suite to smoke check (all, academics, transit, jobs)"
-        required: false
-        default: "all"
-  schedule:
-    # Low-frequency opt-in check: Sundays at 04:00 UTC
-    - cron: "0 4 * * 0"
+        description: "Provider target to check"
+        type: choice
+        required: true
+        default: "go_transit"
+        options:
+          - go_transit
+          - ttc_mastodon
+          - sports_odds
+          - crypto_fng
+          - all
 
 permissions:
   contents: read
@@ -25,38 +36,54 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  DISCORD_TOKEN: ""
+  GEMINI_API_KEY: ""
   ICBOT_ALLOW_GATEWAY: "false"
   LLM_ENABLED: "false"
+  MARKET_WATCH_ENABLED: "false"
+  MARKET_DAILY_REPORT_ENABLED: "false"
+  BTC_WATCH_ENABLED: "false"
+  JOBS_POLL_SECONDS: "0"
+  WORKDAY_POLL_SECONDS: "0"
+  DB_PATH: ":memory:"
 
 jobs:
   live-smoke:
-    name: Live Provider Smoke Diagnostics
+    name: Live Provider Smoke Diagnostics (Manual Opt-In)
     runs-on: ubuntu-latest
     steps:
+      - name: Record disabled state when manual opt-in is absent
+        if: ${{ inputs.confirm_live_network != true }}
+        run: |
+          echo "## Live Provider Smoke Summary: \`DISABLED\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Reason:** \`confirm_live_network\` was not set to \`true\` (workflow is inert)." >> "$GITHUB_STEP_SUMMARY"
+          echo "[NOTICE] Live smoke is disabled (confirm_live_network != true). Exiting cleanly."
+
       - name: Check out repository
+        if: ${{ inputs.confirm_live_network == true }}
         uses: actions/checkout@v4.2.2
 
       - name: Set up uv and Python 3.12
+        if: ${{ inputs.confirm_live_network == true }}
         uses: astral-sh/setup-uv@v5.1.0
         with:
           enable-cache: true
           python-version: "3.12"
 
       - name: Install locked development environment
+        if: ${{ inputs.confirm_live_network == true }}
         run: uv sync --frozen --dev
 
-      - name: Verify credential gating and run live smoke
+      - name: Execute gated live provider smoke runner
+        if: ${{ inputs.confirm_live_network == true }}
         env:
           OPT_IN_LIVE_SMOKE: ${{ secrets.OPT_IN_LIVE_SMOKE }}
           GO_API_KEY: ${{ secrets.GO_API_KEY }}
+          GO_API_BASE: ${{ secrets.GO_API_BASE }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          TTC_MASTODON_BASE: ${{ secrets.TTC_MASTODON_BASE }}
+          TTC_MASTODON_ACCT: ${{ secrets.TTC_MASTODON_ACCT }}
         run: |
-          if [ "$OPT_IN_LIVE_SMOKE" != "true" ] && [ -z "$GO_API_KEY" ]; then
-            echo "[NOTICE] Live provider smoke checks are disabled (no OPT_IN_LIVE_SMOKE secret or live keys set)."
-            echo "Skipping live endpoint verification to avoid uncredentialed scraping."
-            exit 0
-          fi
-          echo "Executing opt-in live smoke checks for provider: ${{ inputs.provider || 'all' }}..."
-          uv run pytest -m live_smoke --tb=short
-
+          uv run python tools/run_live_smoke.py \
+            --provider "${{ inputs.provider }}" \
+            --enable-live-network

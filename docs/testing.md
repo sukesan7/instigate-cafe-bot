@@ -20,7 +20,7 @@ Pytest configuration lives in [`pyproject.toml`](../pyproject.toml):
 | `storage` | SQLite WAL persistence, concurrency locks, multi-guild economy ledgers, Schema v1–v7 migrations | [`tests/integration/test_storage_user_and_market.py`](../tests/integration/test_storage_user_and_market.py), [`tests/integration/test_economy_and_market_invariants.py`](../tests/integration/test_economy_and_market_invariants.py) | Isolated `tmp_path` SQLite |
 | `discord_mock` | Slash commands, UI views, actor/guild guards, timeouts, RBAC, and DB settlement via `FakeInteraction` / `FakeClient` | [`tests/integration/test_discord_mock_commands.py`](../tests/integration/test_discord_mock_commands.py), [`tests/integration/test_interaction_state_and_pagination.py`](../tests/integration/test_interaction_state_and_pagination.py) | Mocked Discord + local fixtures |
 | `provider_contract` | External payload parsers, ATS pipeline, circuit breakers, poller checkpoints, and HTTP error-family matrix | [`tests/integration/test_provider_contracts.py`](../tests/integration/test_provider_contracts.py), [`tests/integration/test_pollers_and_http_errors.py`](../tests/integration/test_pollers_and_http_errors.py) | Monkeypatched `aiohttp` + [`tests/fixtures/`](../tests/fixtures/) |
-| `live_smoke` | Opt-in manual live checks (never collected automatically) | [`scripts/manual/`](../scripts/manual/README.md) | Requires explicit owner consent + `ICBOT_ALLOW_LIVE_SMOKE=1` |
+| `live_smoke` | Opt-in manual live checks for official/public endpoints (`go_transit`, `ttc_mastodon`, `sports_odds`, `crypto_fng`; excluded by default) | [`tests/live_smoke/test_live_provider_smoke.py`](../tests/live_smoke/test_live_provider_smoke.py), [`tools/run_live_smoke.py`](../tools/run_live_smoke.py) | Requires explicit `OPT_IN_LIVE_SMOKE=true` + `--enable-live-network` (`workflow_dispatch` only) |
 
 > **Development Workflow & CI:** See [Development & Tooling Guide](development.md) for `uv` setup, `Makefile` safety tiers, pre-commit hooks, and `.github/workflows/ci.yml`.
 
@@ -94,7 +94,15 @@ uv run python tools/run_staging_acceptance.py
 uv run python tools/verify_beta_readiness.py
 ```
 
-Manual opt-in live network probes (`probe_*.py`) reside in [`scripts/manual/`](../scripts/manual/README.md), excluded from pytest discovery and guarded behind `if __name__ == "__main__":`. Destructive administrative maintenance utilities live in [`scripts/admin/`](../scripts/admin/README.md) and default to `--dry-run`.
+Manual opt-in live network probes (`probe_*.py`) reside in [`scripts/manual/`](../scripts/manual/README.md), excluded from pytest discovery and guarded behind `if __name__ == "__main__":`.
+
+### 5.1 Live Provider Smoke Policy (`live_smoke` & `.github/workflows/live-smoke.yml`)
+- **No Scheduled Live Scraping:** Weekly `schedule` triggers were removed from [`.github/workflows/live-smoke.yml`](../.github/workflows/live-smoke.yml) so the mere presence of `GO_API_KEY` or other secrets never triggers automatic background network requests.
+- **Manual `workflow_dispatch` Only & Inert by Default:** The workflow runs only when an operator manually triggers `workflow_dispatch` with `confirm_live_network: true` **and** repository secret `OPT_IN_LIVE_SMOKE=true`. Otherwise it logs `DISABLED` and exits cleanly without installing dependencies or touching external endpoints.
+- **Bounded Provider Scope:** Automated `provider_contract` tests remain the primary verification gate for all adapters. Opt-in `live_smoke` diagnostics in [`tests/live_smoke/test_live_provider_smoke.py`](../tests/live_smoke/test_live_provider_smoke.py) cover only bounded official/public JSON checks (`go_transit`, `ttc_mastodon`, `sports_odds` `/v4/sports`, `crypto_fng`), strictly excluding Discord gateway, paid Gemini AI, and unofficial HTML/GraphQL/ATS scrapers (Yahoo Finance, RateMyProfessors, TMU Grades, course notes, Greenhouse/Lever/Workday).
+- **Honest Outcome Classification:** [`tools/run_live_smoke.py`](../tools/run_live_smoke.py) enforces `DISCORD_TOKEN=""`, `GEMINI_API_KEY=""`, `ICBOT_ALLOW_GATEWAY=false`, `DB_PATH=:memory:`, timeout/byte caps, and secret redaction, and fails if `0` tests are selected (pytest exit status 5) or if all selected checks are skipped due to missing credentials.
+
+Destructive administrative maintenance utilities live in [`scripts/admin/`](../scripts/admin/README.md) and default to `--dry-run`.
 
 ---
 

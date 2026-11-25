@@ -65,7 +65,7 @@ All hooks use `repo: local` so they run 100% offline with pinned `.venv` binarie
 
 ### 3.2 GitHub Actions Workflows
 - **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (Offline Quality Gate):** Runs on push to `main`, PRs, and manual dispatch across Python `3.11`, `3.12`, and `3.13` with least-privilege `contents: read` permissions and zero live tokens. Runs `uv lock --check`, `scan_secrets.py --enforce-clean`, `pip-audit`, `pre-commit`, `ruff check`, `ruff format --check`, `mypy`, `smoke_offline.py`, usability audit tests, and full `pytest` branch coverage. Contains zero deploy steps.
-- **[`.github/workflows/live-smoke.yml`](../.github/workflows/live-smoke.yml) (Optional Live Provider Smoke):** Never triggers on pull requests; gated behind explicit repository secrets (`OPT_IN_LIVE_SMOKE` / `GO_API_KEY`) and `ICBOT_ALLOW_GATEWAY=false`.
+- **[`.github/workflows/live-smoke.yml`](../.github/workflows/live-smoke.yml) (Optional Live Provider Smoke):** Manual `workflow_dispatch`-only (no `schedule`, never triggers on pull requests); remains inert unless BOTH `confirm_live_network: true` and repository secret `OPT_IN_LIVE_SMOKE=true` are set, and enforces `DISCORD_TOKEN=""`, `GEMINI_API_KEY=""`, `ICBOT_ALLOW_GATEWAY=false`, `DB_PATH=":memory:"`.
 - **[`.github/dependabot.yml`](../.github/dependabot.yml):** Weekly dependency update checks for `pip` and `github-actions`.
 
 ---
