@@ -160,33 +160,50 @@ Databases that ran `delete_user_data()` under earlier versions may contain alrea
 1. **Dry-run preview (default, read-only):** `await store.upgrade_legacy_erasure_tombstones(dry_run=True)` reports exact legacy row counts without writing to SQLite.
 2. **Verified backup + explicit owner approval:** `await store.upgrade_legacy_erasure_tombstones(dry_run=False, confirmed=True, backup_path='/data/backups/pre_tombstone_upgrade.db')` writes and verifies an online SQLite backup before atomically replacing legacy `anon_<12-alpha>` tokens on `user_id = 0` rows with unpredictable per-row CSPRNG tombstones, preserving `reference_id -> transaction_id` links and active user records untouched.
 
-### 5.4 Why No Self-Service Deletion Slash Command Is Exposed Yet
-A public user-facing `/ic privacy delete` slash command is intentionally **not** registered in the command tree until multi-guild vs. single-guild scope confirmation UX, unsettled casino escrow lockout checks, and admin audit retention policies are finalized. Until then, data export and erasure are executed by the server operator via `UserStore`:
+### 5.4 Reproducible Operator Maintenance Workflow (`tools/privacy_ops.py`)
+A public user-facing `/ic privacy delete` slash command is intentionally **not** registered in the command tree until multi-guild vs. single-guild scope confirmation UX, unsettled casino escrow lockout checks, and admin audit retention policies are finalized. Until then, self-hosted operators should inspect, export, and erase member records via [`tools/privacy_ops.py`](../tools/privacy_ops.py), which reuses `UserStore` and [`tools/backup_db.py`](../tools/backup_db.py) directly with `--dry-run` enabled by default and never prints PII or export JSON to terminal output.
+
+Before running any command, replace the target values for your deployment:
+- `<YOUR_DB_PATH>`: Local self-hosted path (for example `./data/campus.db` for Docker/systemd) **or** your mounted Railway persistent volume database path (`/data/campus.db`, accessed inside a maintenance shell on the Railway service/volume). Never point `--db-path` at `:memory:` or repository `tests/` fixtures, and never copy a production database into a staging environment.
+- `<YOUR_GUILD_SNOWFLAKE>`: Target Discord Server (Guild) ID (`1..9223372036854775807`).
+- `<YOUR_USER_SNOWFLAKE>`: Target Discord User ID (`1..9223372036854775807`).
 
 ```bash
-python3 -c "
-import asyncio
-from icbot.db import Database
-from icbot.services.user_service import UserStore
+# 1. Read-only dry-run preview (default --dry-run: zero SQLite writes, counts only, no PII printed)
+uv run python tools/privacy_ops.py \
+  --db-path ./data/campus.db \
+  --guild-id 123456789012345678 \
+  --user-id 987654321098765432 \
+  --action delete
 
-async def purge_member(guild_id: int, user_id: int) -> None:
-    db = Database('/data/campus.db')
-    await db.init()
-    try:
-        store = UserStore(db, guild_id=guild_id)
-        counts = await store.delete_user_data(
-            user_id,
-            guild_id=guild_id,
-            anonymize_ledger=True,
-            delete_global_preferences=False,
-            retain_admin_actor_audit=True,
-        )
-        print('Erasure & anonymization summary:', counts)
-    finally:
-        await db.close()
+# 2. Portable JSON export (writes chmod 0600 file; never dumps JSON to stdout/logs)
+uv run python tools/privacy_ops.py \
+  --db-path ./data/campus.db \
+  --guild-id 123456789012345678 \
+  --user-id 987654321098765432 \
+  --action export \
+  --no-dry-run \
+  --output ./exports/user_export.json
 
-asyncio.run(purge_member(GUILD_ID, USER_ID))
-"
+# 3. Real erasure (requires --no-dry-run, verified online SQLite backup, and interactive TTY phrase)
+uv run python tools/privacy_ops.py \
+  --db-path ./data/campus.db \
+  --guild-id 123456789012345678 \
+  --user-id 987654321098765432 \
+  --action delete \
+  --no-dry-run \
+  --backup-path ./backups/pre_delete_backup.db
 ```
+
+On **Railway deployments**, `DB_PATH` lives on the mounted persistent volume (`/data/campus.db`, separate from local `./data/campus.db`). Run the exact commands above inside an isolated maintenance shell with `--db-path /data/campus.db` (without starting a second bot replica). To roll back an accidental deletion, stop the bot process first and restore the verified pre-deletion snapshot via `tools/backup_db.py`:
+
+```bash
+uv run python tools/backup_db.py --restore ./backups/pre_delete_backup.db --dest ./data/campus.db
+```
+
+#### Retention & Responsibility Boundary
+- **What this repository provides:** Atomic single-guild erasure and unlinkable CSPRNG ledger tombstones (`UserStore.delete_user_data()`), scope-guarded global preference cleanup, batched JSON export (`UserStore.export_user_data()`), online hot backups (`tools/backup_db.py`), and pre-flight guarded dry-run/execution tooling (`tools/privacy_ops.py`).
+- **What remains the self-hosted operator's responsibility (Data Controller):** Setting host disk encryption, rotating and purging expired SQLite backups (`tools/backup_db.py`) and exported JSON files per your community's retention policy, reviewing shared free-text `exams` / `academic_resources` entries if needed, and honoring external Discord / Google Gemini data-controller obligations. Upstream repository maintainers have no access to self-hosted databases or backups.
+
 
 
