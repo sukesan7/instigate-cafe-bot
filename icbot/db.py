@@ -904,8 +904,11 @@ MIGRATIONS: tuple[Migration, ...] = (
 class Database:
     """Thread-safe SQLite database manager with WAL configuration and transactional unit-of-work."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, *, read_only: bool = False):
         self.path = prepare_sqlite_path(path, ensure_parent=False)
+        self._read_only = bool(read_only)
+        if self._read_only and _is_memory_path(self.path):
+            raise ValueError("Cannot open an in-memory SQLite database in read_only URI mode.")
         self._lock = asyncio.Lock()
         self._conn: aiosqlite.Connection | None = None
         self._closed = False
@@ -914,19 +917,31 @@ class Database:
     def is_closed(self) -> bool:
         return self._closed
 
+    @property
+    def is_read_only(self) -> bool:
+        return self._read_only
+
     async def _ensure_connected(self) -> aiosqlite.Connection:
         """Acquire or establish the managed aiosqlite connection with enforced PRAGMAs."""
         if self._closed:
             raise RuntimeError(f"Database({self.path}) is closed.")
         if self._conn is None:
-            self.path = prepare_sqlite_path(self.path, ensure_parent=True)
+            self.path = prepare_sqlite_path(self.path, ensure_parent=not self._read_only)
             # Connect with autocommit mode (isolation_level=None) so Python doesn't inject
             # implicit BEGIN statements behind our back, allowing strict BEGIN/BEGIN IMMEDIATE control.
-            conn = await aiosqlite.connect(self.path, isolation_level=None)
+            if self._read_only:
+                resolved = Path(self.path).resolve()
+                if not resolved.is_file():
+                    raise DatabasePathError(f"Read-only database file does not exist: {self.path!r}")
+                conn = await aiosqlite.connect(f"{resolved.as_uri()}?mode=ro", uri=True, isolation_level=None)
+            else:
+                conn = await aiosqlite.connect(self.path, isolation_level=None)
             try:
                 await conn.execute("PRAGMA foreign_keys = ON;")
                 await conn.execute("PRAGMA busy_timeout = 5000;")
-                if not _is_memory_path(self.path):
+                if self._read_only:
+                    await conn.execute("PRAGMA query_only = ON;")
+                elif not _is_memory_path(self.path):
                     await conn.execute("PRAGMA journal_mode = WAL;")
                     await conn.execute("PRAGMA synchronous = NORMAL;")
                 self._conn = conn
@@ -1318,6 +1333,8 @@ class Database:
         """
         if self._closed:
             raise RuntimeError("Database is closed.")
+        if self._read_only:
+            raise RuntimeError("Database is opened in read-only mode.")
         if _current_tx.get() is not None:
             raise RuntimeError(
                 "Nested transactions are not supported on the same database execution context."
