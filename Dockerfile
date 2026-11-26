@@ -13,8 +13,8 @@
 # ------------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm AS builder
 
-# Install uv binary from official image
-COPY --from=ghcr.io/astral-sh/uv:0.5.26 /uv /uvx /bin/
+# Install uv binary from official image (matches uv.lock revision = 5 toolchain)
+COPY --from=ghcr.io/astral-sh/uv:0.13.9 /uv /uvx /bin/
 
 WORKDIR /app
 

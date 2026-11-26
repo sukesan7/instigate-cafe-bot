@@ -55,7 +55,7 @@ Always pin `replicas: 1` in Docker Compose and Railway, and mount local SSD/bloc
 
 ### 4.1 Container Architecture & Honest Healthcheck Boundary
 [`Dockerfile`](../Dockerfile) builds a multi-stage, non-root image:
-- **Build Stage:** Installs locked runtime dependencies into `/app/.venv` from `uv.lock` using `ghcr.io/astral-sh/uv`.
+- **Build Stage:** Installs locked runtime dependencies into `/app/.venv` from `uv.lock` (`revision = 5`) using `ghcr.io/astral-sh/uv:0.13.9`.
 - **Runtime Stage:** `python:3.12-slim-bookworm` running as non-root `campusbot:campusbot` (`UID/GID 10001:10001`) with `/data` owned by `10001:10001` (`mode 0700`, never `0777`).
 - **Canonical Storage Env:** `DB_PATH=/data/campus.db`, `GRADES_DB_PATH=/data/tmu_grades.db`.
 - **Zero Inbound Ports:** No `EXPOSE` directive; Discord gateway and API calls are strictly outbound WSS/HTTPS.
@@ -75,8 +75,32 @@ cp .env.example .env
 chmod 600 .env
 # Edit .env to set DISCORD_TOKEN, GUILD_ID, and any optional provider keys
 
-# 3. Optional offline container build & mounted-volume smoke test (zero Discord connection)
+# 3. Tokenless throwaway-volume container smoke test (2-boot persistence + non-root UID 10001 check)
+THROW_VOL="$(mktemp -d)" && chmod 700 "$THROW_VOL" && sudo chown 10001:10001 "$THROW_VOL"
 docker build --build-arg APP_VERSION=1.0.0-rc1 -t campus-bot:1.0.0-rc1 .
+
+# Boot 1: verify imports, SQLite WAL init (v7), write sentinel state with ICBOT_ALLOW_GATEWAY=false
+docker run --rm --network none \
+  -e DB_PATH=/data/campus.db -e GRADES_DB_PATH=/data/tmu_grades.db \
+  -e DISCORD_TOKEN="" -e ICBOT_ALLOW_GATEWAY=false -e JOBS_POLL_SECONDS=0 -e WORKDAY_POLL_SECONDS=0 \
+  -v "$THROW_VOL:/data" --entrypoint python3 campus-bot:1.0.0-rc1 -c \
+  "import asyncio, icbot.bot; from icbot.config import Settings; from icbot.db import Database; \
+s = Settings.load_validated(); assert s.allow_gateway is False; \
+db = Database(s.db_path); asyncio.run(db.init()); \
+asyncio.run(db.execute('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', ('smoke_boot', 'ok'))); \
+asyncio.run(db.close())"
+
+# Boot 2 (stop/restart simulation): confirm persistence & non-root UID 10001 file ownership, then clean up
+docker run --rm --network none \
+  -e DB_PATH=/data/campus.db -e ICBOT_ALLOW_GATEWAY=false \
+  -v "$THROW_VOL:/data" --entrypoint python3 campus-bot:1.0.0-rc1 -c \
+  "import asyncio; from icbot.db import Database; \
+db = Database('/data/campus.db'); asyncio.run(db.init()); \
+row = asyncio.run(db.fetchone('SELECT value FROM meta WHERE key=?', ('smoke_boot',))); \
+assert row == ('ok',), f'Persistence check failed: {row}'; asyncio.run(db.close())"
+stat -c '%u:%g %a %n' "$THROW_VOL/campus.db" && rm -rf "$THROW_VOL"
+
+# Optional offline staging simulation inside container
 docker run --rm --network none \
   -e DB_PATH=/data/campus.db \
   -e GRADES_DB_PATH=/data/tmu_grades.db \
@@ -91,6 +115,12 @@ docker compose up -d --build
 docker compose logs -f campus-bot
 docker inspect --format='{{json .State.Health}}' campus-bot
 ```
+
+### 4.3 Readable Storage, Secret & Schema Startup Errors
+- **Permission-denied DB directory:** `prepare_sqlite_path()` fails closed with `DatabasePathError: Database parent directory ... is not writable by UID <uid>` (never silently falls back to `/app`).
+- **Missing `/data` mount / unwritable parent:** `prepare_sqlite_path()` fails closed with `DatabasePathError: Cannot create database parent directory ...`.
+- **Absent secrets / gateway guard:** Without `ICBOT_ALLOW_GATEWAY=true` or `--allow-gateway`, `main.py` exits with `Gateway launch disabled by runtime safeguard...`; with opt-in enabled and empty `DISCORD_TOKEN`, `main.py` exits with `Missing DISCORD_TOKEN in environment or .env`. Optional keys (`GEMINI_API_KEY`, `GO_API_KEY`, `ODDS_API_KEY`) stay valid offline.
+- **Old vs. unsupported schema:** Existing pre-v7 SQLite databases forward-migrate automatically inside `write_transaction()` (`Database.init()`) up to Schema `v7`; if `PRAGMA user_version > 7`, `Database.migrate()` raises `MigrationError` (`Installed database schema (user_version=...) is newer than the highest supported migration version (7)`).
 
 ---
 
@@ -132,7 +162,7 @@ Because production Railway deployments must never be modified automatically by s
 | Railway UI Setting | Required State | Purpose |
 | :--- | :--- | :--- |
 | **Autodeploy** | **OFF (Disabled)** — manual deploys only | Prevents unverified Git pushes from restarting production (note: disabling autodeploy does not stop an already active service). |
-| **Release Trigger** | **Manual Deploy Only** | Deploy only after offline tests, secret scans, and a verified backup pass. |
+| **Release Trigger** | **Manual Deploy Only** | Do not force a redeploy while auditing existing files or variables; deploy only after offline tests, secret scans, and a verified backup pass. |
 | **Start Command** | `python3 main.py --allow-gateway` | Satisfies the explicit gateway opt-in guard (`ICBOT_ALLOW_GATEWAY`). |
 | **Replicas** | **`1`** | Mandatory single-scheduler and SQLite WAL safety invariant. |
 | **Persistent Volume** | Mounted at **`/data`** | Writable by UID `10001` (`campusbot`) for `.db`, `-wal`, and `-shm`. |

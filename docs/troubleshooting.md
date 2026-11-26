@@ -15,18 +15,18 @@ Start every investigation with in-Discord diagnostics:
 
 ## 2. Startup & Configuration Errors
 
-### 2.1 Bot Refuses to Connect to Discord (`ICBOT_ALLOW_GATEWAY`)
-- **Symptom:** Running `python main.py` exits immediately with a gateway safeguard notice.
-- **Cause:** By design, live Discord connections are disabled by default to prevent accidental runs in development or CI.
-- **Fix:** Pass `--allow-gateway` (`uv run python main.py --allow-gateway`) or set `ICBOT_ALLOW_GATEWAY=true` in your runtime environment (Docker Compose / systemd / Railway).
+### 2.1 Bot Refuses to Connect to Discord (`ICBOT_ALLOW_GATEWAY` / Absent Secrets)
+- **Symptom:** Running `python main.py` exits immediately with `Gateway launch disabled by runtime safeguard...` or (when gateway opt-in is enabled without a token) `Missing DISCORD_TOKEN in environment or .env`.
+- **Cause:** Live Discord connections default to disabled for offline safety, and a valid `DISCORD_TOKEN` is required only when connecting to the gateway (optional keys such as `GEMINI_API_KEY`, `GO_API_KEY`, and `ODDS_API_KEY` degrade cleanly).
+- **Fix:** Pass `--allow-gateway` or set `ICBOT_ALLOW_GATEWAY=true` plus `DISCORD_TOKEN` in your runtime environment (`.env` / Docker Compose / systemd / Railway).
 
-### 2.2 `DatabasePathError` on Startup
-- **Symptom:** Startup fails closed with `DatabasePathError` (permission denied or unwritable parent directory).
-- **Cause:** `prepare_sqlite_path()` verifies that `DB_PATH`'s parent directory exists and is writable by the current user (`UID 10001` in Docker). The bot intentionally refuses to fall back silently to a different path.
+### 2.2 `DatabasePathError` on Startup (Permission Denied or Missing `/data` Mount)
+- **Symptom:** Startup fails closed with `DatabasePathError` (`Database parent directory ... is not writable by UID ...` or `Cannot create database parent directory ...`).
+- **Cause:** `prepare_sqlite_path()` verifies that `DB_PATH` exists and its parent directory is creatable/writable by the current user (`UID 10001` in Docker, `campusbot` in systemd). The bot intentionally refuses to fall back silently to `/app/ic_stock.db`.
 - **Fix:**
-  - Docker: `mkdir -p data && chmod 700 data && sudo chown 10001:10001 data` and verify `DB_PATH=/data/campus.db`.
+  - Docker: `mkdir -p data && chmod 700 data && sudo chown 10001:10001 data` and verify `DB_PATH=/data/campus.db` and the `./data:/data` mount.
   - systemd: Confirm `ReadWritePaths=/opt/campus-bot/data` and `chown -R campusbot:campusbot /opt/campus-bot/data`.
-  - Railway: Confirm a persistent volume is mounted at `/data` and `DB_PATH=/data/campus.db` is set.
+  - Railway: Confirm a persistent volume is mounted at `/data` and `DB_PATH=/data/campus.db` is set (do not fall back to ephemeral `/app`).
 
 ### 2.3 `DeprecationWarning: SQLITE_PATH`
 - **Symptom:** Startup logs warn that `SQLITE_PATH` is deprecated.
@@ -35,6 +35,10 @@ Start every investigation with in-Discord diagnostics:
 ### 2.4 `ConfigValidationError`
 - **Symptom:** Boot halts reporting an invalid integer, channel ID, timezone, or polling interval.
 - **Fix:** Check the flagged variable against [Configuration Reference](configuration.md). Secrets are automatically redacted from validation messages.
+
+### 2.5 `MigrationError` (Incompatible Database Schema Version)
+- **Symptom:** Boot halts with `MigrationError: Installed database schema (user_version=...) is newer than the highest supported migration version (7)` (older pre-v7 schemas forward-migrate automatically on boot).
+- **Fix:** Do not downgrade runtime code against a newer SQLite file; verify image version parity or restore the matching verified pre-upgrade backup via `tools/backup_db.py --restore`.
 
 ---
 

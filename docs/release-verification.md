@@ -46,15 +46,24 @@ All commands below were executed offline with `ICBOT_ALLOW_GATEWAY=false`, blank
 
 ---
 
-## 3. Checks Not Executed Locally (Require CI or Manual Owner Action)
+## 3. Verification Tiers & Checks Not Executed Locally
 
-The following checks are **not executed** inside this offline sandbox and are **not** marked green until run in GitHub Actions or by the repository owner:
+Distinguish explicitly among three separate verification tiers—local offline passes must never be cited as container or live Discord acceptance:
+
+| Tier | Scope | Local Sandbox Status | Reproducible Reference |
+| :--- | :--- | :---: | :--- |
+| **Offline Staging Simulation** | Synthetic `tmp_path` volume tests, `tools/smoke_staging.py`, WAL Schema v1–v7 upgrades, `DatabasePathError`/`MigrationError` fail-closed guards, and `tools/backup_db.py` | **Executed Locally (PASS)** | `uv run python tools/smoke_staging.py` & `uv run python tools/verify_offline.py` |
+| **Container Smoke** | Real Docker image build (`uv:0.13.9` + `uv.lock`), two-boot `/data/campus.db` persistence & non-root `UID 10001` file ownership with `ICBOT_ALLOW_GATEWAY=false` | **Not Executed Locally** *(Docker daemon `/var/run/docker.sock` absent)* | Multi-boot throwaway-volume plan in [`docs/deployment.md`](deployment.md#42-setup-and-offline-container-verification-commands) |
+| **Authenticated Live Discord Acceptance** | Real staging Discord bot token, live guild slash-command sync, and end-to-end provider round-trips | **Not Executed Locally** *(prohibited in automated runs)* | Manual owner checklist in [`docs/staging-runbook.md`](staging-runbook.md) |
+
+The following environment-dependent checks are **not executed** inside this offline sandbox (`systemd-analyze verify` also failed to create `/run/systemd/` on the sandbox's read-only `/run` filesystem, though strict Python INI parsing and `Settings.load_validated()` env validation pass locally):
 
 | Check | Status | Why Not Executed Locally | Exact Reproducible Command / Workflow |
 | :--- | :--- | :--- | :--- |
-| **Python 3.11 & 3.13 full test matrix** | **Not Executed Locally** | Only `Python 3.12.13` (and unsupported host `3.14.10`) are installed locally without PyPI network access. | Trigger [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (`matrix.python-version: ["3.11", "3.12", "3.13"]`) or run locally on a host with 3.11/3.13: `uv venv --python 3.13 .venv313 && UV_PROJECT_ENVIRONMENT=.venv313 uv sync --frozen --dev && .venv313/bin/python tools/verify_offline.py` |
+| **Python 3.11 & 3.13 full test matrix** | **Not Executed Locally** | Only `Python 3.12.13` venv deps are cached locally without PyPI network access. | Trigger [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (`matrix.python-version: ["3.11", "3.12", "3.13"]`) or run locally on a host with PyPI access: `uv venv --python 3.13 .venv313 && UV_PROJECT_ENVIRONMENT=.venv313 uv sync --frozen --dev && .venv313/bin/python tools/verify_offline.py` |
 | **Dependency vulnerability audit (`pip-audit`)** | **Not Executed Locally** | Queries PyPI OSV advisory API (no network in offline sandbox). | Executed in `.github/workflows/ci.yml` (`dependency-audit` job) or locally with network: `uv run pip-audit --desc auto` (or `make audit`) |
-| **Docker image build & offline container restart smoke** | **Not Executed Locally** | Docker daemon socket `/var/run/docker.sock` is unavailable in sandbox. | Run on host with Docker daemon: `docker build --build-arg APP_VERSION=1.0.0-rc1 -t campus-bot:1.0.0-rc1 . && docker run --rm --network none -e DB_PATH=/data/campus.db -e ICBOT_ALLOW_GATEWAY=false -v "$(pwd)/data:/data" --entrypoint python3 campus-bot:1.0.0-rc1 tools/smoke_staging.py` |
+| **Docker image build & 2-boot `/data` persistence smoke** | **Not Executed Locally** | Docker daemon socket `/var/run/docker.sock` is unavailable in sandbox. | Run on host with Docker daemon using throwaway `/data` volume plan in [`docs/deployment.md`](deployment.md#42-setup-and-offline-container-verification-commands) |
+| **`systemd-analyze verify` daemon check** | **Not Executed Locally** | Sandbox `/run/systemd/` filesystem is read-only (`Failed to create directory '/run/systemd/'`); INI structure and `Environment=` settings pass offline unit tests. | Run on target Linux host with systemd: `systemd-analyze verify ./systemd/campus-bot.service` |
 | **Live Discord Gateway sync & upstream API round-trips** | **Not Executed Locally** | Strictly prohibited in automated runs; requires owner-supplied staging credentials. | Manual owner staging procedure in [`docs/staging-runbook.md`](staging-runbook.md) |
 
 ---
