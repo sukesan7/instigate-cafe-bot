@@ -8,7 +8,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-import yaml
 
 import icbot
 from icbot.bot import resolve_intent_policy
@@ -26,7 +25,7 @@ from icbot.guild_config import (
     resolve_effective_settings,
 )
 from icbot.registry import FEATURE_MANIFESTS
-from tools import check_command_docs, check_docs, run_live_smoke
+from tools import check_command_docs, check_docs
 
 pytestmark = pytest.mark.unit
 
@@ -165,16 +164,7 @@ def test_feature_flags_process_vs_guild_scope_and_deployment_alignment() -> None
     assert "ICBOT_ALLOW_GATEWAY=true" in deploy_doc
     assert "--allow-gateway" in deploy_doc
     assert "277025507392" in deploy_doc
-
-    # Live smoke policy doc parity with live-smoke workflow & runner
-    smoke_wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "live-smoke.yml").read_text("utf-8"))
-    triggers = smoke_wf.get("on") or smoke_wf.get(True) or {}
-    assert list(triggers.keys()) == ["workflow_dispatch"]
-    for provider in ("go_transit", "ttc_mastodon", "sports_odds", "crypto_fng"):
-        assert provider in run_live_smoke.VALID_PROVIDERS
-        assert provider in dev_doc
-    assert "DISABLED" in dev_doc
-    assert "SKIPPED_UNCONFIGURED" in dev_doc or "missing credentials" in dev_doc.lower()
+    assert "Offline Test Suite" in dev_doc
 
 
 def test_all_local_markdown_links_and_command_parity_pass() -> None:

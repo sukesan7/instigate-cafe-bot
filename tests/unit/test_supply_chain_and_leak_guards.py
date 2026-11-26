@@ -129,33 +129,6 @@ def test_ci_workflow_least_privilege_and_no_gateway():
         assert "deploy" not in r.lower(), "CI must be strictly CI-only without deployment actions"
 
 
-def test_live_smoke_workflow_gated_and_isolated_from_pr():
-    """Verify live smoke workflow is never triggered on pull_request and is gated by credentials."""
-    smoke_path = REPO_ROOT / ".github" / "workflows" / "live-smoke.yml"
-    assert smoke_path.exists(), "Missing .github/workflows/live-smoke.yml"
-
-    with open(smoke_path, encoding="utf-8") as f:
-        workflow = yaml.safe_load(f)
-
-    # 1. Must never trigger on pull_request (YAML coerces unquoted 'on' to True)
-    triggers = workflow.get("on") or workflow.get(True) or {}
-    assert "pull_request" not in triggers, "Live smoke checks must NEVER run on pull requests"
-    assert "workflow_dispatch" in triggers or "schedule" in triggers
-
-    # 2. Least privilege permissions
-    assert workflow.get("permissions") == {"contents": "read"}
-
-    # 3. Gateway safety env
-    assert workflow.get("env", {}).get("ICBOT_ALLOW_GATEWAY") == "false"
-
-    # 4. Zero deployment triggers
-    steps = workflow["jobs"]["live-smoke"]["steps"]
-    step_runs = [s.get("run", "") for s in steps]
-    for r in step_runs:
-        assert "railway" not in r.lower()
-        assert "deploy" not in r.lower()
-
-
 def test_dependabot_configuration_syntax():
     """Verify dependabot configuration for pip and github-actions."""
     dep_path = REPO_ROOT / ".github" / "dependabot.yml"

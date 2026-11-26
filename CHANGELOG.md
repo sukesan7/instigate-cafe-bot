@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Removed obsolete release/benchmark/live-smoke scaffolding (`tools/run_staging_acceptance.py`, `tools/run_usability_audit.py`, `tools/verify_beta_readiness.py`, `tools/benchmark_profile.py`, `tools/benchmark_db.py`, `tools/run_live_smoke.py`, `.github/workflows/live-smoke.yml`, `tests/live_smoke/`) and unused `aioresponses` dev dependency after extracting uncovered fault-injection, concurrency, recovery, and permission regressions into integration tests; streamlined `.pre-commit-config.yaml`, `Makefile`, and `.github/workflows/ci.yml` to eliminate duplicate test/typecheck runs.
 - Consolidated repository documentation into [`docs/`](docs/README.md) (`architecture.md`, `configuration.md`, `deployment.md`, `development.md`, `features.md`, `gallery.md`, `privacy.md`, `providers.md`), merged testing and UI conventions into [`docs/development.md`](docs/development.md), and merged troubleshooting into [`docs/deployment.md`](docs/deployment.md).
 - Rebuilt [`README.md`](README.md) to separate ordinary self-hosting setup (`uv sync --frozen --no-dev` / `pip`, `.env.example`, `--allow-gateway` opt-in, Discord Developer Portal setup) from contributor development tooling in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 - Hardened SSRF boundaries across `icbot/academics/url_safety.py`, `BoundedHttpTransport`, academic providers, and `WorkdayAdapter` with connector-level DNS IP validation, bounded redirect validation, and streaming response byte caps.

@@ -32,7 +32,7 @@ SAFE_ENV := env \
 STYLE_PATHS := .
 TYPECHECK_PATHS := .
 
-.PHONY: help format format-check lint lint-baseline typecheck typecheck-baseline smoke-offline test test-cov precommit verify export-requirements audit check
+.PHONY: help format format-check lint typecheck smoke-offline test test-cov precommit verify export-requirements audit check
 
 help:
 	@echo "Instigate Cafe Bot — Offline Developer Tooling"
@@ -41,18 +41,16 @@ help:
 	@echo "  make format              Format repository Python files with Ruff"
 	@echo "  make format-check        Verify Ruff formatting across repository"
 	@echo "  make lint                Run Ruff lint across repository"
-	@echo "  make lint-baseline       Report Ruff statistics across icbot/, main.py, and tools/"
-	@echo "  make typecheck           Run mypy across icbot/, main.py, and tools/"
-	@echo "  make typecheck-baseline  Run mypy explicitly on icbot/, main.py, and tools/"
+	@echo "  make typecheck           Run mypy across repository"
 	@echo ""
 	@echo "Tier 2 (Offline-safe — synthetic fixtures & mocked network only):"
 	@echo "  make smoke-offline       AST-parse all Python files & verify zero-token offline module imports"
-	@echo "  make test                Run offline pytest suite (excludes live_smoke)"
+	@echo "  make test                Run offline pytest suite"
 	@echo "  make test-cov            Run offline pytest suite with branch coverage on icbot/"
 	@echo "  make precommit           Validate & run offline secret/hygiene/lint pre-commit hooks"
 	@echo "  make verify              Run single-command offline contributor verification with diagnostics"
 	@echo "  make export-requirements Regenerate requirements.lock and requirements.txt from uv.lock"
-	@echo "  make check               Run full offline CI quality gate locally"
+	@echo "  make check               Run lint, format, typecheck, offline smoke, precommit, and tests"
 	@echo ""
 	@echo "Tier 3 (Controlled network — PyPI Advisory DB only, never Discord/Railway):"
 	@echo "  make audit               Run pip-audit against pinned requirements.lock"
@@ -66,14 +64,8 @@ format-check:
 lint:
 	$(RUFF) check $(STYLE_PATHS)
 
-lint-baseline:
-	-$(RUFF) check icbot main.py tools --statistics
-
 typecheck:
 	$(MYPY) $(TYPECHECK_PATHS)
-
-typecheck-baseline:
-	-$(MYPY) icbot main.py tools
 
 smoke-offline:
 	$(SAFE_ENV) $(PYTHON) tools/smoke_offline.py

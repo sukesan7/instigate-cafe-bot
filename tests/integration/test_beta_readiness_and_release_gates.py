@@ -1,23 +1,13 @@
-# tests/integration/test_beta_readiness_and_release_gates.py
-"""Automated Integration & Release Gate Verification Tests for v1.0.0-rc1.
+"""Integration tests for multi-guild isolation, economy atomicity, privacy controls, and feature workflows.
 
-Evaluates the 8 Mandatory Release Gates for private alpha and public beta readiness:
-  - Gate 1: Multi-Discipline Onboarding & Autonomous Setup (CS/Eng vs. Biz/Commerce)
-  - Gate 2: Multi-Guild Data, Settings & Economy Isolation
-  - Gate 3: Security, Clean Secret Scan & Log Redaction
-  - Gate 4: Financial Economy Integrity & ACID Settlement
-  - Gate 5: Bounded Interactive Response Latency (< 2500ms)
-  - Gate 6: Predictable Provider Failure & Graceful Degradation
-  - Gate 7: Cost Controls, Quota Budgets & Feature-Flag Toggles
-  - Gate 8: Privacy-Preserving Feedback & RTBF Data Deletion Compliance
-
-All tests execute strictly offline using temporary, synthetic SQLite databases.
+All tests execute offline against temporary isolated SQLite databases.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -27,20 +17,41 @@ import pytest
 from icbot.academics.exams_service import ExamStore, ParsedExamDraft
 from icbot.config import Settings
 from icbot.db import Database
-from icbot.features.admin import setup_cmd
+from icbot.features.admin import audit_cmd, features_cmd, setup_cmd
+from icbot.features.blackjack import blackjack
 from icbot.features.exams import exams_add_cmd, exams_cmd
-from icbot.features.info import botinfo
+from icbot.features.info import botinfo, status_cmd
+from icbot.features.notes import notes_cmd
 from icbot.features.profile import profile_cmd
-from icbot.features.resume import ResumeConfirmView
-from icbot.logging import BOT_VERSION
+from icbot.features.resume import ResumeConfirmView, resume_cmd
 from icbot.services.fun_market import FunMarketStore
 from icbot.services.user_service import DailyAlreadyClaimedError, UserStore
 from tests.helpers import FakeClient, FakeInteraction, build_fake_member
-from tools.verify_beta_readiness import BetaReadinessVerifier
 
-STAGING_GUILD_ALPHA = 900_000_000_000_000_001  # CS & Software Eng cohort
-STAGING_GUILD_BETA = 900_000_000_000_000_002  # Business & Commerce cohort
+GUILD_ALPHA = 900_000_000_000_000_001
+GUILD_BETA = 900_000_000_000_000_002
 ADMIN_ROLE_ID = 888_000_000_000_000_001
+
+
+@dataclass
+class _SyntheticPdfAttachment:
+    filename: str = "sample_resume.pdf"
+    content: bytes = (
+        b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj\nxref\n0 4\n"
+        b"0000000000 65535 f\n0000000009 00000 n\n0000000058 00000 n\n"
+        b"0000000115 00000 n\ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n164\n%%EOF"
+    )
+    content_type: str = "application/pdf"
+    url: str = "https://cdn.discordapp.com/attachments/123/456/synthetic.pdf"
+
+    @property
+    def size(self) -> int:
+        return len(self.content)
+
+    async def read(self) -> bytes:
+        return self.content
 
 
 def _make_interaction(
@@ -55,24 +66,20 @@ def _make_interaction(
     return FakeInteraction(user=user, client=client, guild=guild, channel=channel, command_name=command_name)
 
 
-@pytest.mark.asyncio
-async def test_all_8_beta_readiness_release_gates(tmp_path: Path) -> None:
-    """Run the complete BetaReadinessVerifier harness and assert all 8 gates pass."""
-    verifier = BetaReadinessVerifier(tmp_path)
-    all_passed = await verifier.run_all()
-
-    assert all_passed is True, "Expected all 8 beta readiness release gates to pass."
-    assert len(verifier.results) == 8
-    assert all(r.passed for r in verifier.results)
-    assert BOT_VERSION == "v1.0.0-rc1"
+def _last_reply(inter: FakeInteraction) -> Any | None:
+    if inter.followup.messages:
+        return inter.followup.messages[-1]
+    if inter.response.sent_messages:
+        return inter.response.sent_messages[-1]
+    return None
 
 
 @pytest.mark.asyncio
 async def test_multi_discipline_onboarding_and_setup(tmp_path: Path) -> None:
-    """Verify autonomous onboarding and setup across CS and Business cohorts (Gate 1)."""
+    """Verify onboarding setup and exam scheduling across distinct guilds."""
     db_path = tmp_path / "gate1_test.db"
     settings = Settings(
-        guild_id=STAGING_GUILD_ALPHA,
+        guild_id=GUILD_ALPHA,
         db_path=str(db_path),
         allowed_role_ids=[ADMIN_ROLE_ID],
         allow_gateway=False,
@@ -81,11 +88,10 @@ async def test_multi_discipline_onboarding_and_setup(tmp_path: Path) -> None:
     await db.init()
 
     try:
-        # Cohort A: Computer Science (CPS209)
         cs_lead = build_fake_member(
             user_id=101, display_name="CS_Lead", role_ids=[ADMIN_ROLE_ID], administrator=True
         )
-        guild_cs = SimpleNamespace(id=STAGING_GUILD_ALPHA, name="CS Staging")
+        guild_cs = SimpleNamespace(id=GUILD_ALPHA, name="Alpha Guild")
 
         inter_setup = _make_interaction(
             user=cs_lead, guild=guild_cs, settings=settings, db=db, command_name="ic admin setup"
@@ -104,18 +110,13 @@ async def test_multi_discipline_onboarding_and_setup(tmp_path: Path) -> None:
             start_time="14:00",
             end_time="16:00",
         )
-        reply = (
-            inter_add_cs.followup.messages[-1]
-            if inter_add_cs.followup.messages
-            else inter_add_cs.response.sent_messages[-1]
-        )
-        assert "Added exam" in (reply.content or "")
+        reply = _last_reply(inter_add_cs)
+        assert reply is not None and "Added exam" in (reply.content or "")
 
-        # Cohort B: Business / Commerce (FIN300)
         biz_lead = build_fake_member(
             user_id=202, display_name="Biz_Lead", role_ids=[ADMIN_ROLE_ID], administrator=True
         )
-        guild_biz = SimpleNamespace(id=STAGING_GUILD_BETA, name="Biz Staging")
+        guild_biz = SimpleNamespace(id=GUILD_BETA, name="Beta Guild")
 
         inter_add_biz = _make_interaction(
             user=biz_lead, guild=guild_biz, settings=settings, db=db, command_name="ic exam add"
@@ -128,100 +129,84 @@ async def test_multi_discipline_onboarding_and_setup(tmp_path: Path) -> None:
             start_time="09:00",
             end_time="11:30",
         )
-        reply_biz = (
-            inter_add_biz.followup.messages[-1]
-            if inter_add_biz.followup.messages
-            else inter_add_biz.response.sent_messages[-1]
-        )
-        assert "Added exam" in (reply_biz.content or "")
+        reply_biz = _last_reply(inter_add_biz)
+        assert reply_biz is not None and "Added exam" in (reply_biz.content or "")
     finally:
         await db.close()
 
 
 @pytest.mark.asyncio
 async def test_multi_guild_economy_and_exam_isolation(tmp_path: Path) -> None:
-    """Verify strict tenancy isolation for exams and economy balances (Gate 2)."""
+    """Verify strict guild tenancy isolation for exams and economy balances."""
     db_path = tmp_path / "gate2_test.db"
     db = Database(str(db_path))
     await db.init()
 
     try:
-        # 1. Exam isolation
         store = ExamStore(db)
         await store.add_exam(
-            guild_id=STAGING_GUILD_ALPHA,
+            guild_id=GUILD_ALPHA,
             draft=ParsedExamDraft(
                 course_code="CPS109", course_name="CS I", start_ts=1797600000, end_ts=1797607200
             ),
             created_by=101,
         )
         await store.add_exam(
-            guild_id=STAGING_GUILD_BETA,
+            guild_id=GUILD_BETA,
             draft=ParsedExamDraft(
                 course_code="MTH140", course_name="Calc I", start_ts=1797700000, end_ts=1797707200
             ),
             created_by=202,
         )
 
-        exams_alpha = await store.list_exams(STAGING_GUILD_ALPHA)
-        exams_beta = await store.list_exams(STAGING_GUILD_BETA)
+        exams_alpha = await store.list_exams(GUILD_ALPHA)
+        exams_beta = await store.list_exams(GUILD_BETA)
 
         assert len(exams_alpha) == 1
         assert exams_alpha[0].course_code == "CPS109"
         assert len(exams_beta) == 1
         assert exams_beta[0].course_code == "MTH140"
 
-        # 2. Economy isolation: Same user ID in Guild Alpha and Beta
         u_store = UserStore(db)
         shared_uid = 999
-        await u_store.ensure_user(shared_uid, "DualMember", guild_id=STAGING_GUILD_ALPHA)
-        await u_store.ensure_user(shared_uid, "DualMember", guild_id=STAGING_GUILD_BETA)
+        await u_store.ensure_user(shared_uid, "DualMember", guild_id=GUILD_ALPHA)
+        await u_store.ensure_user(shared_uid, "DualMember", guild_id=GUILD_BETA)
 
-        await u_store.add_balance(
-            shared_uid, 500, category="grant", reference_id="g1", guild_id=STAGING_GUILD_ALPHA
-        )
+        await u_store.add_balance(shared_uid, 500, category="grant", reference_id="g1", guild_id=GUILD_ALPHA)
 
-        bal_alpha = await u_store.get_balance(shared_uid, guild_id=STAGING_GUILD_ALPHA)
-        bal_beta = await u_store.get_balance(shared_uid, guild_id=STAGING_GUILD_BETA)
-
-        assert bal_alpha == 1500  # Default 1000 + 500
-        assert bal_beta == 1000  # Untouched baseline
+        assert await u_store.get_balance(shared_uid, guild_id=GUILD_ALPHA) == 1500
+        assert await u_store.get_balance(shared_uid, guild_id=GUILD_BETA) == 1000
     finally:
         await db.close()
 
 
 @pytest.mark.asyncio
 async def test_financial_atomicity_and_concurrency_lock(tmp_path: Path) -> None:
-    """Verify ACID transaction settlement and double-click concurrency lock (Gate 4)."""
+    """Verify ACID transaction settlement, market buy, and daily claim cooldown lock."""
     db_path = tmp_path / "gate4_test.db"
     db = Database(str(db_path))
     await db.init()
 
     try:
-        u_store = UserStore(db, guild_id=STAGING_GUILD_ALPHA)
+        u_store = UserStore(db, guild_id=GUILD_ALPHA)
         uid = 404
         await u_store.ensure_user(uid, "EconomyUser")
 
-        # Daily claim (+100) -> 1100
         claimed_amt, bal_after = await u_store.claim_daily(uid)
         assert claimed_amt == 100
         assert bal_after == 1100
 
-        # Wager and payout
         await u_store.subtract_balance(uid, 300, category="casino_wager", reference_id="round_1")
         await u_store.add_balance(uid, 600, category="casino_payout", reference_id="round_1")
         assert await u_store.get_balance(uid) == 1400
 
-        # Equity trade: buy 2 IC @ $100 = $200
-        m_store = FunMarketStore(db, guild_id=STAGING_GUILD_ALPHA)
+        m_store = FunMarketStore(db, guild_id=GUILD_ALPHA)
         await m_store.sync_catalog()
         await m_store.buy_long(user_id=uid, symbol="IC", qty=2)
 
-        final_bal = await u_store.get_balance(uid)
-        assert final_bal == 1200
+        assert await u_store.get_balance(uid) == 1200
 
-        # Concurrency race: 10 parallel claims must result in 0 additional claims
-        async def try_claim():
+        async def try_claim() -> bool:
             try:
                 await u_store.claim_daily(uid)
                 return True
@@ -231,7 +216,6 @@ async def test_financial_atomicity_and_concurrency_lock(tmp_path: Path) -> None:
         results = await asyncio.gather(*(try_claim() for _ in range(10)))
         assert sum(1 for r in results if r is True) == 0
 
-        # Audit ledger reconciliation
         ledger = await u_store.get_ledger(uid)
         assert len(ledger) >= 4
     finally:
@@ -240,17 +224,17 @@ async def test_financial_atomicity_and_concurrency_lock(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_interactive_slash_command_latency_bounds(tmp_path: Path) -> None:
-    """Verify interactive slash commands defer or return well within 2500ms (Gate 5)."""
+    """Verify interactive slash commands defer or respond well within Discord's 3s deadline."""
     db_path = tmp_path / "gate5_test.db"
-    settings = Settings(guild_id=STAGING_GUILD_ALPHA, db_path=str(db_path), allow_gateway=False)
+    settings = Settings(guild_id=GUILD_ALPHA, db_path=str(db_path), allow_gateway=False)
     db = Database(str(db_path))
     await db.init()
 
     try:
         member = build_fake_member(user_id=505, display_name="SpeedTester")
-        guild = SimpleNamespace(id=STAGING_GUILD_ALPHA, name="Staging Alpha")
+        guild = SimpleNamespace(id=GUILD_ALPHA, name="Alpha Guild")
 
-        commands_to_test = [
+        commands_to_test: list[tuple[str, Any, dict[str, Any]]] = [
             ("ic botinfo", botinfo, {}),
             ("ic profile", profile_cmd, {}),
             ("ic exam list", exams_cmd, {}),
@@ -271,51 +255,118 @@ async def test_interactive_slash_command_latency_bounds(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_privacy_preserving_consent_and_rtbf_deletion(tmp_path: Path) -> None:
-    """Verify resume consent barrier, user data purge, and immutable audit ledger (Gate 8)."""
-    db_path = tmp_path / "gate8_test.db"
-    settings = Settings(guild_id=STAGING_GUILD_ALPHA, db_path=str(db_path), allow_gateway=False)
+async def test_offline_notes_degradation_and_feature_profile_gating(tmp_path: Path) -> None:
+    """Verify /ic notes degrades gracefully offline and student_core blocks casino while keeping academics."""
+    db_path = tmp_path / "profile_gate.db"
+    settings = Settings(
+        guild_id=GUILD_ALPHA,
+        db_path=str(db_path),
+        feature_profile="student_core",
+        allow_gateway=False,
+        allowed_role_ids=[ADMIN_ROLE_ID],
+    )
     db = Database(str(db_path))
     await db.init()
 
     try:
-        # 1. Resume Review Consent Barrier
-        mock_attachment = SimpleNamespace(filename="student_resume.pdf", size=18000)
+        member = build_fake_member(
+            user_id=707, display_name="FlagTester", role_ids=[ADMIN_ROLE_ID], administrator=True
+        )
+        guild = SimpleNamespace(id=GUILD_ALPHA, name="Alpha Guild")
+
+        inter_casino = _make_interaction(
+            user=member, guild=guild, settings=settings, db=db, command_name="ic casino blackjack"
+        )
+        await blackjack.callback(inter_casino, bet=50)
+        casino_msg = _last_reply(inter_casino)
+        assert casino_msg is not None
+        combined = (casino_msg.content or "") + (casino_msg.embed.description if casino_msg.embed else "")
+        assert "disabled" in combined.lower()
+
+        inter_notes = _make_interaction(
+            user=member, guild=guild, settings=settings, db=db, command_name="ic notes"
+        )
+        await notes_cmd.callback(inter_notes, course="CPS109")
+        notes_msg = _last_reply(inter_notes)
+        assert notes_msg is not None
+        assert "notes" in (notes_msg.content or "").lower() or notes_msg.embed is not None
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_privacy_consent_offline_checklist_and_admin_diagnostics(tmp_path: Path) -> None:
+    """Verify /ic resume offline checklist button, erasure deletion, admin feature toggle, and status report."""
+    db_path = tmp_path / "privacy_admin.db"
+    settings = Settings(
+        guild_id=GUILD_ALPHA,
+        db_path=str(db_path),
+        token="",
+        gemini_api_key="synth-gemini-key-test",
+        llm_enabled=True,
+        allow_gateway=False,
+    )
+    db = Database(str(db_path))
+    await db.init()
+
+    try:
         member = build_fake_member(user_id=808, display_name="PrivacySubject")
-        inter = _make_interaction(
-            user=member, guild=SimpleNamespace(id=STAGING_GUILD_ALPHA), settings=settings, db=db
-        )
-        confirm_view = ResumeConfirmView(
-            interaction=inter,
-            attachment=mock_attachment,
-            discipline_key="swe",
-            discipline_title="Software Engineering",
-            target_role="Junior Developer",
-            settings=settings,
-        )
-        labels = [getattr(c, "label", "") for c in confirm_view.children]
-        assert "Submit for AI Review" in labels
-        assert "View No-AI Checklist" in labels
-        assert "Cancel" in labels
+        admin = build_fake_member(user_id=909, administrator=True, display_name="GuildAdmin")
+        guild = SimpleNamespace(id=GUILD_ALPHA, owner_id=909, name="Alpha Guild", me=SimpleNamespace(id=777))
 
-        # 2. Right-to-be-Forgotten Data Deletion
-        u_store = UserStore(db, guild_id=STAGING_GUILD_ALPHA)
-        uid = 808
-        await u_store.ensure_user(uid, "PrivacySubject")
-        await u_store.add_balance(uid, 500, category="reward", reference_id="grant_1")
+        # 1. /ic resume consent view -> click View No-AI Checklist offline (zero Gemini API call)
+        inter_res = _make_interaction(
+            user=member, guild=guild, settings=settings, db=db, command_name="ic resume"
+        )
+        await resume_cmd.callback(
+            inter_res,
+            file=_SyntheticPdfAttachment(),  # type: ignore[arg-type]
+            discipline="SWE",
+            role="Junior Backend Engineer",
+        )
+        consent_reply = _last_reply(inter_res)
+        assert consent_reply is not None and consent_reply.view is not None
+        view: ResumeConfirmView = consent_reply.view
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert {"Submit for AI Review", "View No-AI Checklist", "Cancel"}.issubset(set(labels))
 
-        del_counts = await u_store.delete_user_data(uid, anonymize_ledger=True)
+        btn_inter = _make_interaction(user=member, guild=guild, settings=settings, db=db)
+        await view.checklist_button.callback(btn_inter)
+        check_reply = btn_inter.response.edit_messages[0] if btn_inter.response.edit_messages else None
+        assert check_reply is not None and check_reply.embed is not None
+        assert "Offline Resume Checklist" in (check_reply.embed.title or "")
+
+        # 2. Transactional user data deletion & ledger tombstoning
+        u_store = UserStore(db, guild_id=GUILD_ALPHA)
+        await u_store.ensure_user(808, "PrivacySubject")
+        await u_store.add_balance(808, 500, category="reward", reference_id="grant_1")
+        del_counts = await u_store.delete_user_data(808, anonymize_ledger=True)
         assert del_counts["users"] == 1
         assert del_counts["economy_ledger_preserved"] == 1
         assert del_counts["economy_ledger_anonymized"] == 1
+        assert await u_store.get_profile(808) is None
+        assert await u_store.get_ledger(808) == []
+        assert len(await u_store.get_ledger(0)) >= 1
 
-        # Profile deleted
-        profile_after = await u_store.get_profile(uid)
-        assert profile_after is None
+        # 3. Admin feature disable + audit trail + /ic status issue_report=True attachment
+        inter_feat = _make_interaction(
+            user=admin, guild=guild, settings=settings, db=db, command_name="ic admin features"
+        )
+        await features_cmd.callback(inter_feat, disable="casino")
+        assert _last_reply(inter_feat) is not None
 
-        # Original user_id has zero ledger rows; ledger records preserved under anonymized sentinel 0
-        assert await u_store.get_ledger(uid) == []
-        ledger_after = await u_store.get_ledger(0)
-        assert len(ledger_after) >= 1
+        inter_audit = _make_interaction(
+            user=admin, guild=guild, settings=settings, db=db, command_name="ic admin audit"
+        )
+        await audit_cmd.callback(inter_audit)
+        audit_reply = _last_reply(inter_audit)
+        assert audit_reply is not None and audit_reply.embed is not None
+
+        inter_status = _make_interaction(
+            user=admin, guild=guild, settings=settings, db=db, command_name="ic status"
+        )
+        await status_cmd.callback(inter_status, issue_report=True)
+        status_reply = _last_reply(inter_status)
+        assert status_reply is not None and status_reply.file is not None
     finally:
         await db.close()

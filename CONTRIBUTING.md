@@ -41,7 +41,7 @@ uv run pre-commit install
 ```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/pip install pytest pytest-asyncio pytest-cov aioresponses ruff mypy pre-commit pip-audit
+.venv/bin/pip install pytest pytest-asyncio pytest-cov ruff mypy pre-commit pip-audit
 ```
 
 *(Never hand-edit `requirements.txt` or `requirements.lock`; update `pyproject.toml`, run `uv lock`, and regenerate them with `make export-requirements`.)*

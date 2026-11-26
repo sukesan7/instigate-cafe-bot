@@ -54,13 +54,8 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _disable_outbound_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+def _disable_outbound_network(monkeypatch: pytest.MonkeyPatch):
     """Fail closed on any unmocked outbound socket/HTTP/DNS call during tests."""
-    is_live_smoke = request.node.get_closest_marker("live_smoke") is not None
-    if is_live_smoke and os.getenv("ICBOT_ALLOW_LIVE_SMOKE", "") == "1":
-        yield
-        return
-
     orig_connect = socket.socket.connect
     orig_connect_ex = socket.socket.connect_ex
     orig_getaddrinfo = socket.getaddrinfo
@@ -160,14 +155,8 @@ def _reset_service_globals() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_environment(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+def _isolate_environment(monkeypatch: pytest.MonkeyPatch):
     """Ensure tests run with empty credentials, disabled pollers, and clean caches."""
-    is_live_smoke_enabled = (
-        request.node.get_closest_marker("live_smoke") is not None
-        and os.getenv("ICBOT_ALLOW_LIVE_SMOKE", "") == "1"
-        and os.getenv("ICBOT_LIVE_SMOKE_OPT_IN", "").lower() == "true"
-    )
-
     always_cleared_vars = (
         "DISCORD_TOKEN",
         "GUILD_ID",
@@ -190,19 +179,14 @@ def _isolate_environment(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
         "FEATURE_PROFILE",
         "ENABLED_FEATURES",
         "DISABLED_FEATURES",
+        "GO_API_KEY",
+        "GO_API_BASE",
+        "ODDS_API_KEY",
+        "TTC_MASTODON_BASE",
+        "TTC_MASTODON_ACCT",
     )
     for var in always_cleared_vars:
         monkeypatch.setenv(var, "")
-
-    if not is_live_smoke_enabled:
-        for var in (
-            "GO_API_KEY",
-            "GO_API_BASE",
-            "ODDS_API_KEY",
-            "TTC_MASTODON_BASE",
-            "TTC_MASTODON_ACCT",
-        ):
-            monkeypatch.setenv(var, "")
 
     disabled_flags = (
         "LLM_ENABLED",

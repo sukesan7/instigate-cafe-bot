@@ -30,7 +30,7 @@ uv run pre-commit install
 # Fallback with standard Python + pip (outside uv)
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/pip install pytest pytest-asyncio pytest-cov aioresponses ruff mypy pre-commit pip-audit
+.venv/bin/pip install pytest pytest-asyncio pytest-cov ruff mypy pre-commit pip-audit
 
 # After changing dependencies in pyproject.toml (requires network):
 uv lock && make export-requirements
@@ -50,16 +50,15 @@ Developer targets in [`Makefile`](../Makefile) force offline environment variabl
 | **Tier 4: Live / Operator-Only** | `uv run python main.py --allow-gateway`, `uv run python scripts/admin/purge_global_commands.py --execute ...` | Never executed in CI, pre-commit, or tests. `purge_global_commands.py` defaults to `--dry-run`. |
 
 ### Offline Pre-Commit & GitHub Actions Workflows
-- **[`.pre-commit-config.yaml`](../.pre-commit-config.yaml):** Runs `repo: local` hooks (`block-forbidden-files`, `tools/scan_secrets.py --enforce-clean`, `block-private-key-blocks`, `tools/check_syntax.py`, Ruff lint/format) offline.
-- **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (Quality & Security Gate):** Uses `permissions: contents: read` with zero live secrets. Separates offline matrix checks (`quality` across Python `3.11`, `3.12`, and `3.13`: lockfile check, secret scan, pre-commit, Ruff, Mypy, offline AST/staging smokes, doc/command parity, usability benchmark, and `pytest --cov=icbot`) from the networked `dependency-audit` job (`pip-audit --desc auto`).
-- **[`.github/workflows/live-smoke.yml`](../.github/workflows/live-smoke.yml):** Manual `workflow_dispatch`-only workflow (no schedule, never runs on PRs) that exits `DISABLED` unless both `confirm_live_network: true` and repository secret `OPT_IN_LIVE_SMOKE=true` are present.
+- **[`.pre-commit-config.yaml`](../.pre-commit-config.yaml):** Runs `repo: local` hooks (`block-forbidden-files`, `ruff-format-check`, and `ruff-check`) offline.
+- **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (Quality & Security Gate):** Uses `permissions: contents: read` with zero live secrets. Separates offline matrix checks (`quality` across Python `3.11`, `3.12`, and `3.13`: lockfile check, secret scan, pre-commit, Ruff, Mypy, offline AST/staging smokes, doc/command parity, and `pytest --cov=icbot`) from the networked `dependency-audit` job (`pip-audit --desc auto`).
 - **[`.github/dependabot.yml`](../.github/dependabot.yml):** Weekly `pip` and `github-actions` update checks.
 
 ---
 
 ## 3. Offline Test Suite & Verification Scripts
 
-`pyproject.toml` sets `addopts = "--strict-markers -m 'not live_smoke'"`, excluding opt-in live probes by default.
+`pyproject.toml` configures `addopts = "--strict-markers"`, running the offline test suite cleanly with zero network I/O.
 
 ### Pytest Markers & Test Isolation ([`tests/conftest.py`](../tests/conftest.py))
 | Marker | Scope | External I/O |
@@ -68,7 +67,6 @@ Developer targets in [`Makefile`](../Makefile) force offline environment variabl
 | `storage` | SQLite WAL persistence, concurrency locks, multi-guild ledgers, Schema v1–v7 migrations | Temp `tmp_path` SQLite |
 | `discord_mock` | Slash commands, `BasePaginationView` / `BaseConfirmView` guards, RBAC via `FakeInteraction` / `FakeClient` | Mocked Discord |
 | `provider_contract` | Parsers, ATS pipeline, circuit breakers, and HTTP error-family matrix | Monkeypatched `aiohttp` + [`tests/fixtures/`](../tests/fixtures/) |
-| `live_smoke` | Opt-in public endpoint smoke (`go_transit`, `ttc_mastodon`, `sports_odds`, `crypto_fng`; excluded by default) | Requires `OPT_IN_LIVE_SMOKE=true` + `--enable-live-network` |
 
 Two `autouse=True` fixtures protect every automated test run:
 1. **`_disable_outbound_network`:** Blocks IPv4/IPv6 `socket.connect` / `connect_ex`, `socket.create_connection`, external `socket.getaddrinfo`, `urllib.request.urlopen`, `http.client`, and unmocked `aiohttp.ClientSession._request`, raising [`OfflineNetworkDisabledError`](../tests/helpers.py).
@@ -93,7 +91,7 @@ uv run python tools/check_command_docs.py
 uv run python tools/scan_secrets.py --enforce-clean
 ```
 
-`tools/run_live_smoke.py` enforces `DISCORD_TOKEN=""`, `GEMINI_API_KEY=""`, `ICBOT_ALLOW_GATEWAY=false`, `DB_PATH=:memory:`, byte/timeout caps, and fails closed (`DISABLED` / `SKIPPED_UNCONFIGURED`) if credentials are absent or zero checks run; opt-in live probes live in [`scripts/manual/`](../scripts/manual/README.md) (`probe_*.py`) and maintenance helpers in [`scripts/admin/`](../scripts/admin/README.md). Internal synthetic acceptance/benchmark scripts (`run_staging_acceptance.py`, `verify_beta_readiness.py`, `run_usability_audit.py`, `benchmark_db.py`, `benchmark_profile.py`) are exercised offline by the test suite.
+For manual live diagnostics of external providers, opt-in `probe_*.py` scripts live in [`scripts/manual/`](../scripts/manual/README.md) and operator slash-command maintenance helpers live in [`scripts/admin/`](../scripts/admin/README.md).
 
 ### Implemented Claim Boundaries (Tests vs. Live Deployment)
 - **Economy & casino:** Pure Python PRNG engines (`blackjack_engine.py`, `roulette_engine.py`, `slots_engine.py`), not cryptographic commit-reveal; ledger mutations use `BEGIN IMMEDIATE` SQLite transactions.

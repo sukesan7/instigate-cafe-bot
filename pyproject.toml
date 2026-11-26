@@ -34,7 +34,6 @@ dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=5.0.0",
-    "aioresponses>=0.7.6",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     "pre-commit>=4.0.0",
@@ -46,7 +45,6 @@ dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=5.0.0",
-    "aioresponses>=0.7.6",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     "pre-commit>=4.0.0",
@@ -72,7 +70,7 @@ norecursedirs = [
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "--strict-markers -m 'not live_smoke'"
+addopts = "--strict-markers"
 filterwarnings = [
     "ignore:'audioop' is deprecated and slated for removal in Python 3.13:DeprecationWarning",
 ]
@@ -81,7 +79,6 @@ markers = [
     "storage: Storage integration tests using temporary isolated SQLite databases.",
     "discord_mock: Mocked Discord integration tests using fake Interaction/Member/Client objects.",
     "provider_contract: External API contract tests using monkeypatched HTTP and sanitized local fixtures.",
-    "live_smoke: Opt-in manual live smoke diagnostics (excluded by default; never executed automatically).",
 ]
 
 [tool.coverage.run]

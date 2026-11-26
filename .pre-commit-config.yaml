@@ -1,5 +1,5 @@
-# Offline-capable local pre-commit quality & publication-safety hooks.
-# Uses repo: local hooks so checks run deterministically without cloning external hook repos.
+# Offline-capable local pre-commit hygiene & lint hooks.
+# Keeps git commits fast; full mypy and pytest suites run via `make verify` / CI.
 
 repos:
   - repo: local
@@ -13,13 +13,6 @@ repos:
         files: (^|/)(\.env(\..*)?$|.*\.db(-wal|-shm)?$|.*\.sqlite3?$|.*\.pem$|.*\.key$|id_(rsa|ed25519).*$|lore\.(?!example\.)[^/]+\.json$)
         exclude: ^(\.env\.example|tools/lore\.example\.json|tests/fixtures/synthetic_lore\.json)$
 
-      - id: ruff-format
-        name: Ruff format (ruff format .)
-        language: system
-        entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" format .'
-        pass_filenames: false
-        always_run: true
-
       - id: ruff-format-check
         name: Ruff format check (ruff format --check .)
         language: system
@@ -31,19 +24,5 @@ repos:
         name: Ruff lint (ruff check .)
         language: system
         entry: bash -c 'RUFF=$([ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff); exec "$RUFF" check .'
-        pass_filenames: false
-        always_run: true
-
-      - id: mypy-check
-        name: Mypy static type check (mypy .)
-        language: system
-        entry: bash -c 'MYPY=$([ -x .venv/bin/mypy ] && echo .venv/bin/mypy || echo mypy); exec "$MYPY" .'
-        pass_filenames: false
-        always_run: true
-
-      - id: pytest-check
-        name: Pytest offline test suite (pytest .)
-        language: system
-        entry: bash -c 'PYTEST=$([ -x .venv/bin/pytest ] && echo .venv/bin/pytest || echo pytest); exec "$PYTEST" .'
         pass_filenames: false
         always_run: true
