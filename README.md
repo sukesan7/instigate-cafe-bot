@@ -9,7 +9,7 @@ A modular, self-hostable Discord slash-command bot (`/ic`) for student communiti
 [![Version v1.0.0-rc1](https://img.shields.io/badge/version-v1.0.0--rc1-2b6cb0)](pyproject.toml)
 [![Python 3.11 | 3.12 | 3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776ab)](https://www.python.org/)
 [![License MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
-[![Offline Quality Gate](https://github.com/sukesan7/instigate-cafe-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/sukesan7/instigate-cafe-bot/actions/workflows/ci.yml)
+[![Quality & Security Gate](https://github.com/sukesan7/instigate-cafe-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/sukesan7/instigate-cafe-bot/actions/workflows/ci.yml)
 
 ---
 

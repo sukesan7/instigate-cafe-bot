@@ -1,4 +1,4 @@
-name: Offline Quality Gate
+name: Quality & Security Gate
 
 on:
   push:
@@ -33,8 +33,10 @@ env:
 
 jobs:
   quality:
-    name: Quality & Offline Tests (Python ${{ matrix.python-version }})
+    name: Offline Matrix Checks (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -48,6 +50,7 @@ jobs:
         uses: astral-sh/setup-uv@v5.1.0
         with:
           enable-cache: true
+          cache-dependency-glob: uv.lock
           python-version: ${{ matrix.python-version }}
 
       - name: Verify lockfile consistency
@@ -58,9 +61,6 @@ jobs:
 
       - name: Run deterministic secret and publish-safety scan
         run: uv run python tools/scan_secrets.py --enforce-clean
-
-      - name: Run dependency vulnerability audit
-        run: uv run pip-audit --desc auto
 
       - name: Validate and run offline pre-commit hooks
         run: |
@@ -106,3 +106,30 @@ jobs:
           path: coverage.xml
           retention-days: 14
           if-no-files-found: ignore
+
+  dependency-audit:
+    name: Dependency Vulnerability Audit (Networked PyPI/OSV)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up uv and Python 3.12
+        uses: astral-sh/setup-uv@v5.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: "3.12"
+
+      - name: Verify lockfile consistency
+        run: uv lock --check
+
+      - name: Install locked development environment
+        run: uv sync --frozen --dev
+
+      - name: Run dependency vulnerability audit (queries PyPI/OSV)
+        run: uv run pip-audit --desc auto

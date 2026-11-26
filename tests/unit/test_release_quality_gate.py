@@ -31,11 +31,11 @@ def test_ci_workflow_enforces_complete_non_production_quality_gate() -> None:
     assert {"3.11", "3.12", "3.13"}.issubset(set(py_versions))
 
     step_runs = "\n".join(str(s.get("run", "")) for s in workflow["jobs"]["quality"]["steps"])
-    required_commands = (
+    audit_runs = "\n".join(str(s.get("run", "")) for s in workflow["jobs"]["dependency-audit"]["steps"])
+    required_offline_commands = (
         "uv lock --check",
         "uv sync --frozen --dev",
         "tools/scan_secrets.py --enforce-clean",
-        "pip-audit",
         "ruff check .",
         "ruff format --check .",
         "mypy .",
@@ -47,13 +47,17 @@ def test_ci_workflow_enforces_complete_non_production_quality_gate() -> None:
         "pytest --collect-only",
         "pytest --cov=icbot",
     )
-    for cmd in required_commands:
-        assert cmd in step_runs, f".github/workflows/ci.yml missing required gate command: {cmd}"
+    for cmd in required_offline_commands:
+        assert cmd in step_runs, f".github/workflows/ci.yml missing required offline gate command: {cmd}"
+
+    assert "pip-audit" not in step_runs, "Offline matrix job must not invoke networked pip-audit"
+    assert "pip-audit" in audit_runs, "dependency-audit job must invoke pip-audit"
 
     # Safety boundary: never start live gateway or trigger Railway deploys
-    assert "--allow-gateway" not in step_runs
-    assert "railway" not in step_runs.lower()
-    assert "deploy" not in step_runs.lower()
+    all_runs = f"{step_runs}\n{audit_runs}"
+    assert "--allow-gateway" not in all_runs
+    assert "railway" not in all_runs.lower()
+    assert "deploy" not in all_runs.lower()
 
 
 def test_doc_and_image_validator_rejects_missing_screenshots_and_missing_docs(tmp_path: Path) -> None:

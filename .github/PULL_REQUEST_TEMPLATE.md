@@ -12,7 +12,7 @@ Fixes #(issue number)
 - [ ] Administration & Setup (`icbot/features/admin.py`)
 - [ ] Tooling / Infrastructure / Documentation
 
-## Offline Quality Gate Checklist
+## Offline Verification Checklist
 Before requesting review, confirm that all local offline checks pass:
 - [ ] `uv run pytest` passes 100% of tests offline.
 - [ ] `uv run ruff check . && uv run ruff format --check .` reports clean formatting.

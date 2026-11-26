@@ -105,18 +105,25 @@ def test_ci_workflow_least_privilege_and_no_gateway():
     assert "3.12" in py_versions
     assert "3.13" in py_versions
 
-    # 5. Review steps for pinned actions, pip-audit, and absence of deployment
+    # 5. Review steps across offline quality and networked dependency-audit jobs
     steps = workflow["jobs"]["quality"]["steps"]
     step_names = [s.get("name", "") for s in steps]
     step_runs = [s.get("run", "") for s in steps]
 
     assert any("secret" in name.lower() for name in step_names), "Missing secret scanning step name"
-    assert any("pip-audit" in r for r in step_runs), "Missing pip-audit dependency audit step"
+    assert not any("pip-audit" in r for r in step_runs), (
+        "Offline quality job must not run networked pip-audit"
+    )
     assert any("scan_secrets.py --enforce-clean" in r for r in step_runs), "Missing secret scanner step"
     assert any("smoke_offline.py" in r for r in step_runs), "Missing offline smoke check step"
 
+    audit_job = workflow["jobs"]["dependency-audit"]
+    assert audit_job.get("permissions") == {"contents": "read"}
+    audit_runs = [s.get("run", "") for s in audit_job["steps"]]
+    assert any("pip-audit" in r for r in audit_runs), "Missing pip-audit step in dependency-audit job"
+
     # Assert no steps execute live bot or deploy to Railway
-    for r in step_runs:
+    for r in [*step_runs, *audit_runs]:
         assert "main.py" not in r or "smoke_offline.py" in r, "CI must not invoke live main.py"
         assert "railway up" not in r, "CI must not contain Railway deployment triggers"
         assert "deploy" not in r.lower(), "CI must be strictly CI-only without deployment actions"
