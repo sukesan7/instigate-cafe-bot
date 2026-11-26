@@ -1,6 +1,6 @@
 # Instigate Cafe Bot — External Provider Specifications & Integration Guide
 
-**Release:** `v1.0.0-rc1`  
+**Release:** `v1.0.0`  
 **Architecture Contract:** [`icbot/academics/providers.py`](../icbot/academics/providers.py) & [`icbot/services/http_transport.py`](../icbot/services/http_transport.py)  
 **Security Invariants:** Strict SSRF URL validation, circuit breaker dampening, exponential backoff with jitter, zero credential leakage in logs, and deterministic offline mocking.
 

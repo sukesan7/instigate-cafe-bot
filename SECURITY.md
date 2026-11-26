@@ -6,8 +6,8 @@ Only the current modernized release line receives security fixes and vulnerabili
 
 | Version | Supported | Status |
 |---|---|---|
-| `1.0.0-rc1` (`1.0.0rc1`) | :white_check_mark: | Active Supported Pre-Release |
-| `0.2.x` | :x: | Unsupported (Upgrade to `1.0.0-rc1`) |
+| `1.0.0` (`1.0.x`) | :white_check_mark: | Active Supported Release |
+| `0.2.x` | :x: | Unsupported (Upgrade to `1.0.0`) |
 | `0.1.x` | :x: | Legacy Baseline (Do not deploy) |
 
 ---

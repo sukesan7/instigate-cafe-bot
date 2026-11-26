@@ -1,6 +1,6 @@
 # Instigate Cafe Bot — Documentation Index
 
-Documentation for **Instigate Cafe Bot** (`v1.0.0-rc1`), a self-hostable Discord slash-command bot built with Python 3.11–3.13, `discord.py` (`app_commands`), and SQLite 3 (WAL mode).
+Documentation for **Instigate Cafe Bot** (`v1.0.0`), a self-hostable Discord slash-command bot built with Python 3.11–3.13, `discord.py` (`app_commands`), and SQLite 3 (WAL mode).
 
 > [!IMPORTANT]
 > **Self-Hosted Open-Source Application vs. Hosted Public Bot**

@@ -67,15 +67,16 @@ def test_systemd_unit_documentation_uri_resolves_to_existing_repo_doc() -> None:
 
 
 def test_security_policy_versions_contact_and_intent_match_code() -> None:
-    """Verify SECURITY.md accurately lists 1.0.0rc1/1.0.0-rc1 (not 1.0.x) and valid contact channels."""
+    """Verify SECURITY.md accurately lists the active release version and valid contact channels."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert pyproject["project"]["version"] == "1.0.0rc1"
-    assert icbot.__version__ == "1.0.0-rc1"
+    expected_version = pyproject["project"]["version"]
+    assert expected_version == "1.0.0"
+    assert icbot.__version__ == expected_version
 
     security = (REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8")
-    assert "`1.0.x`" not in security, "SECURITY.md must reflect 1.0.0-rc1 pre-release rather than 1.0.x"
-    assert "1.0.0-rc1" in security
-    assert "1.0.0rc1" in security
+    assert expected_version in security
+    assert "1.0.0-rc1" not in security
+    assert "1.0.0rc1" not in security
     assert "imsukesan@gmail.com" in security
     assert "https://github.com/sukesan7/instigate-cafe-bot/security/advisories/new" in security
     for fake in ("example.com", "security@campus-bot", "your-username"):

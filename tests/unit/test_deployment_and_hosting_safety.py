@@ -98,8 +98,8 @@ def test_dockerfile_security_and_non_root():
 def test_release_tag_single_mechanism_matches_pyproject_and_compose():
     """Verify Dockerfile, docker-compose.yml, pyproject.toml, and icbot.__version__ share the same release version."""
     pyproject_data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    pep440_version = pyproject_data["project"]["version"]  # e.g. "1.0.0rc1"
-    app_version = icbot.__version__  # e.g. "1.0.0-rc1"
+    pep440_version = pyproject_data["project"]["version"]  # e.g. "1.0.0"
+    app_version = icbot.__version__  # e.g. "1.0.0"
     assert app_version.replace("-", "") == pep440_version
 
     dockerfile_content = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")

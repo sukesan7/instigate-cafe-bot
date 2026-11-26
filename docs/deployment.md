@@ -69,12 +69,12 @@ chmod 600 .env
 
 # 3. Optional tokenless throwaway-volume smoke check (verifies UID 10001 & WAL persistence)
 THROW_VOL="$(mktemp -d)" && chmod 700 "$THROW_VOL" && sudo chown 10001:10001 "$THROW_VOL"
-docker build --build-arg APP_VERSION=1.0.0-rc1 -t campus-bot:1.0.0-rc1 .
+docker build --build-arg APP_VERSION=1.0.0 -t campus-bot:1.0.0 .
 
 docker run --rm --network none \
   -e DB_PATH=/data/campus.db -e GRADES_DB_PATH=/data/tmu_grades.db \
   -e DISCORD_TOKEN="" -e ICBOT_ALLOW_GATEWAY=false -e JOBS_POLL_SECONDS=0 -e WORKDAY_POLL_SECONDS=0 \
-  -v "$THROW_VOL:/data" --entrypoint python3 campus-bot:1.0.0-rc1 -c \
+  -v "$THROW_VOL:/data" --entrypoint python3 campus-bot:1.0.0 -c \
   "import asyncio, icbot.bot; from icbot.config import Settings; from icbot.db import Database; \
 s = Settings.load_validated(); assert s.allow_gateway is False; \
 db = Database(s.db_path); asyncio.run(db.init()); \
@@ -83,7 +83,7 @@ asyncio.run(db.close())"
 
 docker run --rm --network none \
   -e DB_PATH=/data/campus.db -e ICBOT_ALLOW_GATEWAY=false \
-  -v "$THROW_VOL:/data" --entrypoint python3 campus-bot:1.0.0-rc1 -c \
+  -v "$THROW_VOL:/data" --entrypoint python3 campus-bot:1.0.0 -c \
   "import asyncio; from icbot.db import Database; \
 db = Database('/data/campus.db'); asyncio.run(db.init()); \
 row = asyncio.run(db.fetchone('SELECT value FROM meta WHERE key=?', ('smoke_boot',))); \

@@ -1,6 +1,6 @@
 # Instigate Cafe Bot — Complete Configuration Reference
 
-**Release:** `v1.0.0-rc1`  
+**Release:** `v1.0.0`  
 **Configuration Source:** [`icbot/config.py`](../icbot/config.py)  
 **Loading Precedence:** Per-Guild SQLite Override (`guild_settings` for supported keys) &rarr; Process Environment Variables &rarr; Local `.env` file (if present) &rarr; Safe Built-in Defaults
 

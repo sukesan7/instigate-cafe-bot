@@ -30,7 +30,7 @@ async def _get_session() -> aiohttp.ClientSession:
         if _SESSION and not _SESSION.closed:
             return _SESSION
         timeout = aiohttp.ClientTimeout(total=12)
-        _SESSION = aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": "InstigateCafeBot/0.2.3"})
+        _SESSION = aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": "InstigateCafeBot/1.0.0"})
         return _SESSION
 
 
@@ -66,7 +66,7 @@ def _to_int(v: Any) -> int | None:
 
 async def fetch_fear_greed(*, session: aiohttp.ClientSession | None = None) -> FearGreed | None:
     active_session = session if session is not None and not session.closed else await _get_session()
-    async with active_session.get(FNG_URL, headers={"User-Agent": "InstigateCafeBot/0.2.3"}) as r:
+    async with active_session.get(FNG_URL, headers={"User-Agent": "InstigateCafeBot/1.0.0"}) as r:
         if r.status != 200:
             txt = await r.text(errors="ignore")
             safe_txt = redact_secrets(txt[:200])

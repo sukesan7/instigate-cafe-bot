@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-DEFAULT_USER_AGENT = "InstigateCafeBot/0.2.3 (+https://github.com/)"
+DEFAULT_USER_AGENT = "InstigateCafeBot/1.0.0 (+https://github.com/)"
 _MAX_REDIRECTS = 5
 _REDIRECT_STATUSES: frozenset[int] = frozenset({301, 302, 303, 307, 308})
 

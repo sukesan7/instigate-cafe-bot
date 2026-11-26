@@ -27,7 +27,7 @@ _LOCK = asyncio.Lock()
 
 def _headers() -> dict[str, str]:
     return {
-        "User-Agent": "InstigateCafeBot/0.2.3 (+https://github.com/)",
+        "User-Agent": "InstigateCafeBot/1.0.0 (+https://github.com/)",
         "Accept": "application/json,text/plain,*/*",
         "Connection": "keep-alive",
     }

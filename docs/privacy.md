@@ -1,6 +1,6 @@
 # Instigate Cafe Bot — Privacy Model, Data Map & Deletion Policy
 
-**Release:** `v1.0.0-rc1`  
+**Release:** `v1.0.0`  
 **Primary Implementation:** [`icbot/services/user_service.py`](../icbot/services/user_service.py)  
 **Storage Architecture:** Local SQLite 3 (`DB_PATH`, container default `/data/campus.db`) with Write-Ahead Logging (WAL)  
 **Scope Notice:** This document describes the verified technical privacy controls, data flows, retention boundaries, and erasure/anonymization procedures implemented in code. It does not constitute formal legal counsel or an automated regulatory certification.

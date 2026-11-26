@@ -1,6 +1,6 @@
 # Instigate Cafe Bot — System Architecture & Developer Reference
 
-**Release:** `v1.0.0-rc1` (Modular Service Architecture)  
+**Release:** `v1.0.0` (Modular Service Architecture)  
 **Storage Engine:** SQLite 3 in Write-Ahead Logging (WAL) mode (Schema v7)  
 **Framework:** Python 3.11–3.13 / `discord.py` 2.3+ (`app_commands`)  
 **Design Principles:** Zero import-time side effects, centralized `ServiceContainer` dependency injection, single-instance `TaskSupervisor`, and zero-token offline testability.

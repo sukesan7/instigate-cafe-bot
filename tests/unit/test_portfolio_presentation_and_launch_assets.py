@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -59,7 +60,10 @@ def test_readme_restrained_landing_page_and_honest_boundaries() -> None:
     # Brand hero with real banner + attribution and compact factual badges
     assert "assets/ic_banner.png" in content
     assert "assets/ic_logo.png" in content
-    assert "v1.0.0-rc1" in content
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    expected_version = pyproject["project"]["version"]
+    assert f"v{expected_version}" in content
+    assert "v1.0.0-rc1" not in content
     assert "sukesan7/instigate-cafe-bot/actions/workflows/ci.yml/badge.svg" in content
     assert "646 Passing" not in content
     assert "<details>" not in content, "README should not embed a giant accordion command inventory"

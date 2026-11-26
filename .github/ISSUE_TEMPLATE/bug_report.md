@@ -25,7 +25,7 @@ Before filing a bug, check the [Deployment & Troubleshooting Guide](../../docs/d
 ```
 
 ### Environment
-- **Bot Version:** `v1.0.0-rc1`
+- **Bot Version:** `v1.0.0`
 - **Python Version:** 3.12
 - **Deployment Track:** Self-Hosted / Hosted
 - **Database:** SQLite (WAL mode)

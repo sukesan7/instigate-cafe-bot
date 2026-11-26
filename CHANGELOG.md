@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.0.0] - 2026-11-25
+
 ### Changed
+- Finalized release version at `v1.0.0` (`1.0.0` in `pyproject.toml`, `icbot.__version__`, `Dockerfile`, `docker-compose.yml`, and docs).
 - Removed obsolete release/benchmark/live-smoke scaffolding (`tools/run_staging_acceptance.py`, `tools/run_usability_audit.py`, `tools/verify_beta_readiness.py`, `tools/benchmark_profile.py`, `tools/benchmark_db.py`, `tools/run_live_smoke.py`, `.github/workflows/live-smoke.yml`, `tests/live_smoke/`) and unused `aioresponses` dev dependency after extracting uncovered fault-injection, concurrency, recovery, and permission regressions into integration tests; streamlined `.pre-commit-config.yaml`, `Makefile`, and `.github/workflows/ci.yml` to eliminate duplicate test/typecheck runs.
 - Consolidated repository documentation into [`docs/`](docs/README.md) (`architecture.md`, `configuration.md`, `deployment.md`, `development.md`, `features.md`, `gallery.md`, `privacy.md`, `providers.md`), merged testing and UI conventions into [`docs/development.md`](docs/development.md), and merged troubleshooting into [`docs/deployment.md`](docs/deployment.md).
 - Rebuilt [`README.md`](README.md) to separate ordinary self-hosting setup (`uv sync --frozen --no-dev` / `pip`, `.env.example`, `--allow-gateway` opt-in, Discord Developer Portal setup) from contributor development tooling in [`CONTRIBUTING.md`](CONTRIBUTING.md).
@@ -22,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0-rc1] - 2026-11-20
 
 ### Added
-- Bumped package and bot version to `v1.0.0-rc1` (`1.0.0rc1` in `pyproject.toml`).
+- Pre-release candidate `v1.0.0-rc1` (`1.0.0rc1` in `pyproject.toml`).
 - Multi-guild SQLite isolation, schema v7 migrations, interactive `/ic admin setup`, per-guild feature profiles (`default`, `student_core`, `toronto_tmu`, `community_full`), visual theme presets, and transactional user export/erasure (`UserStore.export_user_data`, `UserStore.delete_user_data`, `tools/privacy_ops.py`).
 
 ---
