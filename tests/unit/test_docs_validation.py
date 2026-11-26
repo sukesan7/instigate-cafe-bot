@@ -101,3 +101,45 @@ def test_validator_rejects_file_uris_missing_links_images_anchors_placeholders_a
     assert "missing_anchor" in kinds
     assert "forbidden_placeholder" in kinds
     assert "unallowlisted_external_url" in kinds
+
+
+def test_non_git_archive_fallback_excludes_cache_and_build_dirs_but_catches_real_errors(
+    tmp_path: Path,
+) -> None:
+    """Verify list_tracked_markdown_files excludes generated caches in non-.git archives while keeping real docs."""
+    # Legitimate repository docs
+    (tmp_path / "README.md").write_text("# Root\n\nSee [Guide](docs/guide.md).\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("# Guide\n\nOK.\n", encoding="utf-8")
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "PULL_REQUEST_TEMPLATE.md").write_text("# PR Checklist\n", encoding="utf-8")
+
+    # Generated cache / venv / build / coverage dirs that contain invalid/irrelevant Markdown
+    for excluded_dir in (
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".venv",
+        "venv",
+        "build",
+        "dist",
+        "htmlcov",
+        "artifacts",
+        "node_modules",
+    ):
+        d = tmp_path / excluded_dir
+        d.mkdir(parents=True)
+        (d / "README.md").write_text("[Broken Link](does_not_exist.md)\n", encoding="utf-8")
+
+    discovered = list_tracked_markdown_files(tmp_path)
+    rels = {p.relative_to(tmp_path).as_posix() for p in discovered}
+    assert rels == {"README.md", "docs/guide.md", ".github/PULL_REQUEST_TEMPLATE.md"}
+
+    report = validate_markdown_files(discovered, repo_root=tmp_path, check_anchors=True)
+    assert report.ok is True
+
+    # Introduce an actual documentation error in a legitimate doc -> still fails
+    (tmp_path / "docs" / "guide.md").write_text("# Guide\n\n[Dead](missing.md)\n", encoding="utf-8")
+    report_bad = validate_markdown_files(discovered, repo_root=tmp_path, check_anchors=True)
+    assert report_bad.ok is False
+    assert any(v.kind == "missing_local_target" and v.file == "docs/guide.md" for v in report_bad.violations)

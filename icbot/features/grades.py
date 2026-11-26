@@ -22,8 +22,13 @@ from icbot.academics.charts import (
     render_grade_distribution_chart_async,
 )
 from icbot.academics.models import campus_from_settings, normalize_course_key
-from icbot.academics.parsers import parse_tmu_grades_html
-from icbot.academics.url_safety import validate_fetch_url
+from icbot.academics.parsers import MAX_GRADES_HTML_BYTES, parse_tmu_grades_html
+from icbot.academics.url_safety import (
+    create_ssrf_safe_connector,
+    read_response_text_limited,
+    request_with_safe_redirects,
+    validate_fetch_url,
+)
 from icbot.app import ic
 from icbot.container import get_container, resolve_guild_settings
 from icbot.db import Database
@@ -177,11 +182,18 @@ async def _fetch_grades_html(url: str, headers: dict[str, str], session: aiohttp
     if not check.ok:
         raise ValueError(f"Unsafe grades fetch URL rejected: {check.reason}")
     timeout = aiohttp.ClientTimeout(total=15)
-    async with session.get(check.normalized_url, headers=headers, timeout=timeout) as resp:
+    async with request_with_safe_redirects(
+        session,
+        "GET",
+        check.normalized_url,
+        allowed_hosts=(_TMU_GRADES_HOST,),
+        headers=headers,
+        timeout=timeout,
+    ) as resp:
         if resp.status == 404:
             return None  # Course not found
         resp.raise_for_status()
-        return await resp.text()
+        return await read_response_text_limited(resp, MAX_GRADES_HTML_BYTES, label="TMU Grades HTML")
 
 
 async def fetch_course_data_with_meta(
@@ -220,7 +232,10 @@ async def fetch_course_data_with_meta(
     if session is not None and not session.closed:
         html = await _fetch_grades_html(url, headers, session)
     else:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as tmp_session:
+        async with aiohttp.ClientSession(
+            connector=create_ssrf_safe_connector(),
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as tmp_session:
             html = await _fetch_grades_html(url, headers, tmp_session)
 
     if html is None:

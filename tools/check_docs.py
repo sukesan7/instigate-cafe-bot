@@ -139,6 +139,36 @@ def extract_markdown_anchors(content: str) -> set[str]:
     return anchors
 
 
+_NON_GIT_EXCLUDED_DIRS: frozenset[str] = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "__pycache__",
+        "build",
+        "dist",
+        "htmlcov",
+        "artifacts",
+        "node_modules",
+        ".tox",
+        ".nox",
+        ".eggs",
+    }
+)
+
+
+def _is_excluded_archive_path(path: Path, repo_root: Path) -> bool:
+    """Return True when ``path`` sits inside a cache, venv, build, or artifact directory."""
+    try:
+        rel_dirs = path.relative_to(repo_root).parts[:-1]
+    except ValueError:
+        return True
+    return any(part in _NON_GIT_EXCLUDED_DIRS or part.endswith(".egg-info") for part in rel_dirs)
+
+
 def list_tracked_markdown_files(repo_root: Path = PROJECT_ROOT) -> list[Path]:
     """Return sorted paths of all existing tracked and non-ignored Markdown files under `repo_root`."""
     try:
@@ -154,7 +184,7 @@ def list_tracked_markdown_files(repo_root: Path = PROJECT_ROOT) -> list[Path]:
         }
         return sorted(paths)
     except (subprocess.SubprocessError, OSError):
-        return sorted(p for p in repo_root.rglob("*.md") if ".venv" not in p.parts and ".git" not in p.parts)
+        return sorted(p for p in repo_root.rglob("*.md") if not _is_excluded_archive_path(p, repo_root))
 
 
 def validate_markdown_files(

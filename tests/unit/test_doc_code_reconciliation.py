@@ -81,6 +81,8 @@ def test_security_policy_versions_contact_and_intent_match_code() -> None:
     assert "https://github.com/sukesan7/instigate-cafe-bot/security/advisories/new" in security
     for fake in ("example.com", "security@campus-bot", "your-username"):
         assert fake not in security.lower()
+    assert "complete deletion of their profile and economy balance" not in security.lower()
+    assert "backup" in security.lower()
 
 
 def test_env_defaults_and_workday_poll_behavior_match_between_code_env_and_docs() -> None:

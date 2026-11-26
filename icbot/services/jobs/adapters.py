@@ -12,6 +12,14 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import aiohttp
 from yarl import URL
 
+from icbot.academics.url_safety import (
+    SSRFPolicyError,
+    read_response_bytes_limited,
+    read_response_text_limited,
+    request_with_safe_redirects,
+    sanitize_url_for_log,
+    validate_fetch_url,
+)
 from icbot.errors import ProviderError, parse_retry_after, redact_secrets
 from icbot.services.jobs.classification import (
     canonicalize_company_name,
@@ -25,6 +33,8 @@ from icbot.services.jobs.models import JobPosting
 log = logging.getLogger(__name__)
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+_WORKDAY_MAX_HTML_BYTES = 2 * 1024 * 1024  # 2 MiB
+_WORKDAY_MAX_JSON_BYTES = 4 * 1024 * 1024  # 4 MiB
 
 _CSRF_IN_HTML = re.compile(
     r"(?:x-calypso-csrf-token|csrfToken)[\"']?\s*[:=]\s*[\"']([a-zA-Z0-9\-_/\.]+)[\"']", re.I
@@ -362,13 +372,21 @@ class WorkdayAdapter:
             "Accept-Language": locale,
         }
         try:
-            async with session.get(
-                careers_url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout_seconds)
+            async with request_with_safe_redirects(
+                session,
+                "GET",
+                careers_url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=timeout_seconds),
             ) as r:
                 token = r.headers.get("x-calypso-csrf-token") or r.headers.get("X-Calypso-CSRF-Token")
-                text = await r.text(errors="ignore")
+                text = await read_response_text_limited(
+                    r, _WORKDAY_MAX_HTML_BYTES, label="Workday warmup HTML", errors="ignore"
+                )
         except (aiohttp.ClientError, TimeoutError) as e:
-            log.debug("Workday warmup GET failed (%s): %s", careers_url, e)
+            if isinstance(getattr(e, "__cause__", None), SSRFPolicyError):
+                raise SSRFPolicyError(str(e.__cause__)) from e
+            log.debug("Workday warmup GET failed (%s): %s", sanitize_url_for_log(careers_url), e)
             return None
 
         if token:
@@ -491,6 +509,12 @@ class WorkdayAdapter:
         Returns: (jobs, api_url_used, tenant, site)
         """
         careers_url = target.strip()
+        careers_check = validate_fetch_url(careers_url)
+        if not careers_check.ok:
+            raise ProviderError(
+                f"Unsafe Workday careers URL ({sanitize_url_for_log(careers_url)}): {careers_check.reason}"
+            )
+        careers_url = careers_check.normalized_url
         employer = employer_label or canonicalize_company_name(careers_url)
         now_unix = _now_unix(clock)
 
@@ -500,6 +524,13 @@ class WorkdayAdapter:
             site_slug = None
         else:
             api_url, tenant, site_slug = self.derive_cxs_info(careers_url, locale=locale)
+
+        api_check = validate_fetch_url(api_url)
+        if not api_check.ok:
+            raise ProviderError(
+                f"Unsafe Workday API URL ({sanitize_url_for_log(api_url)}): {api_check.reason}"
+            )
+        api_url = api_check.normalized_url
 
         csrf = await self._warmup_and_get_csrf(session, careers_url, locale, timeout_seconds)
         origin = _origin_from_url(careers_url)
@@ -531,7 +562,9 @@ class WorkdayAdapter:
             st_post = 0
             payload_post: dict[str, Any] = {}
             ra_post: float | None = None
-            async with session.post(
+            async with request_with_safe_redirects(
+                session,
+                "POST",
                 api_url,
                 json=body,
                 headers=headers,
@@ -539,11 +572,15 @@ class WorkdayAdapter:
             ) as r_post:
                 st_post = r_post.status
                 ra_post = parse_retry_after(r_post.headers.get("Retry-After"))
+                raw_post_bytes = await read_response_bytes_limited(
+                    r_post, _WORKDAY_MAX_JSON_BYTES, label="Workday API response"
+                )
+                raw_post_text = raw_post_bytes.decode("utf-8", errors="ignore")
                 try:
-                    payload_post = await r_post.json()
+                    parsed_post = json.loads(raw_post_text)
+                    payload_post = parsed_post if isinstance(parsed_post, dict) else {"_raw": raw_post_text}
                 except (json.JSONDecodeError, ValueError, TypeError):
-                    raw_text = await r_post.text(errors="ignore")
-                    payload_post = {"_raw": raw_text}
+                    payload_post = {"_raw": raw_post_text}
 
             if st_post == 200 and isinstance(payload_post, dict):
                 batch = self._extract_postings(payload_post, employer, careers_url, locale, now_unix)
@@ -555,19 +592,29 @@ class WorkdayAdapter:
                 )
                 get_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
                 try:
-                    async with session.get(
+                    async with request_with_safe_redirects(
+                        session,
+                        "GET",
                         get_url,
                         headers=get_headers,
                         timeout=aiohttp.ClientTimeout(total=timeout_seconds),
                     ) as r_get:
                         st_get = r_get.status
                         ra_get = parse_retry_after(r_get.headers.get("Retry-After"))
+                        raw_get_bytes = await read_response_bytes_limited(
+                            r_get, _WORKDAY_MAX_JSON_BYTES, label="Workday API response"
+                        )
+                        raw_get_text = raw_get_bytes.decode("utf-8", errors="ignore")
                         try:
-                            payload_get = await r_get.json()
+                            parsed_get = json.loads(raw_get_text)
+                            payload_get = (
+                                parsed_get if isinstance(parsed_get, dict) else {"_raw": raw_get_text}
+                            )
                         except (json.JSONDecodeError, ValueError, TypeError):
-                            raw_text = await r_get.text(errors="ignore")
-                            payload_get = {"_raw": raw_text}
+                            payload_get = {"_raw": raw_get_text}
                 except (aiohttp.ClientError, TimeoutError) as e:
+                    if isinstance(getattr(e, "__cause__", None), SSRFPolicyError):
+                        raise SSRFPolicyError(str(e.__cause__)) from e
                     raise ProviderError(
                         f"Workday network failure ({employer}): {redact_secrets(repr(e))}"
                     ) from e

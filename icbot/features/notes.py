@@ -13,6 +13,7 @@ from discord import app_commands
 from icbot.academics.cache import format_freshness_line
 from icbot.academics.models import ResourceLink, campus_from_settings, normalize_course_key
 from icbot.academics.providers import fetch_notes_spa_links
+from icbot.academics.url_safety import create_ssrf_safe_connector
 from icbot.app import ic
 from icbot.config import Settings
 from icbot.container import NotesCache, extract_guild_id, get_container, resolve_guild_settings
@@ -31,7 +32,10 @@ async def _scoped_http_session(session: aiohttp.ClientSession | None):
     if session is not None and not session.closed:
         yield session
         return
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as temp_session:
+    async with aiohttp.ClientSession(
+        connector=create_ssrf_safe_connector(),
+        timeout=aiohttp.ClientTimeout(total=15),
+    ) as temp_session:
         yield temp_session
 
 

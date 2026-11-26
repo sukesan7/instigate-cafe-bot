@@ -22,10 +22,16 @@ import time
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
+from urllib.parse import urljoin
 
 import aiohttp
 
-from icbot.academics.url_safety import validate_fetch_url
+from icbot.academics.url_safety import (
+    SSRFPolicyError,
+    create_ssrf_safe_connector,
+    sanitize_url_for_log,
+    validate_fetch_url,
+)
 from icbot.errors import ProviderError, parse_retry_after, redact_secrets
 
 log = logging.getLogger(__name__)
@@ -33,6 +39,8 @@ log = logging.getLogger(__name__)
 T = TypeVar("T")
 
 DEFAULT_USER_AGENT = "InstigateCafeBot/0.2.3 (+https://github.com/)"
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUSES: frozenset[int] = frozenset({301, 302, 303, 307, 308})
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +395,10 @@ class BoundedHttpTransport:
                 verify=self.ssl_verify,
                 ca_bundle_path=self.ca_bundle_path,
             )
-            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+            if self.enforce_ssrf_protection:
+                connector = create_ssrf_safe_connector(ssl_ctx=ssl_ctx)
+            else:
+                connector = aiohttp.TCPConnector(ssl=ssl_ctx)
             self._owned_session = aiohttp.ClientSession(connector=connector)
         return self._owned_session
 
@@ -431,7 +442,8 @@ class BoundedHttpTransport:
         if self.enforce_ssrf_protection:
             val_res = validate_fetch_url(clean_url, allowed_hosts=self.allowed_hosts)
             if not val_res.ok:
-                raise SSRFBlockedError(f"SSRF policy blocked request to {clean_url!r}: {val_res.reason}")
+                safe_target = redact_secrets(sanitize_url_for_log(clean_url), secrets)
+                raise SSRFBlockedError(f"SSRF policy blocked request to {safe_target!r}: {val_res.reason}")
 
         now = self._now()
         cache_entry: HttpCacheEntry | None = None
@@ -488,194 +500,245 @@ class BoundedHttpTransport:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                async with session.request(
-                    method_upper,
-                    clean_url,
-                    params=params,
-                    headers=req_headers,
-                    data=data,
-                    json=json_data,
-                    timeout=client_timeout,
-                ) as resp:
-                    status = resp.status
-                    resp_headers = {str(k): str(v) for k, v in resp.headers.items()}
-                    retry_after = parse_retry_after(resp_headers.get("Retry-After"))
+                current_url = clean_url
+                current_method = method_upper
+                current_is_idempotent = is_idempotent
+                visited_urls: set[str] = {clean_url}
+                retry_delay: float | None = None
+                hop = 0
 
-                    # Handle 304 Not Modified
-                    if status == 304 and cache_entry is not None:
-                        curr_now = self._now()
-                        cache_entry.cached_at = curr_now
-                        prov = ProviderProvenance(
-                            source=self.source_name,
-                            source_url=clean_url,
-                            fetched_at=curr_now,
-                            source_timestamp=cache_entry.source_timestamp,
-                            status_code=304,
-                            from_cache=True,
-                            etag=cache_entry.etag,
-                            last_modified=cache_entry.last_modified,
-                            content_length=len(cache_entry.data),
-                        )
-                        return TransportResponse(
-                            status=200,
-                            headers=dict(cache_entry.headers),
-                            body=cache_entry.data,
-                            provenance=prov,
-                        )
+                while True:
+                    req_kwargs: dict[str, Any] = {
+                        "params": params if hop == 0 else None,
+                        "headers": req_headers,
+                        "data": data if hop == 0 else None,
+                        "json": json_data if hop == 0 else None,
+                        "timeout": client_timeout,
+                    }
+                    if self.enforce_ssrf_protection:
+                        req_kwargs["allow_redirects"] = False
 
-                    # Enforce Content-Length before downloading if provided
-                    cl_str = resp_headers.get("Content-Length")
-                    if cl_str:
-                        try:
-                            if int(cl_str) > self.max_response_bytes:
-                                raise PayloadTooLargeError(
-                                    f"Response Content-Length {cl_str} exceeds limit of "
-                                    f"{self.max_response_bytes} bytes"
-                                )
-                        except ValueError:
-                            pass
+                    async with session.request(current_method, current_url, **req_kwargs) as resp:
+                        status = resp.status
+                        resp_headers = {str(k): str(v) for k, v in resp.headers.items()}
+                        retry_after = parse_retry_after(resp_headers.get("Retry-After"))
 
-                    # Read payload with streaming chunk size enforcement
-                    if hasattr(resp, "content") and hasattr(resp.content, "iter_chunked"):
-                        chunks = bytearray()
-                        async for chunk in resp.content.iter_chunked(65536):
-                            chunks.extend(chunk)
-                            if len(chunks) > self.max_response_bytes:
-                                if hasattr(resp, "close"):
-                                    resp.close()
-                                raise PayloadTooLargeError(
-                                    f"Response payload exceeded limit of {self.max_response_bytes} "
-                                    f"bytes during streaming"
-                                )
-                        raw_body = bytes(chunks)
-                    else:
-                        raw_body = await resp.read()
-                        if len(raw_body) > self.max_response_bytes:
-                            raise PayloadTooLargeError(
-                                f"Response payload length {len(raw_body)} exceeds limit of "
-                                f"{self.max_response_bytes} bytes"
+                        if self.enforce_ssrf_protection and status in _REDIRECT_STATUSES:
+                            location = (
+                                resp_headers.get("Location") or resp_headers.get("location") or ""
+                            ).strip()
+                            if location:
+                                if hop >= _MAX_REDIRECTS:
+                                    safe_curr = redact_secrets(sanitize_url_for_log(current_url), secrets)
+                                    raise SSRFBlockedError(
+                                        f"Exceeded maximum redirects ({_MAX_REDIRECTS}) requesting {safe_curr!r}"
+                                    )
+                                next_url = urljoin(current_url, location)
+                                hop_check = validate_fetch_url(next_url, allowed_hosts=self.allowed_hosts)
+                                if not hop_check.ok:
+                                    safe_curr = redact_secrets(sanitize_url_for_log(current_url), secrets)
+                                    safe_next = redact_secrets(sanitize_url_for_log(next_url), secrets)
+                                    raise SSRFBlockedError(
+                                        f"SSRF policy blocked redirect from {safe_curr!r} to "
+                                        f"{safe_next!r}: {hop_check.reason}"
+                                    )
+                                if hop_check.normalized_url in visited_urls:
+                                    safe_loop = redact_secrets(
+                                        sanitize_url_for_log(hop_check.normalized_url), secrets
+                                    )
+                                    raise SSRFBlockedError(f"Detected redirect loop involving {safe_loop!r}")
+                                visited_urls.add(hop_check.normalized_url)
+                                current_url = hop_check.normalized_url
+                                if status in (301, 302, 303) and current_method == "POST":
+                                    current_method = "GET"
+                                    current_is_idempotent = True
+                                hop += 1
+                                continue
+
+                        # Handle 304 Not Modified
+                        if status == 304 and cache_entry is not None:
+                            curr_now = self._now()
+                            cache_entry.cached_at = curr_now
+                            prov = ProviderProvenance(
+                                source=self.source_name,
+                                source_url=clean_url,
+                                fetched_at=curr_now,
+                                source_timestamp=cache_entry.source_timestamp,
+                                status_code=304,
+                                from_cache=True,
+                                etag=cache_entry.etag,
+                                last_modified=cache_entry.last_modified,
+                                content_length=len(cache_entry.data),
+                            )
+                            return TransportResponse(
+                                status=200,
+                                headers=dict(cache_entry.headers),
+                                body=cache_entry.data,
+                                provenance=prov,
                             )
 
-                    if status >= 400:
-                        safe_url = redact_secrets(clean_url, secrets)
-                        safe_body = redact_secrets(raw_body[:300].decode("utf-8", errors="replace"), secrets)
-                        err_msg = f"HTTP {status} from {safe_url}: {safe_body}"
-
-                        can_retry = (
-                            is_idempotent and attempt < max_attempts and (status in (429, 500, 502, 503, 504))
-                        )
-                        if can_retry:
-                            if retry_after is not None and retry_after > self.max_retry_after:
+                        # Enforce Content-Length before downloading if provided
+                        cl_str = resp_headers.get("Content-Length")
+                        if cl_str:
+                            try:
+                                if int(cl_str) > self.max_response_bytes:
+                                    raise PayloadTooLargeError(
+                                        f"Response Content-Length {cl_str} exceeds limit of "
+                                        f"{self.max_response_bytes} bytes"
+                                    )
+                            except ValueError:
                                 pass
-                            else:
-                                delay = self._calculate_backoff(attempt, retry_after)
+
+                        # Read payload with streaming chunk size enforcement
+                        if hasattr(resp, "content") and hasattr(resp.content, "iter_chunked"):
+                            chunks = bytearray()
+                            async for chunk in resp.content.iter_chunked(65536):
+                                chunks.extend(chunk)
+                                if len(chunks) > self.max_response_bytes:
+                                    if hasattr(resp, "close"):
+                                        resp.close()
+                                    raise PayloadTooLargeError(
+                                        f"Response payload exceeded limit of {self.max_response_bytes} "
+                                        f"bytes during streaming"
+                                    )
+                            raw_body = bytes(chunks)
+                        else:
+                            raw_body = await resp.read()
+                            if len(raw_body) > self.max_response_bytes:
+                                raise PayloadTooLargeError(
+                                    f"Response payload length {len(raw_body)} exceeds limit of "
+                                    f"{self.max_response_bytes} bytes"
+                                )
+
+                        if status >= 400:
+                            safe_url = redact_secrets(sanitize_url_for_log(current_url), secrets)
+                            safe_body = redact_secrets(
+                                raw_body[:300].decode("utf-8", errors="replace"), secrets
+                            )
+                            err_msg = f"HTTP {status} from {safe_url}: {safe_body}"
+
+                            can_retry = (
+                                current_is_idempotent
+                                and attempt < max_attempts
+                                and (status in (429, 500, 502, 503, 504))
+                            )
+                            if can_retry and (retry_after is None or retry_after <= self.max_retry_after):
+                                retry_delay = self._calculate_backoff(attempt, retry_after)
                                 log.warning(
                                     "Retrying request to %s after HTTP %s (attempt %d/%d, delay %.2fs)",
                                     safe_url,
                                     status,
                                     attempt,
                                     max_attempts,
-                                    delay,
+                                    retry_delay,
                                 )
-                                await self._sleep(delay)
-                                continue
+                                break
 
-                        if status in (401, 403):
-                            raise TransportAuthError(
-                                err_msg,
-                                status=status,
-                                retry_after=retry_after,
-                                response_body=safe_body,
-                                headers=resp_headers,
-                            )
-                        elif status == 404:
-                            raise TransportNotFoundError(
-                                err_msg,
-                                status=status,
-                                retry_after=retry_after,
-                                response_body=safe_body,
-                                headers=resp_headers,
-                            )
-                        elif status == 429:
-                            if self.circuit_breaker is not None:
-                                self.circuit_breaker.record_failure(retry_after=retry_after)
-                            raise TransportRateLimitError(
-                                err_msg,
-                                status=status,
-                                retry_after=retry_after,
-                                response_body=safe_body,
-                                headers=resp_headers,
-                            )
-                        elif status >= 500:
-                            if self.circuit_breaker is not None:
-                                self.circuit_breaker.record_failure(retry_after=retry_after)
-                            raise TransportServerError(
-                                err_msg,
-                                status=status,
-                                retry_after=retry_after,
-                                response_body=safe_body,
-                                headers=resp_headers,
-                            )
-                        else:
-                            raise TransportHTTPError(
-                                err_msg,
-                                status=status,
-                                retry_after=retry_after,
-                                response_body=safe_body,
-                                headers=resp_headers,
+                            if status in (401, 403):
+                                raise TransportAuthError(
+                                    err_msg,
+                                    status=status,
+                                    retry_after=retry_after,
+                                    response_body=safe_body,
+                                    headers=resp_headers,
+                                )
+                            elif status == 404:
+                                raise TransportNotFoundError(
+                                    err_msg,
+                                    status=status,
+                                    retry_after=retry_after,
+                                    response_body=safe_body,
+                                    headers=resp_headers,
+                                )
+                            elif status == 429:
+                                if self.circuit_breaker is not None:
+                                    self.circuit_breaker.record_failure(retry_after=retry_after)
+                                raise TransportRateLimitError(
+                                    err_msg,
+                                    status=status,
+                                    retry_after=retry_after,
+                                    response_body=safe_body,
+                                    headers=resp_headers,
+                                )
+                            elif status >= 500:
+                                if self.circuit_breaker is not None:
+                                    self.circuit_breaker.record_failure(retry_after=retry_after)
+                                raise TransportServerError(
+                                    err_msg,
+                                    status=status,
+                                    retry_after=retry_after,
+                                    response_body=safe_body,
+                                    headers=resp_headers,
+                                )
+                            else:
+                                raise TransportHTTPError(
+                                    err_msg,
+                                    status=status,
+                                    retry_after=retry_after,
+                                    response_body=safe_body,
+                                    headers=resp_headers,
+                                )
+
+                        # Successful response (status < 400)
+                        if self.circuit_breaker is not None:
+                            self.circuit_breaker.record_success()
+                        curr_now = self._now()
+                        etag = resp_headers.get("ETag")
+                        last_mod = resp_headers.get("Last-Modified")
+                        source_ts: float | None = None
+                        if source_timestamp_extractor:
+                            try:
+                                parsed_obj = json.loads(raw_body.decode("utf-8")) if raw_body else None
+                                source_ts = source_timestamp_extractor(parsed_obj, resp_headers)
+                            except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                                log.debug("Failed extracting source timestamp: %s", exc)
+
+                        if (
+                            current_is_idempotent
+                            and self.cache is not None
+                            and (etag or last_mod or self.cache_ttl_seconds > 0)
+                        ):
+                            self.cache.set(
+                                clean_url,
+                                HttpCacheEntry(
+                                    data=raw_body,
+                                    headers=resp_headers,
+                                    etag=etag,
+                                    last_modified=last_mod,
+                                    cached_at=curr_now,
+                                    source_timestamp=source_ts,
+                                ),
                             )
 
-                    # Successful response (status < 400)
-                    if self.circuit_breaker is not None:
-                        self.circuit_breaker.record_success()
-                    curr_now = self._now()
-                    etag = resp_headers.get("ETag")
-                    last_mod = resp_headers.get("Last-Modified")
-                    source_ts: float | None = None
-                    if source_timestamp_extractor:
-                        try:
-                            parsed_obj = json.loads(raw_body.decode("utf-8")) if raw_body else None
-                            source_ts = source_timestamp_extractor(parsed_obj, resp_headers)
-                        except (ValueError, TypeError, KeyError, AttributeError) as exc:
-                            log.debug("Failed extracting source timestamp: %s", exc)
-
-                    if (
-                        is_idempotent
-                        and self.cache is not None
-                        and (etag or last_mod or self.cache_ttl_seconds > 0)
-                    ):
-                        self.cache.set(
-                            clean_url,
-                            HttpCacheEntry(
-                                data=raw_body,
-                                headers=resp_headers,
-                                etag=etag,
-                                last_modified=last_mod,
-                                cached_at=curr_now,
-                                source_timestamp=source_ts,
-                            ),
+                        prov = ProviderProvenance(
+                            source=self.source_name,
+                            source_url=clean_url,
+                            fetched_at=curr_now,
+                            source_timestamp=source_ts,
+                            status_code=status,
+                            from_cache=False,
+                            etag=etag,
+                            last_modified=last_mod,
+                            content_length=len(raw_body),
+                        )
+                        return TransportResponse(
+                            status=status,
+                            headers=resp_headers,
+                            body=raw_body,
+                            provenance=prov,
                         )
 
-                    prov = ProviderProvenance(
-                        source=self.source_name,
-                        source_url=clean_url,
-                        fetched_at=curr_now,
-                        source_timestamp=source_ts,
-                        status_code=status,
-                        from_cache=False,
-                        etag=etag,
-                        last_modified=last_mod,
-                        content_length=len(raw_body),
-                    )
-                    return TransportResponse(
-                        status=status,
-                        headers=resp_headers,
-                        body=raw_body,
-                        provenance=prov,
-                    )
+                if retry_delay is not None:
+                    await self._sleep(retry_delay)
+                    continue
 
+            except (SSRFBlockedError, PayloadTooLargeError):
+                raise
+            except SSRFPolicyError as exc:
+                safe_url = redact_secrets(sanitize_url_for_log(clean_url), secrets)
+                raise SSRFBlockedError(f"SSRF policy blocked request to {safe_url}: {exc}") from exc
             except TimeoutError as exc:
-                safe_url = redact_secrets(clean_url, secrets)
+                safe_url = redact_secrets(sanitize_url_for_log(clean_url), secrets)
                 if is_idempotent and attempt < max_attempts:
                     delay = self._calculate_backoff(attempt, None)
                     log.warning(
@@ -693,7 +756,11 @@ class BoundedHttpTransport:
                     f"Request to {safe_url} timed out: {redact_secrets(str(exc), secrets)}"
                 ) from exc
             except aiohttp.ClientError as exc:
-                safe_url = redact_secrets(clean_url, secrets)
+                cause = getattr(exc, "__cause__", None)
+                if isinstance(cause, SSRFPolicyError):
+                    safe_url = redact_secrets(sanitize_url_for_log(clean_url), secrets)
+                    raise SSRFBlockedError(f"SSRF policy blocked request to {safe_url}: {cause}") from exc
+                safe_url = redact_secrets(sanitize_url_for_log(clean_url), secrets)
                 if is_idempotent and attempt < max_attempts:
                     delay = self._calculate_backoff(attempt, None)
                     log.warning(
@@ -714,7 +781,9 @@ class BoundedHttpTransport:
             except asyncio.CancelledError:
                 raise
 
-        raise TransportError(f"Failed to execute request to {clean_url}")
+        raise TransportError(
+            f"Failed to execute request to {redact_secrets(sanitize_url_for_log(clean_url), secrets)}"
+        )
 
     async def get(
         self,

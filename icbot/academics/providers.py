@@ -39,6 +39,8 @@ from icbot.academics.models import (
     resolve_course_key,
 )
 from icbot.academics.parsers import (
+    MAX_SPA_HTML_BYTES,
+    MAX_SPA_JS_BYTES,
     PayloadLimitError,
     SchemaDriftError,
     parse_notes_spa_bundle,
@@ -46,7 +48,15 @@ from icbot.academics.parsers import (
     parse_rmp_prof_response,
     parse_rmp_school_response,
 )
-from icbot.academics.url_safety import validate_fetch_url
+from icbot.academics.url_safety import (
+    SSRFPolicyError,
+    create_ssrf_safe_connector,
+    read_response_text_limited,
+    request_with_safe_redirects,
+    sanitize_url_for_log,
+    validate_fetch_url,
+)
+from icbot.errors import redact_secrets
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +83,10 @@ async def _scoped_http_session(session: aiohttp.ClientSession | None):
     if session is not None and not session.closed:
         yield session
         return
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as temp_session:
+    async with aiohttp.ClientSession(
+        connector=create_ssrf_safe_connector(),
+        timeout=aiohttp.ClientTimeout(total=15),
+    ) as temp_session:
         yield temp_session
 
 
@@ -248,19 +261,35 @@ async def fetch_notes_spa_links(
     }
     timeout = aiohttp.ClientTimeout(total=10)
     try:
-        async with session.get(safe_url, headers=headers, timeout=timeout) as resp:
+        async with request_with_safe_redirects(
+            session,
+            "GET",
+            safe_url,
+            allowed_hosts=allowed_hosts,
+            headers=headers,
+            timeout=timeout,
+        ) as resp:
             if resp.status != 200:
                 return [], f"HTTP {resp.status}"
-            html = await resp.text()
+            html = await read_response_text_limited(resp, MAX_SPA_HTML_BYTES, label="Notes SPA HTML")
 
         parsed_html = parse_notes_spa_html(html, base_url=safe_url, allowed_hosts=allowed_hosts)
         results: list[tuple[str, str]] = list(parsed_html.links)
         seen: set[tuple[str, str]] = set(results)
 
         if parsed_html.bundle_url:
-            async with session.get(parsed_html.bundle_url, headers=headers, timeout=timeout) as js_resp:
+            async with request_with_safe_redirects(
+                session,
+                "GET",
+                parsed_html.bundle_url,
+                allowed_hosts=allowed_hosts,
+                headers=headers,
+                timeout=timeout,
+            ) as js_resp:
                 if js_resp.status == 200:
-                    js_text = await js_resp.text()
+                    js_text = await read_response_text_limited(
+                        js_resp, MAX_SPA_JS_BYTES, label="Notes SPA JS bundle"
+                    )
                     js_pairs, _trunc = parse_notes_spa_bundle(js_text)
                     for pair in js_pairs:
                         if pair not in seen:
@@ -268,9 +297,29 @@ async def fetch_notes_spa_links(
                             results.append(pair)
 
         return results, ""
+    except SSRFPolicyError as exc:
+        safe_msg = redact_secrets(str(exc))
+        log.warning(
+            "[NOTES] Blocked unsafe URL or redirect for %s (%s): %s",
+            title,
+            sanitize_url_for_log(safe_url),
+            safe_msg,
+        )
+        return [], f"Unsafe URL blocked: {safe_msg}"
     except (aiohttp.ClientError, TimeoutError, UnicodeDecodeError, PayloadLimitError, ValueError) as exc:
-        log.warning("[NOTES] Error fetching from %s: %s", title, exc)
-        return [], str(exc)
+        cause = getattr(exc, "__cause__", None)
+        if isinstance(cause, SSRFPolicyError):
+            safe_cause = redact_secrets(str(cause))
+            log.warning(
+                "[NOTES] Blocked non-public DNS target for %s (%s): %s",
+                title,
+                sanitize_url_for_log(safe_url),
+                safe_cause,
+            )
+            return [], f"Unsafe URL blocked: {safe_cause}"
+        safe_msg = redact_secrets(str(exc))
+        log.warning("[NOTES] Error fetching from %s: %s", title, safe_msg)
+        return [], safe_msg
 
 
 class NotesSpaProvider:
@@ -389,14 +438,26 @@ class NotesSpaProvider:
                             continue
                         links_list, err = res
                         if err:
-                            if (
-                                "allowlist" in err.lower()
-                                or "scheme" in err.lower()
-                                or "private" in err.lower()
+                            err_lower = err.lower()
+                            if any(
+                                tok in err_lower
+                                for tok in (
+                                    "allowlist",
+                                    "scheme",
+                                    "private",
+                                    "ssrf",
+                                    "redirect",
+                                    "port",
+                                    "credentials",
+                                    "direct ip",
+                                    "non-public",
+                                    "disallowed",
+                                    "unsafe",
+                                )
                             ):
-                                unsafe_errors.append(f"{title}: {err}")
+                                unsafe_errors.append(f"{title}: {redact_secrets(err)}")
                             else:
-                                fetch_errors.append(f"{title}: {err}")
+                                fetch_errors.append(f"{title}: {redact_secrets(err)}")
                         elif links_list:
                             all_notes[title] = links_list
 
