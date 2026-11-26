@@ -82,7 +82,7 @@ uv run python tools/run_usability_audit.py
    - **Schema changes:** Use synthetic temp fixtures, write backward-compatible migrations, and verify backups/restore cleanly.
    - **Economy & market changes:** Assert transactional atomicity (`BEGIN IMMEDIATE`) and zero duplicate settlement or balance drift.
    - **Module cleanup:** Verify dynamic slash-command registration (`icbot/registry.py`) and CLI/test entrypoints before removing any module.
-4. **No Direct Production Pushes:** All changes land via reviewed pull requests passing the GitHub Actions offline quality gate. Production deployments are triggered manually by maintainers.
+4. **No Direct Production Pushes:** All changes land via reviewed pull requests passing the GitHub Actions Quality & Security Gate. Production deployments are triggered manually by maintainers.
 
 ---
 
@@ -90,7 +90,7 @@ uv run python tools/run_usability_audit.py
 
 Every pull request requires:
 - Approval from at least one repository maintainer.
-- 100% green status on the GitHub Actions **Offline Quality Gate** (Ruff, Mypy, Pytest, Pip-Audit, Scan-Secrets).
+- 100% green status on the GitHub Actions **Quality & Security Gate** (`quality` offline matrix and `dependency-audit`).
 - Clean diff verification ensuring no `.db`, `.env`, or credential artifacts are introduced.
 
 ---

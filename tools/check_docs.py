@@ -47,6 +47,10 @@ FORBIDDEN_PLACEHOLDER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("placeholder GitHub clone URL", re.compile(r"github\.com/your-username/", re.IGNORECASE)),
     ("stale repository URL placeholder", re.compile(r"github\.com/sukesan/campus-bot\b", re.IGNORECASE)),
     ("explicit placeholder label", re.compile(r"\(Repository link placeholder\)", re.IGNORECASE)),
+    (
+        "nonexistent docs/production-hosting-and-recovery.md reference",
+        re.compile(r"production-hosting-and-recovery\.md"),
+    ),
     ("nonexistent restore_db.py script", re.compile(r"\btools/restore_db\.py\b")),
     ("nonexistent icbot/storage/user.py module", re.compile(r"\bicbot/storage/user\.py\b")),
     ("unresolved TBD marker", re.compile(r"\bTBD\b")),

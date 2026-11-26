@@ -11,7 +11,7 @@
 The Instigate Cafe Bot uses strict runtime configuration validation via the `Settings` model (`Settings.load_validated()`):
 - **Zero Secret Echo:** Configuration validation errors redact all tokens and API keys before logging.
 - **Gateway Safeguard:** Live Discord gateway connection is blocked unless `ICBOT_ALLOW_GATEWAY=true` (or `--allow-gateway`) is explicitly passed.
-- **Safe Offline Defaults:** Optional pollers (`LLM_ENABLED`, `MARKET_WATCH_ENABLED`, `BTC_WATCH_ENABLED`, `WORKDAY_POLL_SECONDS=0`) default to disabled so a fresh checkout boots safely offline.
+- **Safe Offline Defaults:** Optional watchers and alert channels (`LLM_ENABLED=false`, `MARKET_WATCH_ENABLED=false`, `MARKET_DAILY_REPORT_ENABLED=false`, `BTC_WATCH_ENABLED=false`, `JOB_ALERTS_CHANNEL_ID=0`, `WORKDAY_SITES=[]`) default to off or unconfigured so a fresh checkout boots safely offline (`WORKDAY_POLL_SECONDS=0` inherits `JOBS_POLL_SECONDS`).
 - **Required vs. Optional Keys:** Only `DISCORD_TOKEN` is required to connect to Discord. `GEMINI_API_KEY` (AI chat & resume review), `GO_API_KEY` (Metrolinx GO transit alerts), and `ODDS_API_KEY` (sports schedules/odds) are **strictly optional**—leaving them blank disables only those specific integrations with graceful fallbacks.
 - **TMU-Specific Defaults:** `RMP_UNIVERSITY` defaults to `Toronto Metropolitan University`, and `EXAMS_TZ` / `MARKET_DAILY_REPORT_TZ` default to `America/Toronto`. All three can be overridden globally or per server.
 
@@ -110,7 +110,7 @@ The Instigate Cafe Bot uses strict runtime configuration validation via the `Set
 | `EXAM_REMINDERS_ENABLED`| `exam_reminders_enabled`| boolean | `false` | Background task posting notifications prior to scheduled exams. | `true` |
 | `EXAM_REMINDERS_CHANNEL_ID`| `exam_reminders_channel_id`| integer | `0` | Text channel ID for scheduled exam notifications. | `900000000000000005` |
 | `EXAM_REMINDER_LEAD_HOURS`| `exam_reminder_lead_hours`| list[int]| `[24, 2]` | Notification lead times in hours prior to exam start. | `48, 24, 2` |
-| `NOTES_SITES` | `notes_sites` | list[str] | `[]` | Domain allowlist for verified campus notes hosting repositories. | `github.com` |
+| `NOTES_SITES` | `notes_sites` | list[str] | `[]` | Comma-separated student note hubs in `Title|https://...` format. | `Course Notes|https://notes.example.invalid` |
 
 ---
 
@@ -123,7 +123,7 @@ The Instigate Cafe Bot uses strict runtime configuration validation via the `Set
 | `GREENHOUSE_BOARDS` | `greenhouse_boards` | list[str] | `[]` | List of corporate Greenhouse job board tokens to track. | `stripe,datadog` |
 | `LEVER_SITES` | `lever_sites` | list[str] | `[]` | List of corporate Lever site names to track. | `spotify` |
 | `WORKDAY_SITES` | `workday_sites` | list[str] | `[]` | List of Workday CX search tenant URLs to ingest. | `https://rbc.wd3.myworkdayjobs.com/...` |
-| `WORKDAY_POLL_SECONDS` | `workday_poll_seconds` | integer | `0` | Polling interval for Workday boards (`0` disables by default). | `1200` |
+| `WORKDAY_POLL_SECONDS` | `workday_poll_seconds` | integer | `0` | Workday polling interval in seconds (`0` inherits `JOBS_POLL_SECONDS`; polling runs only when `WORKDAY_SITES`, `JOB_ALERTS_CHANNEL_ID`, and effective interval `> 0` are configured). | `1200` |
 | `WORKDAY_TIMEOUT_SECONDS`| `workday_timeout_seconds`| integer | `12` | HTTP timeout in seconds for Workday endpoint requests. | `15` |
 | `JOBS_LOCATION_ALLOWLIST`| `jobs_location_allowlist`| list[str]| `[]` | Geo-filtering keywords (`Toronto`, `Remote`, `Canada`). | `Toronto, Remote, Waterloo` |
 | `JOBS_KEYWORDS_ALLOWLIST`| `jobs_keywords_allowlist`| list[str]| `[]` | Title keywords required to trigger an alert (`Intern`, `New Grad`, `Junior`). | `Intern, Co-op, New Grad` |
@@ -142,14 +142,14 @@ The Instigate Cafe Bot uses strict runtime configuration validation via the `Set
 | `GO_ALERTS_CHANNEL_ID` | `go_alerts_channel_id` | integer | `0` | Discord Channel ID for GO transit alert broadcasts. | `900000000000000007` |
 | `GO_POLL_SECONDS` | `go_poll_seconds` | integer | `180` | Polling frequency in seconds for GO transit service notifications. | `180` |
 | `GO_ALERT_LEVEL` | `go_alert_level` | string | `major` | Filter threshold: `major` (delays > 15m, cancellations) or `all`. | `major` |
-| `GO_BOOTSTRAP_POST_LATEST`| `go_bootstrap_post_latest`| boolean| `true` | Ingests latest alert state without spamming notifications. | `true` |
+| `GO_BOOTSTRAP_POST_LATEST`| `go_bootstrap_post_latest`| boolean| `true` | Code default `true` posts 1 latest matching alert on first bootstrap then checkpoints (`.env.example` overrides to `false` for local dev). | `false` |
 | `GO_INCLUDE_BUSES` | `go_include_buses` | boolean | `false` | When `true`, includes GO Bus service alerts alongside rail corridors. | `false` |
 | `GO_LINES_ALLOWLIST` | `go_lines_allowlist` | list[str] | `[]` | Specific rail line corridors to track (`Lakeshore West`, `Kitchener`). | `Lakeshore West, Lakeshore East` |
 | `GO_SSL_VERIFY` | `go_ssl_verify` | boolean | `true` | Enforces TLS certificate verification on Metrolinx API connections. | `true` |
 | `GO_CA_BUNDLE_PATH` | `go_ca_bundle_path` | string | `""` | Path to custom TLS CA root bundle if behind corporate proxies. | `/etc/ssl/certs/ca.pem` |
 | `GO_DEBUG` | `go_debug` | boolean | `false` | Verbose HTTP logging for GO Transit requests. | `false` |
 | `TTC_ALERTS_CHANNEL_ID` | `ttc_alerts_channel_id` | integer | `0` | Discord Channel ID for TTC service alerts aggregated from Mastodon. | `900000000000000008` |
-| `TTC_MASTODON_BASE` | `ttc_mastodon_base` | string | `""` | Base URL of the Mastodon instance (defaults to `https://mstdn.ca`). | `https://mstdn.ca` |
+| `TTC_MASTODON_BASE` | `ttc_mastodon_base` | string | `""` | Base URL of the Mastodon instance (empty by default; required with `TTC_MASTODON_ACCT` for TTC polling). | `https://mstdn.ca` |
 | `TTC_MASTODON_ACCT` | `ttc_mastodon_acct` | string | `""` | Target Mastodon handle for TTC delay announcements. | `TTCnotices` |
 | `TTC_POLL_SECONDS` | `ttc_poll_seconds` | integer | `120` | Polling interval in seconds for TTC ActivityPub/REST updates. | `120` |
 | `TTC_ALERT_LEVEL` | `ttc_alert_level` | string | `major` | Filter threshold: `major` (subway closures, route detours) or `all`. | `major` |
@@ -226,10 +226,9 @@ The Instigate Cafe Bot uses strict runtime configuration validation via the `Set
 
 Server administrators can customize guild-specific behavior directly inside Discord without restarting the bot or editing `.env`:
 
-- **Process-Only (Secret / Infrastructure) Keys:** Secrets (`DISCORD_TOKEN`, `GEMINI_API_KEY`, `GO_API_KEY`, `ODDS_API_KEY`), storage paths (`DB_PATH`, `GRADES_DB_PATH`), gateway flags (`ICBOT_ALLOW_GATEWAY`), and poller cadence limits are **strictly process-level** and cannot be mutated from Discord.
-- **Per-Guild Overrides (`guild_settings`):** Managed via `/ic admin setup`, `/ic admin config`, `/ic admin features`, and `/ic admin roles`, with every change recorded in `guild_settings_audit` (`/ic admin audit`). Overridable domains include:
-  - **Channels:** Stock/economy channel, user command channel, job alerts channel, exam reminder channel.
-  - **Academics & Locale:** `campus_id`, `rmp_university`, `exams_tz`.
-  - **Feature Modules:** Applying profiles (`default`, `student_core`, `toronto_tmu`, `community_full`) or enabling/disabling individual modules.
-  - **RBAC (`ALLOWED_ROLE_IDS` / `/ic admin roles`):** Grants bot-management permissions to designated roles without requiring Discord `Administrator`.
+- **Process-Only (Secret / Infrastructure) Keys (`SECRET_SETTING_KEYS`, `PROCESS_ONLY_KEYS`):** Secrets (`DISCORD_TOKEN`, `GEMINI_API_KEY`, `GO_API_KEY`, `ODDS_API_KEY`), storage paths (`DB_PATH`, `GRADES_DB_PATH`, `LORE_PATH`), gateway flags (`ICBOT_ALLOW_GATEWAY`, `GUILD_ID`, `FORCE_GUILD_RESYNC`), external API base URLs / TLS settings, and poller cadences (`*_POLL_SECONDS`, `TASK_*`) are **strictly process-level** and cannot be mutated from Discord (`icbot/guild_config.py`).
+- **Per-Guild Overrides (`GUILD_OVERRIDABLE_KEYS` in `guild_settings`):** Managed via `/ic admin setup`, `/ic admin config`, `/ic admin features`, and `/ic admin roles`, with every change recorded in `guild_settings_audit` (`/ic admin audit`). Overridable domains include:
+  - **Channels & Roles:** Economy, user command, exam reminder, job, transit, market, and BTC channels, plus delegated admin roles (`allowed_role_ids`).
+  - **Academics & Careers Filters:** `campus_id`, `campus_url`, `rmp_university`, `exams_tz`, `notes_sites`, `academic_*`, `exam_reminders_*`, and `jobs_*` filters.
+  - **Feature Modules & AI Policy:** Applying `FEATURE_PROFILE` (`default`, `student_core`, `toronto_tmu`, `community_full`), `enabled_features` / `disabled_features`, economy/casino/market/BTC thresholds, and non-secret `llm_*` / `gemini_*` settings. Process-wide `LLM_ENABLED=false` remains strictly deny-first (guilds cannot turn AI on when host disables it), and `LLM_CHANNEL_HISTORY_ENABLED=true` requires process startup with privileged `MESSAGE_CONTENT`.
   - **Branding & Visual Themes:** Built-in presets (`instigate_cafe`, `campus_generic`, `student_clean`, `toronto_tmu`, `emerald_academic`) or custom accent hex validated via [`icbot/theme.py`](../icbot/theme.py)'s W3C relative luminance range heuristic ($0.03 \le L \le 0.95$; see [UI Style Contract](ui-style.md)).

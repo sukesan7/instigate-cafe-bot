@@ -13,7 +13,7 @@
 Description=Instigate Cafe Discord Bot
 After=network-online.target
 Wants=network-online.target
-Documentation=https://github.com/your-username/campus-bot/blob/main/docs/production-hosting-and-recovery.md
+Documentation=https://github.com/sukesan7/instigate-cafe-bot/blob/main/docs/deployment.md
 
 [Service]
 Type=simple

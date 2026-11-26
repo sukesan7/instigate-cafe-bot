@@ -6,8 +6,9 @@ Only the current modernized release line is actively supported with security pat
 
 | Version | Supported | Status |
 |---|---|---|
-| `1.0.x` / `0.2.x` | :white_check_mark: | Active Supported Release |
-| `0.1.x` | :x: | Legacy / Deprecated (Do not deploy) |
+| `1.0.0-rc1` (`1.0.0rc1`) | :white_check_mark: | Active Supported Pre-Release |
+| `0.2.x` | :x: | End of Support (Upgrade to `1.0.0-rc1`) |
+| `0.1.x` | :x: | Unsupported / Legacy (Do not deploy) |
 
 ---
 
@@ -16,7 +17,7 @@ Only the current modernized release line is actively supported with security pat
 We take the security and privacy of our student community and contributors seriously. If you discover a potential vulnerability, security defect, or accidental secret exposure:
 
 1. **Do NOT open a public GitHub issue.**
-2. Send a confidential report directly to the project maintainer at **`imsukesan@gmail.com`** or submit a private security advisory through GitHub's Security Advisory interface.
+2. Submit a private report through [GitHub Security Advisories](https://github.com/sukesan7/instigate-cafe-bot/security/advisories/new) or contact the maintainer directly at **`imsukesan@gmail.com`**.
 3. Include the following details to help us investigate:
    - Type of issue (e.g. secret leak, prompt injection, authorization bypass, SSRF, memory leak).
    - Component affected (file path, slash command, or background poller).

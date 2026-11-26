@@ -125,7 +125,7 @@ uv run python tools/verify_offline.py
 
 ### 2. Configure and Run Locally
 
-All optional modules (`LLM_ENABLED`, `MARKET_WATCH_ENABLED`, `BTC_WATCH_ENABLED`, `WORKDAY_POLL_SECONDS=0`) default to off in [`.env.example`](.env.example). Live Discord connections are blocked by default until `--allow-gateway` (or `ICBOT_ALLOW_GATEWAY=true`) is explicitly passed.
+Optional modules and alert channels (`LLM_ENABLED=false`, `MARKET_WATCH_ENABLED=false`, `MARKET_DAILY_REPORT_ENABLED=false`, `BTC_WATCH_ENABLED=false`, `JOB_ALERTS_CHANNEL_ID=0`, `WORKDAY_SITES=`) default to off or unconfigured in [`.env.example`](.env.example); setting `WORKDAY_POLL_SECONDS=0` inherits `JOBS_POLL_SECONDS` (`600` default). Live Discord connections are blocked by default until `--allow-gateway` (or `ICBOT_ALLOW_GATEWAY=true`) is explicitly passed.
 
 ```bash
 cp .env.example .env
