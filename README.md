@@ -4,12 +4,12 @@
 
 # Instigate Cafe Bot
 
-A self-hostable Discord slash-command bot (`/ic`) originally built for a student server and modernized into a configurable open-source application—combining exam calendars, course resource links, early-career job feeds, optional consent-based AI resume review, regional transit/market alerts, and a simulated virtual community economy backed by SQLite (WAL mode).
-
-[![Version v1.0.0-rc1](https://img.shields.io/badge/version-v1.0.0--rc1-2b6cb0)](pyproject.toml)
+[![Version v1.0.0](https://img.shields.io/badge/version-v1.0.0-2b6cb0)](pyproject.toml)
 [![Python 3.11 | 3.12 | 3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776ab)](https://www.python.org/)
 [![License MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
 [![Quality & Security Gate](https://github.com/sukesan7/instigate-cafe-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/sukesan7/instigate-cafe-bot/actions/workflows/ci.yml)
+
+A self-hostable Discord slash-command bot (`/ic`) originally built for a student server and modernized into a configurable open-source application—combining exam calendars, course resource links, early-career job feeds, optional consent-based AI resume review, regional transit/market alerts, and a simulated virtual community economy backed by SQLite (WAL mode).
 
 ---
 
@@ -176,4 +176,4 @@ Once your bot is online in Discord, run **`/ic admin setup`** to choose alert ch
 
 - Source code is licensed under the [MIT License](LICENSE) (Copyright &copy; 2026 sukesan).
 - "Instigate Cafe" branding and `assets/ic_logo.png` are reserved by the Instigate Cafe community.
-- External course notes remain the copyright of their student authors (**Jasper Cruz** and **Krish Patel**); transit data follows the [Metrolinx Open Data Licence](https://www.metrolinx.com/en/about-us/open-data) and public TTC Mastodon feeds.
+- External course notes remain the copyright of their student authors; transit data follows the [Metrolinx Open Data Licence](https://www.metrolinx.com/en/about-us/open-data) and public TTC Mastodon feeds.
