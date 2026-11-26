@@ -94,37 +94,18 @@ def test_command_docs_validator_catches_missing_commands_typos_and_option_drift(
     assert "forbidden command typo /ic daily" in joined
 
 
-def test_screenshots_guide_covers_prioritized_shot_list_and_safety_rules() -> None:
-    """Verify docs/screenshots-guide.md defines all 5 priority tiers, safety rules, and leaves README unlinked."""
-    guide_text = (PROJECT_ROOT / "docs/screenshots-guide.md").read_text(encoding="utf-8")
-    readme_text = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-
-    # 5 prioritized tiers
-    for marker in (
-        "Priority 1",
-        "Priority 2",
-        "Priority 3",
-        "Priority 4",
-        "Priority 5",
-        "Expected Embed Title",
-        "Visual Theme",
-        "Elements to Capture",
-        "Safe Test Data",
-        "Crop Guidelines",
-        "Alt Text Draft",
-        "Suggested Filename",
-        "assets/screenshots/",
-        "non-production token",
-        "Never run two bot copies",
-        "Never upload actual student resumes",
-        "instigate_cafe",
-    ):
-        assert marker in guide_text, f"docs/screenshots-guide.md missing required section/rule: {marker}"
-
-    # Every gallery screenshot referenced in README.md must exist on disk (zero broken/fake references)
+def test_gallery_screenshots_referenced_in_readme_and_gallery_exist() -> None:
+    """Verify every gallery screenshot referenced in README.md and docs/gallery.md exists on disk."""
     import re
 
-    referenced = re.findall(r"assets/screenshots/[A-Za-z0-9_.-]+\.(?:png|webp)", readme_text)
-    assert len(referenced) >= 3, "README.md Gallery should reference at least 3 verified screenshots"
-    for rel in referenced:
-        assert (PROJECT_ROOT / rel).is_file(), f"README.md references missing screenshot: {rel}"
+    readme_text = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    gallery_text = (PROJECT_ROOT / "docs/gallery.md").read_text(encoding="utf-8")
+
+    readme_refs = re.findall(r"assets/screenshots/[A-Za-z0-9_.-]+\.(?:png|webp)", readme_text)
+    gallery_refs = re.findall(r"assets/screenshots/[A-Za-z0-9_.-]+\.(?:png|webp)", gallery_text)
+    assert len(readme_refs) >= 3, "README.md Gallery should reference at least 3 screenshots"
+    assert len(gallery_refs) > len(readme_refs), (
+        "docs/gallery.md should provide additional captures beyond README.md"
+    )
+    for rel in (*readme_refs, *gallery_refs):
+        assert (PROJECT_ROOT / rel).is_file(), f"Missing referenced screenshot: {rel}"

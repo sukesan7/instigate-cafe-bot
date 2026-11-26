@@ -153,7 +153,7 @@ def test_interaction_audience_matrix_and_ui_style_documentation() -> None:
         assert INTERACTION_AUDIENCE_MATRIX[name].default_timeout_seconds == 180.0
 
     assert len(SHARED_INTERACTION_EXCEPTIONS) == 3
-    ui_doc = (PROJECT_ROOT / "docs" / "ui-style.md").read_text(encoding="utf-8")
+    ui_doc = (PROJECT_ROOT / "docs" / "development.md").read_text(encoding="utf-8")
     assert "Interaction-Audience Matrix" in ui_doc
     assert "SHARED_INTERACTION_EXCEPTIONS" in ui_doc
     assert "NotesPaginationView" in ui_doc

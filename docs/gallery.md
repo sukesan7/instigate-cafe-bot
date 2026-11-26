@@ -1,10 +1,10 @@
 # Instigate Cafe Bot — Screenshot Gallery
 
-Verified, metadata-stripped Discord UI captures from the v1.0 release using the default `instigate_cafe` theme (`#A64DFF`). For capture, cropping, and redaction standards, see [Screenshots Capture & Redaction Guide](screenshots-guide.md).
+Real Discord UI screenshots captured using the default `instigate_cafe` theme (`#A64DFF`).
 
 ---
 
-## Core Experience
+## Core Features
 
 <table>
   <tr>
@@ -19,7 +19,7 @@ Verified, metadata-stripped Discord UI captures from the v1.0 release using the 
   </tr>
   <tr>
     <td width="50%" align="center" valign="top">
-      <img src="../assets/screenshots/02-notes.png" alt="Discord embed showing /ic notes course study-guide results for MEC511 and COE528 with source attribution and live/cached freshness badges" width="440"/><br/>
+      <img src="../assets/screenshots/02-notes.png" alt="Discord embed showing /ic notes course study-guide results for MEC511 and COE528 with source attribution and live/cached freshness labels" width="440"/><br/>
       <sub><b>Academic Course Notes</b> — <code>/ic notes</code> study links with live and cached provenance</sub>
     </td>
     <td width="50%" align="center" valign="top">
@@ -31,17 +31,17 @@ Verified, metadata-stripped Discord UI captures from the v1.0 release using the 
 
 ---
 
-## Economy, Casino & Sports
+## Simulated Economy, Casino & Sports
 
 <table>
   <tr>
     <td width="50%" align="center" valign="top">
-      <img src="../assets/screenshots/04-icse-market.png" alt="Discord embed displaying the virtual Instigate Cafe Stock Exchange (/ic icse market) with synthetic ticker prices, weekly baselines, and simulated-points disclaimer" width="440"/><br/>
-      <sub><b>Virtual Stock Exchange (ICSE)</b> — <code>/ic icse market</code> synthetic securities</sub>
+      <img src="../assets/screenshots/04-icse-market.png" alt="Discord embed displaying the simulated Instigate Cafe Stock Exchange (/ic icse market) with synthetic ticker prices, weekly baselines, and virtual-points disclaimer" width="440"/><br/>
+      <sub><b>Simulated Stock Exchange (ICSE)</b> — <code>/ic icse market</code> virtual community points</sub>
     </td>
     <td width="50%" align="center" valign="top">
       <img src="../assets/screenshots/06-blackjack.png" alt="Discord embed showing an active /ic casino blackjack hand with interactive Hit, Stand, Double, Split, and Forfeit buttons" width="440"/><br/>
-      <sub><b>Interactive Blackjack</b> — <code>/ic casino blackjack</code> button-driven card play</sub>
+      <sub><b>Interactive Blackjack</b> — <code>/ic casino blackjack</code> button-driven simulated card play</sub>
     </td>
   </tr>
   <tr>
@@ -50,11 +50,11 @@ Verified, metadata-stripped Discord UI captures from the v1.0 release using the 
       <sub><b>Sports Updates</b> — <code>/ic sports boxing</code> upcoming schedule and RSS headlines</sub>
     </td>
     <td width="50%" align="center" valign="top">
-      <p><i>Additional optional captures (<code>/ic exam list</code>, redacted <code>/ic status</code>, and <code>/ic resume</code> consent notice) will be added here once recaptured without Discord snowflake IDs, private channel names, or real student resumes.</i></p>
+      <p><i>All economy balances, casino bets, and ICSE stocks shown above use purely virtual server points with no real-money value.</i></p>
     </td>
   </tr>
 </table>
 
 ---
 
-[Back to README](../README.md) · [Documentation Index](README.md) · [Screenshots Capture & Redaction Guide](screenshots-guide.md)
+[Back to README](../README.md) · [Documentation Index](README.md) · [Features & Command Guide](features.md)

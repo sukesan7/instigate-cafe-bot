@@ -109,14 +109,14 @@ def test_docs_and_pr_template_distinguish_ci_gate_from_offline_checks() -> None:
     """Verify badge labels and contributor docs no longer mislabel networked ci.yml as offline-only."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     dev_doc = (REPO_ROOT / "docs" / "development.md").read_text(encoding="utf-8")
-    ledger = (REPO_ROOT / "docs" / "release-verification.md").read_text(encoding="utf-8")
+    contrib_doc = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     pr_template = (REPO_ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md").read_text(encoding="utf-8")
 
     assert "[![Quality & Security Gate](" in readme
     assert "Offline Quality Gate" not in readme
     assert "(Quality & Security Gate)" in dev_doc
-    assert "`Quality & Security Gate`" in ledger
-    assert "Offline Quality Gate" not in ledger
+    assert "`Quality & Security Gate`" in contrib_doc
+    assert "Offline Quality Gate" not in dev_doc
     assert "Offline Verification Checklist" in pr_template
 
 

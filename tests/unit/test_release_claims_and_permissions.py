@@ -64,7 +64,6 @@ def test_public_copy_and_documentation_claims_are_accurate() -> None:
     assert "provably fair" not in readme_src.lower()
     assert "unit-tested PRNG game engines" in readme_src
     assert "LLM_CHANNEL_HISTORY_ENABLED=false" in readme_src
-    assert "docs/release-evidence.md" in readme_src
     assert "GDPR-compliant" not in readme_src
 
     privacy_src = (PROJECT_ROOT / "docs/privacy.md").read_text(encoding="utf-8")
@@ -73,11 +72,9 @@ def test_public_copy_and_documentation_claims_are_accurate() -> None:
     docs_index_src = (PROJECT_ROOT / "docs/README.md").read_text(encoding="utf-8")
     assert "GDPR-compliant" not in docs_index_src
 
-    evidence_path = PROJECT_ROOT / "docs/release-evidence.md"
-    assert evidence_path.is_file()
-    evidence_src = evidence_path.read_text(encoding="utf-8")
-    assert "Claim-to-Evidence Traceability Matrix" in evidence_src
-    assert "Not Yet Verified" in evidence_src
+    dev_src = (PROJECT_ROOT / "docs/development.md").read_text(encoding="utf-8")
+    assert "relative luminance range heuristic" in dev_src
+    assert "not cryptographic commit-reveal" in dev_src
 
 
 @pytest.mark.asyncio

@@ -19,42 +19,45 @@ def test_compact_public_docs_index_and_scope_clarity() -> None:
         "gallery.md",
         "configuration.md",
         "deployment.md",
-        "troubleshooting.md",
         "architecture.md",
         "providers.md",
         "privacy.md",
-        "ui-style.md",
         "development.md",
-        "testing.md",
-        "release-evidence.md",
-        "release-verification.md",
-        "staging-runbook.md",
-        "screenshots-guide.md",
     ):
         assert expected_doc in content, f"docs/README.md does not link to {expected_doc}"
 
-    assert "Self-Hosted Open-Source Bot" in content
-    assert "Publicly Inviteable Hosted Bot" in content
+    assert "Self-Hosted Open-Source" in content
+    assert "Hosted Public Bot" in content
     assert "TMU" in content
 
-    # Historical planning/launch reports should not live in public docs/
+    # Consolidated/obsolete planning & release records should not remain under docs/
     for archived_path in (
         "docs/launch-assets.md",
         "docs/alpha-beta-readiness.md",
         "docs/usability_review.md",
         "docs/audit/architecture_inventory.md",
+        "docs/screenshots-guide.md",
+        "docs/staging-runbook.md",
+        "docs/release-evidence.md",
+        "docs/release-verification.md",
+        "docs/testing.md",
+        "docs/troubleshooting.md",
+        "docs/ui-style.md",
     ):
         assert not (PROJECT_ROOT / archived_path).exists(), (
-            f"Historical/planning document should be archived outside docs/: {archived_path}"
+            f"Obsolete/merged document should not remain in docs/: {archived_path}"
         )
 
 
 def test_readme_restrained_landing_page_and_honest_boundaries() -> None:
-    """Verify README.md is concise, honest, visually restrained, and free of fake screenshot links."""
+    """Verify README.md is concise, honest, visually restrained, and separates self-hosting from dev setup."""
     readme_path = PROJECT_ROOT / "README.md"
     content = readme_path.read_text(encoding="utf-8")
+    contrib_content = (PROJECT_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    dev_content = (PROJECT_ROOT / "docs/development.md").read_text(encoding="utf-8")
 
-    # Brand hero with real local logo and compact factual badges (no rainbow badge wall or stale counts)
+    # Brand hero with real banner + attribution and compact factual badges
+    assert "assets/ic_banner.png" in content
     assert "assets/ic_logo.png" in content
     assert "v1.0.0-rc1" in content
     assert "sukesan7/instigate-cafe-bot/actions/workflows/ci.yml/badge.svg" in content
@@ -78,18 +81,18 @@ def test_readme_restrained_landing_page_and_honest_boundaries() -> None:
     assert "Publicly Inviteable Hosted Bot" in content
     assert "Toronto Metropolitan University" in content
 
-    # Fresh-checkout Quick Start with Python 3.12/3.13, .env.example, and offline test command
+    # Self-hosting Quick Start uses runtime-only install + --allow-gateway; contributor setup lives in CONTRIBUTING/development
     assert "3.12" in content and "3.13" in content
     assert ".env.example" in content
-    assert "uv sync --frozen --dev" in content
-    assert "tools/verify_offline.py" in content
-    assert "uv run pytest" in content
+    assert "uv sync --frozen --no-dev" in content
+    assert "requirements.txt" in content
     assert "--allow-gateway" in content
+    assert "uv sync --frozen --dev" in contrib_content and "uv sync --frozen --dev" in dev_content
+    assert "tools/verify_offline.py" in contrib_content and "tools/verify_offline.py" in dev_content
 
     # Verified 2-column Gallery with real local optimized screenshots (zero placeholder/unredacted leaks)
     assert "## Gallery" in content
     assert "docs/gallery.md" in content
-    assert "docs/screenshots-guide.md" in content
     for img_rel in (
         "assets/screenshots/01-getting-started.png",
         "assets/screenshots/02-notes.png",
@@ -135,32 +138,12 @@ def test_readme_restrained_landing_page_and_honest_boundaries() -> None:
         "docs/deployment.md",
         "docs/privacy.md",
         "docs/providers.md",
-        "docs/troubleshooting.md",
-        "docs/release-evidence.md",
+        "docs/architecture.md",
+        "docs/development.md",
         "CONTRIBUTING.md",
         "SECURITY.md",
     ):
         assert link_target in content, f"README.md missing link to {link_target}"
-
-
-def test_screenshots_guide_defines_redaction_and_owner_only_capture() -> None:
-    """Verify docs/screenshots-guide.md specifies capture rules, redaction checks, and owner intake checklist."""
-    guide_path = PROJECT_ROOT / "docs/screenshots-guide.md"
-    assert guide_path.is_file(), "docs/screenshots-guide.md is missing"
-    content = guide_path.read_text(encoding="utf-8")
-
-    assert "manual owner-run" in content.lower()
-    assert "redaction" in content.lower()
-    assert "DISCORD_TOKEN" in content
-    assert "/ic resume" in content
-    assert "/ic exam list" in content
-    assert "/ic admin setup" in content
-    assert "staging-runbook.md" in content
-    assert "## 4. Owner Action Required Checklist" in content
-    assert "Core gallery published" in content
-    assert "non-public channel names" in content
-    assert "account settings" in content
-    assert "administrator metadata" in content
 
 
 def test_public_docs_contain_zero_sensitive_tokens() -> None:

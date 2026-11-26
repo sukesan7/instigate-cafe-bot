@@ -122,28 +122,17 @@ async def test_readable_errors_for_permissions_missing_mount_absent_secrets_and_
 
 
 def test_docs_document_container_smoke_plan_error_diagnostics_and_verification_tiers() -> None:
-    """Verify deployment, troubleshooting, and verification docs distinguish tiers and document safe checks."""
+    """Verify deployment and development docs cover container smoke, error diagnostics, and test boundaries."""
     deploy_doc = (REPO_ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
-    troubleshoot_doc = (REPO_ROOT / "docs" / "troubleshooting.md").read_text(encoding="utf-8")
-    ledger_doc = (REPO_ROOT / "docs" / "release-verification.md").read_text(encoding="utf-8")
+    dev_doc = (REPO_ROOT / "docs" / "development.md").read_text(encoding="utf-8")
 
-    # Multi-boot tokenless throwaway volume test plan in deployment.md
+    # Multi-boot tokenless throwaway volume test plan and troubleshooting in deployment.md
     assert "mktemp -d" in deploy_doc
     assert "ICBOT_ALLOW_GATEWAY=false" in deploy_doc
     assert "DatabasePathError" in deploy_doc
     assert "MigrationError" in deploy_doc
     assert "Missing DISCORD_TOKEN" in deploy_doc
 
-    # Troubleshooting covers all four readable failure modes
-    assert "DatabasePathError" in troubleshoot_doc
-    assert "MigrationError" in troubleshoot_doc or "user_version" in troubleshoot_doc
-    assert "Missing DISCORD_TOKEN" in troubleshoot_doc
-
-    # Release verification clearly distinguishes the 3 verification tiers
-    for tier_phrase in (
-        "Container Smoke",
-        "Offline Staging Simulation",
-        "Authenticated Live Discord Acceptance",
-        "Not Executed Locally",
-    ):
-        assert tier_phrase in ledger_doc, f"docs/release-verification.md missing '{tier_phrase}'"
+    # Development doc clarifies offline mocks vs manual live Docker/Railway/Discord steps
+    assert "Automated tests mock Discord interactions" in dev_doc
+    assert "Quality & Security Gate" in dev_doc

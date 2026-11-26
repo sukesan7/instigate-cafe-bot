@@ -9,7 +9,7 @@ This reference documents every supported slash command under **`/ic`** (53 leaf 
 ## 1. Defaults, Themes, Permissions & Disabled-Feature Behavior
 
 ### 1.1 Default Visual Theme
-All command embeds use the **`instigate_cafe`** preset by default (`BOT_DISPLAY_NAME="InstigateAI"`, accent `#A64DFF` / `0xA64DFF`, footer `Instigate Cafe`). Administrators can switch per server via `/ic admin config` among the five built-in presets in `icbot/theme.py`: `instigate_cafe`, `campus_generic`, `student_clean`, `toronto_tmu`, and `emerald_academic`. See [UI Style Contract](ui-style.md) for semantic status colors (`info`, `success`, `warning`, `error`, `disabled`).
+All command embeds use the **`instigate_cafe`** preset by default (`BOT_DISPLAY_NAME="InstigateAI"`, accent `#A64DFF` / `0xA64DFF`, footer `Instigate Cafe`). Administrators can switch per server via `/ic admin config` among the five built-in presets in `icbot/theme.py`: `instigate_cafe`, `campus_generic`, `student_clean`, `toronto_tmu`, and `emerald_academic`. See [Development, Testing & UI Conventions](development.md#5-discord-ui-and-interaction-conventions) for semantic status colors (`info`, `success`, `warning`, `error`, `disabled`).
 
 ### 1.2 Disabled-Feature Behavior
 Every `/ic` interaction passes through `check_command_gate()` before executing. If a command's module is turned off for the guild (via `FEATURE_PROFILE`, `DISABLED_FEATURES`, or `/ic admin features`), the bot returns an ephemeral embed titled **`Module Disabled`** (using the `disabled` status color) telling members the module is off and instructing server administrators to run `/ic admin features` or `/ic admin config` to re-enable it.

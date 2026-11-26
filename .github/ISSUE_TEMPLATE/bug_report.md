@@ -18,7 +18,7 @@ A clear and concise description of the bug or unexpected behavior.
 A clear description of what you expected to happen.
 
 ### System Diagnostics
-Before filing a bug, check the [Troubleshooting Guide](../../docs/troubleshooting.md). Run `/ic status issue_report:True` in your Discord server (requires Manage Server permissions) and paste the sanitized report here:
+Before filing a bug, check the [Deployment & Troubleshooting Guide](../../docs/deployment.md#10-troubleshooting). Run `/ic status issue_report:True` in your Discord server (requires Manage Server permissions) and paste the sanitized report here:
 
 ```markdown
 <!-- Paste output from status_issue_report.md here -->

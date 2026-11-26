@@ -1,107 +1,86 @@
 # Contributing to Instigate Cafe Bot
 
-Thank you for your interest in contributing to the Instigate Cafe Bot! This project is a campus community Discord bot modernizing utility, transit, careers, and academic features for students.
+Thank you for contributing to Instigate Cafe Bot! This is a community-built, self-hostable Discord bot, and keeping contributions practical, well-tested, and safe to run offline helps every maintainer and self-hoster.
 
 ---
 
-## 1. Contributor Safety & Testing Standards
-
-Before making changes or opening a pull request, follow these project invariants:
+## 1. Contributor Safety Rules
 
 > [!CAUTION]
 > **Offline Testing & Data Safety:**
-> - **Never connect to the live Discord Gateway** during ordinary development or testing (`ICBOT_ALLOW_GATEWAY=false` by default). Do not run `python main.py --allow-gateway` or call `bot.run()` in tests or imports.
-> - **Never commit secrets or private data:** Do not commit `.env` files, API tokens, SQLite databases (`*.db`, `*-wal`, `*-shm`), private server lore, real user messages, or student resumes into source, fixtures, logs, or issue reports.
-> - **Mock external APIs by default:** Use fake Discord interactions (`FakeInteraction`, `FakeClient`), temporary SQLite databases (`tmp_path`), and mocked HTTP routers (`AiohttpMockRouter`). Never infer that tests pass from syntax checks alone.
-> - **Deployments are strictly human-controlled:** Never trigger production deployments or alter hosting settings from CI or PRs.
+> - **Never connect to the live Discord Gateway** during development or automated tests (`ICBOT_ALLOW_GATEWAY=false` by default). Do not run `python main.py --allow-gateway` or call `bot.run()` inside tests or imports.
+> - **Never commit secrets or private community data:** Keep `.env` files, API tokens, SQLite databases (`*.db`, `*-wal`, `*-shm`), private server lore, real Discord messages, and real student resumes out of code, fixtures, logs, and issue reports.
+> - **Mock all external APIs in tests:** Use fake Discord interactions (`FakeInteraction`, `FakeClient`), temporary SQLite databases (`tmp_path`), and `AiohttpMockRouter`.
+> - **Keep database changes reversible:** Test SQLite schema changes against synthetic temp databases and confirm `tools/backup_db.py` backups remain valid.
 
 ---
 
-## 2. Getting Started with Local Development
+## 2. Setting Up a Contributor Environment
 
-We use [`uv`](https://docs.astral.sh/uv/) for fast, reproducible dependency management and virtual environments. For full tooling details and safety tiers, see the [Development & Tooling Guide](docs/development.md) and [Offline Testing Guide](docs/testing.md).
+See the [Development & Testing Guide](docs/development.md) for Python matrix notes, safety tiers, UI conventions, and testing architecture.
 
-### 2.1 Prerequisites
-- **Python 3.12** recommended (3.11, 3.12, and 3.13 are tested in CI; on rolling Linux distros such as Arch/Garuda where system `python3` is 3.14, let `uv` manage Python 3.12)
-- `uv` installed (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+### Prerequisites
+- **Python 3.11–3.13** (`3.12` recommended; on rolling Linux distros whose system Python is 3.14+, let `uv` manage Python 3.12).
+- [`uv`](https://docs.astral.sh/uv/) package manager.
 
-### 2.2 Setup Environment (Canonical `uv` Path)
+### Setup (`uv`)
+
 ```bash
-# Clone your fork and enter the directory
 git clone https://github.com/sukesan7/instigate-cafe-bot.git
 cd instigate-cafe-bot
 
-# Create managed Python 3.12 virtualenv and install locked dependencies
 uv venv --python 3.12
 uv sync --frozen --dev
 
-# Install git pre-commit hooks
+# Install offline local pre-commit hooks
 uv run pre-commit install
 ```
 
-*(Pip fallback: `python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt` for runtime, or `pip install --require-hashes -r requirements.lock`. Never hand-edit `requirements.txt` or `requirements.lock`; edit `pyproject.toml` and regenerate with `make export-requirements`.)*
+### Standard Python + `pip` Developer Fallback
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install pytest pytest-asyncio pytest-cov aioresponses ruff mypy pre-commit pip-audit
+```
+
+*(Never hand-edit `requirements.txt` or `requirements.lock`; update `pyproject.toml`, run `uv lock`, and regenerate them with `make export-requirements`.)*
 
 ---
 
-## 3. Local Quality Gates & Verification
+## 3. Running Tests, Linting & Checks
 
-Run the single-command offline contributor verifier (zero network, zero live tokens, actionable failure hints):
+Run the single-command offline verification suite before opening a pull request:
 
 ```bash
 uv run python tools/verify_offline.py
-# Or via Makefile:
-make verify
+# Or: make verify
 ```
 
-Individual commands when debugging a specific stage:
+Individual checks:
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
+uv run pytest                                  # Full offline test suite (mocked network)
+uv run ruff check . && uv run ruff format --check .
 uv run mypy .
-uv run python tools/smoke_offline.py
+uv run python tools/smoke_offline.py           # AST check & zero-token import verification
 uv run python tools/scan_secrets.py --enforce-clean
-uv run python tools/check_docs.py
-uv run python tools/check_command_docs.py
-uv run pytest
-uv run python tools/run_usability_audit.py
+uv run python tools/check_docs.py              # Markdown links, images, and anchors
+uv run python tools/check_command_docs.py      # /ic command-tree parity vs docs/features.md
+uv run pip-audit -r requirements.lock          # Networked PyPI/OSV advisory check (or: make audit)
 ```
 
 ---
 
-## 4. Pull Request & Commit Guidelines
+## 4. Pull Request Expectations
 
-1. **Branch Naming:** Create focused feature branches (e.g. `feature/academic-notes-filter`, `fix/resume-timeout`).
-2. **Conventional Commits:** Write clear, structured commit messages:
-   - `feat(...)`: New user-facing features or command sub-commands.
-   - `fix(...)`: Evidenced bug fixes and error handling improvements.
-   - `docs(...)`: Documentation, checklists, and guides.
-   - `test(...)`: Unit, integration, or benchmark tests.
-   - `chore(...)`: Tooling, dependency, or configuration updates.
-3. **Narrow Scope & Verification:** Keep PRs focused on a single change with offline regression tests.
-   - **Schema changes:** Use synthetic temp fixtures, write backward-compatible migrations, and verify backups/restore cleanly.
-   - **Economy & market changes:** Assert transactional atomicity (`BEGIN IMMEDIATE`) and zero duplicate settlement or balance drift.
-   - **Module cleanup:** Verify dynamic slash-command registration (`icbot/registry.py`) and CLI/test entrypoints before removing any module.
-4. **No Direct Production Pushes:** All changes land via reviewed pull requests passing the GitHub Actions Quality & Security Gate. Production deployments are triggered manually by maintainers.
+1. **Focused branches:** Keep PRs scoped to one fix or feature, with offline tests covering any changed behavior.
+2. **Command & setting changes:** If you add/edit a `/ic` command or `Settings` option, update [Features & Command Guide](docs/features.md) or [Configuration Reference](docs/configuration.md) and confirm `check_command_docs.py` and `check_docs.py` pass.
+3. **Adding a campus provider:** Follow the step-by-step protocol and SSRF safety checklist in [External Providers Guide](docs/providers.md#4-contributor-guide-adding-a-new-campus-provider).
+4. **PR checklist & review:** Ensure CI (`Quality & Security Gate` across Python `3.11–3.13` and `dependency-audit`) passes cleanly and no `.db`, `.env`, or credential artifacts appear in your diff.
 
 ---
 
-## 5. Review & Maintainer Sign-Off Process
+## 5. Code of Conduct
 
-Every pull request requires:
-- Approval from at least one repository maintainer.
-- 100% green status on the GitHub Actions **Quality & Security Gate** (`quality` offline matrix and `dependency-audit`).
-- Clean diff verification ensuring no `.db`, `.env`, or credential artifacts are introduced.
-
----
-
-## 6. Adding a New Campus Provider
-
-We welcome community contributions expanding the bot's academic tools to other universities! Please consult the [Provider Integration Guide](docs/providers.md#4-contributor-guide-adding-a-new-campus-provider) for step-by-step instructions on implementing `AcademicProviderProtocol`, SSRF validation, and writing offline tests with synthetic fixtures.
-
----
-
-## 7. Code of Conduct
-
-All contributors and community participants are expected to adhere to our [Community Code of Conduct](CODE_OF_CONDUCT.md). Please report any concerns to **`imsukesan@gmail.com`**.
-
+Participants are expected to follow our [Community Code of Conduct](CODE_OF_CONDUCT.md). Report concerns confidentially to **`imsukesan@gmail.com`**.

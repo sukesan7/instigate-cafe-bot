@@ -1,36 +1,28 @@
-# Instigate Cafe Bot — Deployment, Hosting & Disaster Recovery
+# Instigate Cafe Bot — Deployment, Troubleshooting & Recovery
 
-**Target Environments:** Self-Hosted Linux VPS (Docker Compose / `systemd`) & Managed Hosting (Railway)  
+**Supported Hosting Paths:** Self-Hosted Linux VPS (Docker Compose / `systemd`) & Managed Container Hosting (Railway)  
 **Operational Posture:** Non-root execution (`UID 10001`), outbound-only networking (zero inbound ports), runtime secret injection, single-instance scheduler ownership, and SQLite WAL online backups.
 
 ---
 
-## 1. Deployment Models: Self-Hosted vs. Hosted Public Invite
+## 1. Self-Hosted Deployment vs. Shared Public Instance
 
-Before deploying or sharing the bot, distinguish clearly between the two operating models:
-
-| Consideration | Model A: Self-Hosted Open-Source Bot (Recommended) | Model B: Maintainer-Hosted Public Invite |
+| Consideration | Self-Hosted Instance (Intended Use) | Shared Hosted Instance (Not Operated Here) |
 | :--- | :--- | :--- |
-| **How It Works** | Each club/server clones this repo, creates its own Discord Application, and runs its own container/service. | One central operator hosts a shared multi-tenant instance and publishes an OAuth2 invite URL. |
-| **Data Ownership & Controller** | 100% local sovereignty; SQLite database (`DB_PATH`) stays on the server's own disk. Self-hoster is the sole Data Controller. | Shared database across guilds; central maintainer is the Data Controller and handles cross-guild deletion requests. |
+| **How It Works** | Clone the repository, register your own Discord Application, and run a single container or service. | One operator hosts a multi-server instance with a shared invite link. |
+| **Data Ownership** | SQLite database (`DB_PATH`) stays on your own host; you are the sole administrator and data controller. | Shared database across servers; central operator handles cross-server requests and API bills. |
 | **Discord Verification** | Not required (`<100` servers). | Mandatory Discord Bot Verification at `>=100` servers. |
-| **Privileged Intents** | **Zero privileged intents by default** (slash commands, `/ic resume`, and direct `@mention` replies use only unprivileged `guilds` + `messages`). Message Content Intent is requested *only* when both `LLM_ENABLED=true` and `LLM_CHANNEL_HISTORY_ENABLED=true` are set at process startup. | Discord restricts Message Content Intent at scale; run with `LLM_CHANNEL_HISTORY_ENABLED=false` (zero privileged intents). |
-| **API Keys & Quotas** | Self-hoster supplies optional keys (`GEMINI_API_KEY`, `GO_API_KEY`, `ODDS_API_KEY`) under their own billing caps. | Maintainer absorbs all API costs and must enforce strict per-guild rate limits. |
+| **Privileged Intents** | **Zero privileged intents by default** (slash commands, `/ic resume`, and direct `@mention` replies use only unprivileged `guilds` + `messages`). Message Content Intent is requested *only* when both `LLM_ENABLED=true` and `LLM_CHANNEL_HISTORY_ENABLED=true` are set at process startup. | Discord restricts Message Content Intent at scale; run with `LLM_CHANNEL_HISTORY_ENABLED=false`. |
 
 ---
 
 ## 2. Single Active Scheduler Process Ownership
 
 > [!CAUTION]
-> **Horizontal Autoscaling Is Prohibited:**  
-> Never run more than **one active replica (`replicas: 1`)** against the same SQLite database.
+> **Do Not Run Multiple Replicas (`replicas: 1`):**  
+> Never run more than **one active bot process** against the same SQLite database file.
 
-Running multiple replicas simultaneously causes:
-1. **Duplicate channel alerts** from concurrent transit, job, and market pollers.
-2. **Double-spend / settlement races** in casino views and virtual market trades.
-3. **SQLite `database is locked` errors** or WAL corruption (especially across network filesystems such as NFS/SMB).
-
-Always pin `replicas: 1` in Docker Compose and Railway, and mount local SSD/block storage rather than shared network mounts.
+Running multiple processes against one `DB_PATH` causes duplicate channel alerts, settlement races in casino/ICSE views, and SQLite `database is locked` or WAL corruption errors (especially on network shares like NFS/SMB). Always set `replicas: 1` and mount local SSD/block storage.
 
 ---
 
@@ -44,25 +36,25 @@ Always pin `replicas: 1` in Docker Compose and Railway, and mount local SSD/bloc
    - `Read Message History` (`0x00010000`) — interaction context and message updates
    - `Use Slash Commands` (`0x80000000`) — `/ic` application commands
    - `Add Reactions` (`0x00000040`) — interactive feedback cues
-3. **Privileged Gateway Intents (Least-Privilege Startup Policy):**
-   - **Default (`0` privileged intents):** `CampusBot` requests only unprivileged `guilds` and `messages` (`guild_messages` + `dm_messages`) intents at startup. All 53 `/ic` slash commands, `/ic resume`, and direct `@mention` AI replies work with **Message Content Intent OFF** (Discord delivers content on messages directly mentioning the bot or in DMs without the privileged bit).
-   - **Message Content Intent (Optional):** Requested at process startup **only** when the operator explicitly sets both `LLM_ENABLED=true` and `LLM_CHANNEL_HISTORY_ENABLED=true` to read surrounding channel history. Enabling this requires toggling **Message Content Intent ON** in the Discord Developer Portal (*Application → Bot → Privileged Gateway Intents*) and **restarting the bot process**. Per-guild database overrides cannot request privileged intents at runtime; if a guild enables channel history on a process started without `MESSAGE_CONTENT`, channel history degrades cleanly while direct `@mention` replies continue working.
-   - **Server Members Intent & Presence Intent:** **Not required** (always disabled by default).
+3. **Gateway Intents Policy:**
+   - **Default (`0` privileged intents):** `CampusBot` requests only unprivileged `guilds` and `messages` (`guild_messages` + `dm_messages`). All 53 `/ic` slash commands, `/ic resume`, and direct `@mention` AI replies work with **Message Content Intent OFF**.
+   - **Message Content Intent (Optional):** Requested at startup **only** when both `LLM_ENABLED=true` and `LLM_CHANNEL_HISTORY_ENABLED=true` are set so `@mention` replies can read recent channel context. Enable **Message Content Intent** in the Discord Developer Portal (*Application → Bot → Privileged Gateway Intents*) and restart the bot process. Guild overrides cannot enable this intent on a running process; if disabled in the Portal or at startup, channel-history lookup degrades cleanly while direct `@mention` replies continue working.
+   - **Server Members & Presence Intents:** Not used (`false`).
 
 ---
 
 ## 4. Deployment Path 1: Docker & Docker Compose (Recommended)
 
-### 4.1 Container Architecture & Honest Healthcheck Boundary
+### 4.1 Container Layout & Healthcheck Scope
 [`Dockerfile`](../Dockerfile) builds a multi-stage, non-root image:
-- **Build Stage:** Installs locked runtime dependencies into `/app/.venv` from `uv.lock` (`revision = 5`) using `ghcr.io/astral-sh/uv:0.13.9`.
-- **Runtime Stage:** `python:3.12-slim-bookworm` running as non-root `campusbot:campusbot` (`UID/GID 10001:10001`) with `/data` owned by `10001:10001` (`mode 0700`, never `0777`).
-- **Canonical Storage Env:** `DB_PATH=/data/campus.db`, `GRADES_DB_PATH=/data/tmu_grades.db`.
-- **Zero Inbound Ports:** No `EXPOSE` directive; Discord gateway and API calls are strictly outbound WSS/HTTPS.
-- **Graceful Shutdown:** `STOPSIGNAL SIGTERM` invokes `CampusBot.close()`, cancels all 8 `TaskSupervisor` loops, closes `aiohttp` sessions, and checkpoints SQLite WAL cleanly (`stop_grace_period: 30s`).
-- **Honest Local Readiness Healthcheck:** Verifies the `.venv` runtime, strict `Settings.load_validated()` parsing, and write access to `DB_PATH`'s parent directory without requiring a live `DISCORD_TOKEN` or making outbound network requests. It proves local container configuration/storage readiness—it does *not* prove live Discord gateway authentication.
+- **Build Stage:** Installs locked runtime dependencies (`uv.lock`) into `/app/.venv` using `ghcr.io/astral-sh/uv:0.13.9`.
+- **Runtime Stage:** `python:3.12-slim-bookworm` running as non-root `campusbot:campusbot` (`UID/GID 10001:10001`) with `/data` owned by `10001:10001` (`0700`).
+- **Storage Env:** `DB_PATH=/data/campus.db`, `GRADES_DB_PATH=/data/tmu_grades.db`.
+- **No Inbound Ports:** All traffic is outbound WSS/HTTPS.
+- **Graceful Shutdown:** `STOPSIGNAL SIGTERM` runs `CampusBot.close()`, stops `TaskSupervisor` loops, closes HTTP sessions, and checkpoints SQLite WAL (`stop_grace_period: 30s`).
+- **Healthcheck Scope:** Verifies `.venv`, `Settings.load_validated()`, and write access to `DB_PATH`'s parent directory without network I/O (does not check live Discord gateway authentication).
 
-### 4.2 Setup and Offline Container Verification Commands
+### 4.2 Setup and Offline Container Smoke Verification
 Deploy using [`docker-compose.yml`](../docker-compose.yml):
 
 ```bash
@@ -70,16 +62,15 @@ Deploy using [`docker-compose.yml`](../docker-compose.yml):
 mkdir -p data && chmod 700 data
 sudo chown 10001:10001 data
 
-# 2. Create runtime environment file (never commit .env)
+# 2. Create private runtime environment file (NEVER commit .env)
 cp .env.example .env
 chmod 600 .env
 # Edit .env to set DISCORD_TOKEN, GUILD_ID, and any optional provider keys
 
-# 3. Tokenless throwaway-volume container smoke test (2-boot persistence + non-root UID 10001 check)
+# 3. Optional tokenless throwaway-volume smoke check (verifies UID 10001 & WAL persistence)
 THROW_VOL="$(mktemp -d)" && chmod 700 "$THROW_VOL" && sudo chown 10001:10001 "$THROW_VOL"
 docker build --build-arg APP_VERSION=1.0.0-rc1 -t campus-bot:1.0.0-rc1 .
 
-# Boot 1: verify imports, SQLite WAL init (v7), write sentinel state with ICBOT_ALLOW_GATEWAY=false
 docker run --rm --network none \
   -e DB_PATH=/data/campus.db -e GRADES_DB_PATH=/data/tmu_grades.db \
   -e DISCORD_TOKEN="" -e ICBOT_ALLOW_GATEWAY=false -e JOBS_POLL_SECONDS=0 -e WORKDAY_POLL_SECONDS=0 \
@@ -90,7 +81,6 @@ db = Database(s.db_path); asyncio.run(db.init()); \
 asyncio.run(db.execute('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', ('smoke_boot', 'ok'))); \
 asyncio.run(db.close())"
 
-# Boot 2 (stop/restart simulation): confirm persistence & non-root UID 10001 file ownership, then clean up
 docker run --rm --network none \
   -e DB_PATH=/data/campus.db -e ICBOT_ALLOW_GATEWAY=false \
   -v "$THROW_VOL:/data" --entrypoint python3 campus-bot:1.0.0-rc1 -c \
@@ -100,27 +90,11 @@ row = asyncio.run(db.fetchone('SELECT value FROM meta WHERE key=?', ('smoke_boot
 assert row == ('ok',), f'Persistence check failed: {row}'; asyncio.run(db.close())"
 stat -c '%u:%g %a %n' "$THROW_VOL/campus.db" && rm -rf "$THROW_VOL"
 
-# Optional offline staging simulation inside container
-docker run --rm --network none \
-  -e DB_PATH=/data/campus.db \
-  -e GRADES_DB_PATH=/data/tmu_grades.db \
-  -e ICBOT_ALLOW_GATEWAY=false \
-  -v "$(pwd)/data:/data" \
-  --entrypoint python3 \
-  campus-bot:1.0.0-rc1 \
-  tools/smoke_staging.py
-
-# 4. Launch live container when ready for Discord gateway connection
+# 4. Launch container for live operation
 docker compose up -d --build
 docker compose logs -f campus-bot
 docker inspect --format='{{json .State.Health}}' campus-bot
 ```
-
-### 4.3 Readable Storage, Secret & Schema Startup Errors
-- **Permission-denied DB directory:** `prepare_sqlite_path()` fails closed with `DatabasePathError: Database parent directory ... is not writable by UID <uid>` (never silently falls back to `/app`).
-- **Missing `/data` mount / unwritable parent:** `prepare_sqlite_path()` fails closed with `DatabasePathError: Cannot create database parent directory ...`.
-- **Absent secrets / gateway guard:** Without `ICBOT_ALLOW_GATEWAY=true` or `--allow-gateway`, `main.py` exits with `Gateway launch disabled by runtime safeguard...`; with opt-in enabled and empty `DISCORD_TOKEN`, `main.py` exits with `Missing DISCORD_TOKEN in environment or .env`. Optional keys (`GEMINI_API_KEY`, `GO_API_KEY`, `ODDS_API_KEY`) stay valid offline.
-- **Old vs. unsupported schema:** Existing pre-v7 SQLite databases forward-migrate automatically inside `write_transaction()` (`Database.init()`) up to Schema `v7`; if `PRAGMA user_version > 7`, `Database.migrate()` raises `MigrationError` (`Installed database schema (user_version=...) is newer than the highest supported migration version (7)`).
 
 ---
 
@@ -129,7 +103,7 @@ docker inspect --format='{{json .State.Health}}' campus-bot
 For a dedicated Ubuntu/Debian host without Docker, use [`systemd/campus-bot.service`](../systemd/campus-bot.service):
 
 ```bash
-# 1. Provision dedicated system user
+# 1. Create dedicated system user
 sudo useradd -r -s /bin/false -U -m -d /opt/campus-bot campusbot
 
 # 2. Clone repository and sync locked runtime dependencies
@@ -155,22 +129,21 @@ journalctl -u campus-bot.service -f
 
 ---
 
-## 6. Deployment Path 3: Railway Production Reconciliation & Cutover
+## 6. Deployment Path 3: Railway Hosting & Manual `DB_PATH` Cutover
 
-Because production Railway deployments must never be modified automatically by scripts or CI, confirm these settings manually in the **Railway Web Dashboard**:
+Check these settings manually in the **Railway Web Dashboard** when hosting on Railway:
 
 | Railway UI Setting | Required State | Purpose |
 | :--- | :--- | :--- |
-| **Autodeploy** | **OFF (Disabled)** — manual deploys only | Prevents unverified Git pushes from restarting production (note: disabling autodeploy does not stop an already active service). |
-| **Release Trigger** | **Manual Deploy Only** | Do not force a redeploy while auditing existing files or variables; deploy only after offline tests, secret scans, and a verified backup pass. |
+| **Autodeploy** | **OFF** (manual deploys recommended) | Prevents unreviewed pushes from restarting an active bot. |
 | **Start Command** | `python3 main.py --allow-gateway` | Satisfies the explicit gateway opt-in guard (`ICBOT_ALLOW_GATEWAY`). |
-| **Replicas** | **`1`** | Mandatory single-scheduler and SQLite WAL safety invariant. |
+| **Replicas** | **`1`** | Mandatory single-scheduler and SQLite WAL lock invariant. |
 | **Persistent Volume** | Mounted at **`/data`** | Writable by UID `10001` (`campusbot`) for `.db`, `-wal`, and `-shm`. |
-| **Canonical Variables** | `DB_PATH=/data/campus.db`<br>`GRADES_DB_PATH=/data/tmu_grades.db`<br>`ICBOT_ALLOW_GATEWAY=true` | Replaces deprecated `SQLITE_PATH` so state never lands in ephemeral `/app/ic_stock.db`. |
+| **Canonical Variables** | `DB_PATH=/data/campus.db`<br>`GRADES_DB_PATH=/data/tmu_grades.db`<br>`ICBOT_ALLOW_GATEWAY=true` | Replaces deprecated `SQLITE_PATH` so state never lands in ephemeral `/app`. |
 
-### 6.1 Manual Railway `DB_PATH` Cutover and Rollback
-1. **Inspect existing volume files** (without launching a second replica): `ls -la /data /app/*.db 2>/dev/null || true`.
-2. **Take a verified online hot backup** of the authoritative DB file before changing variables:
+### 6.1 Manual `DB_PATH` Cutover and Rollback
+1. **Inspect existing volume files:** `ls -la /data /app/*.db 2>/dev/null || true`.
+2. **Create a verified online hot backup before modifying variables:**
    ```bash
    python3 tools/backup_db.py --source <active_db_path> --dest /data/backups/pre_cutover_$(date +%Y%m%d_%H%M%S).db
    python3 tools/backup_db.py --verify /data/backups/pre_cutover_*.db
@@ -180,84 +153,116 @@ Because production Railway deployments must never be modified automatically by s
    python3 tools/backup_db.py --source <active_db_path> --dest /data/campus.db
    python3 tools/backup_db.py --verify /data/campus.db
    ```
-4. **Update Railway Variables** to set `DB_PATH=/data/campus.db` and `GRADES_DB_PATH=/data/tmu_grades.db`, and remove deprecated `SQLITE_PATH`.
+4. **Update Variables:** Set `DB_PATH=/data/campus.db` and `GRADES_DB_PATH=/data/tmu_grades.db`, and remove deprecated `SQLITE_PATH`.
 5. **Verify post-deploy:** Confirm logs show `db=/data/campus.db`, zero `DeprecationWarning: SQLITE_PATH`, and `/ic status` reports Schema v7 (WAL).
-6. **Rollback if needed:** Roll back the Railway deployment snapshot, keep `DB_PATH=/data/campus.db` set, and restore the pre-cutover backup via `tools/backup_db.py --restore`.
+6. **Rollback if needed:** Roll back the deployment snapshot, keep `DB_PATH=/data/campus.db`, and restore the pre-cutover backup via `tools/backup_db.py --restore`.
 
-### 6.2 Isolated Staging Environment
-Always test live changes in a separate Discord Application, separate `DISCORD_TOKEN`, private staging `GUILD_ID`, and a freshly initialized empty SQLite volume. **Never clone a production SQLite database into staging.**
+### 6.2 Safe Staging Isolation
+When testing live Discord changes before updating your main server, use a separate staging Discord Application, a distinct non-production `DISCORD_TOKEN`, a private test guild/channel, and an isolated temporary `DB_PATH` outside Git (`ICBOT_ALLOW_GATEWAY=false` in `.env`, passing `--allow-gateway` only when running intentionally). Never run two bot processes simultaneously with the same `DISCORD_TOKEN`, and never copy production user databases into staging.
 
 ---
 
-## 7. SQLite Online Hot Backups & Disaster Recovery Drill
+## 7. SQLite Online Hot Backups & Restore
 
-In SQLite WAL mode, copying a live `.db` file with `cp` can produce a corrupt snapshot because recent commits reside in `-wal`. Always use SQLite's online backup API via [`tools/backup_db.py`](../tools/backup_db.py) (or SQLite's `VACUUM INTO 'backup.db'` statement).
+In SQLite WAL mode, copying a live `.db` file with `cp` risks missing uncommitted `-wal` frames. Always use [`tools/backup_db.py`](../tools/backup_db.py) (which uses SQLite's online backup API / `VACUUM INTO` semantics + `PRAGMA integrity_check`):
 
-### 7.1 Online Hot Backup & Verification (Zero Downtime)
+### 7.1 Online Hot Backup (Zero Downtime)
 ```bash
-# Create consistent point-in-time snapshot (runs sqlite3.connect().backup() + PRAGMA integrity_check)
+# Snapshot while the bot is running
 uv run python tools/backup_db.py --source data/campus.db --dest backups/campus_$(date +%Y%m%d_%H%M%S).db
 
-# Verify any snapshot independently (must report integrity ok)
+# Verify snapshot integrity
 uv run python tools/backup_db.py --verify backups/campus_20261119_230000.db
 ```
 
-Example daily host cron entry (`03:00` local time):
+Example daily cron (`03:00` local time):
 ```cron
 0 3 * * * /opt/campus-bot/.venv/bin/python /opt/campus-bot/tools/backup_db.py --source /opt/campus-bot/data/campus.db --dest /backups/campus_$(date +\%Y\%m\%d).db >> /var/log/campus-bot-backup.log 2>&1
 ```
 
-### 7.2 Restore Procedure (Requires Service Stop)
+### 7.2 Restore Procedure (Stop Service First)
 ```bash
-# 1. Stop the running bot so no active writer holds the WAL
+# 1. Stop the running bot so no writer holds the WAL
 docker compose stop campus-bot
 # (or: sudo systemctl stop campus-bot.service)
 
-# 2. Restore from verified backup (archives existing DB to .bak.<ts> and clears stale -wal/-shm)
+# 2. Restore from verified backup (archives existing DB and removes stale -wal/-shm)
 uv run python tools/backup_db.py --restore backups/campus_20261119_230000.db --dest data/campus.db
 
-# 3. Restart the service and confirm health via /ic status
+# 3. Restart and confirm health via /ic status
 docker compose start campus-bot
 # (or: sudo systemctl start campus-bot.service)
 ```
 
 ---
 
-## 8. Credential Rotation & Cost Controls
+## 8. Credential Rotation & API Cost Controls
 
-### 8.1 Emergency Token and Key Rotation
-1. **Revoke immediately** in the upstream portal (Discord Developer Portal → Reset Token; Google AI Studio → Delete API Key; Metrolinx / Odds API consoles).
+### 8.1 Rotating a Compromised Token or Key
+1. **Revoke immediately** at the upstream portal (Discord Developer Portal → Reset Token; Google AI Studio → Delete API Key; Metrolinx / Odds API consoles).
 2. **Update runtime secrets** (`.env` with `chmod 600` + `docker compose up -d --force-recreate`, `sudo systemctl restart campus-bot.service`, or Railway Variables + manual redeploy).
-3. **Confirm clean boot** in logs (no `401 Unauthorized` errors; redaction filter ensures tokens never appear in output).
+3. **Confirm clean boot** in logs (`RedactingLogFilter` ensures tokens never appear in logs).
 
 ### 8.2 API Cost Controls
-- Set billing hard caps in Google Cloud / AI Studio before enabling `LLM_ENABLED=true`.
-- Use `LLM_COOLDOWN_SECONDS`, `LLM_MAX_OUTPUT_TOKENS`, `LLM_ALLOWED_CHANNEL_IDS`, `LLM_ALLOWED_ROLE_IDS`, and the instant `/ic admin llm_stop` killswitch to bound usage.
-- Keep `ODDS_API_KEY` empty unless you specifically need sports odds (free tier: 500 calls/month).
+- Set hard billing caps in Google Cloud / AI Studio before enabling `LLM_ENABLED=true`.
+- Use `LLM_COOLDOWN_SECONDS`, `LLM_MAX_OUTPUT_TOKENS`, `LLM_ALLOWED_CHANNEL_IDS`, `LLM_ALLOWED_ROLE_IDS`, and `/ic admin llm_stop` to control or immediately pause usage.
+- Leave `ODDS_API_KEY` empty unless you want sports odds (free tier: 500 calls/month).
 
 ---
 
-## 9. Pre-Publication Security, Leak Guard & Attribution Checklist
+## 9. Pre-Publication Security, Leak Guard & Attribution
 
-Before publishing a fork or triggering a production release, verify every offline gate (and note that publishing open-source code and operating a hosted public bot instance are separate maintainer decisions):
+Before sharing a fork publicly, verify no secrets, SQLite files, or private lore are tracked:
 
 ```bash
 uv run python tools/scan_secrets.py --enforce-clean
 uv run python tools/check_docs.py
-uv run python tools/smoke_offline.py
-uv run python tools/smoke_staging.py
-uv run pytest
+uv run python tools/check_command_docs.py
 ```
 
 ### 9.1 Pre-Publication Security and History Remediation
-If a forbidden artifact (`.env*`, `*.db`, `*-wal`, `*-shm`, private `lore.*.json`) is ever staged or committed:
-1. **Revoke and rotate** any exposed credential immediately (see Section 8.1).
-2. **Untrack without deleting local data:** `git rm --cached <path>` and ensure `.gitignore` covers the pattern.
-3. **Verify clean tree:** `uv run python tools/scan_secrets.py --enforce-clean` must exit `0`.
-4. **Coordinate history remediation** per [`SECURITY.md`](../SECURITY.md) before making any private repository public.
+1. **Revoke and rotate** any exposed credential immediately (Section 8.1).
+2. **Untrack local artifacts:** `git rm --cached <path>` and confirm `.gitignore` matches it.
+3. **Verify clean tree:** `uv run python tools/scan_secrets.py --enforce-clean` exits `0`.
+4. **Clean Git history before making a repo public:** A clean working tree or source archive does not scrub earlier commits; remove any historical `.db`, `.env`, or private `tools/lore.*.json` blobs (for example with `git filter-repo`) before changing a private repo to public.
 
-### 9.2 Intellectual Property & Attribution Boundaries
+### 9.2 Attribution Boundaries
 - **Bot source code (`icbot/`, `tools/`, `main.py`):** [MIT License](../LICENSE) (Copyright © 2026 sukesan).
-- **Brand identity ("Instigate Cafe" name, logos, banners):** Reserved by the Instigate Cafe community; self-hosters should configure custom branding via [Configuration Reference](configuration.md#4-branding-visual-theme-presets).
-- **Community lore:** Only `tools/lore.example.json` is publishable; private server lore must stay out of Git.
-- **Third-party content:** Course notes remain the copyright of their student authors (Jasper Cruz & Krish Patel); transit feeds follow the [Metrolinx Open Data Licence](https://www.metrolinx.com/en/about-us/open-data) and public TTC Mastodon posts; grade distributions (`tmu_grades.db`) must never be committed to open source.
+- **Brand identity ("Instigate Cafe" name, logos, banners):** Reserved by the Instigate Cafe community; self-hosters can customize branding in [Configuration Reference](configuration.md#4-branding-visual-theme-presets).
+- **Community lore:** Only `tools/lore.example.json` is safe for public repos; private server lore stays out of Git.
+- **Third-party content:** Student course notes belong to their authors (Jasper Cruz & Krish Patel); transit data follows the [Metrolinx Open Data Licence](https://www.metrolinx.com/en/about-us/open-data) and public TTC Mastodon posts.
+
+---
+
+## 10. Troubleshooting
+
+### 10.1 Built-In Diagnostics (`/ic status`)
+- **`/ic status`:** Shows bot version, Schema v7 WAL status, module readiness (`ready`, `disabled`, `degraded`, `missing_config`), task supervisor states, and channel permissions.
+- **`/ic status issue_report:True`** *(requires Manage Server / Allowed Role)*: Attaches a redacted **`status_issue_report.md`** report safe to paste into bug reports (tokens, keys, filesystem paths, SQL params, and prompts are stripped automatically via [`icbot/errors.py`](../icbot/errors.py) and [`RedactingLogFilter`](../icbot/logging.py)).
+- **`/ic botinfo`:** Displays active LLM configuration and privacy summaries.
+
+### 10.2 Startup & Storage Errors
+| Error / Symptom | Cause | Fix |
+| :--- | :--- | :--- |
+| **`Gateway launch disabled by runtime safeguard...`** | Expected default safety guard (`ICBOT_ALLOW_GATEWAY=false`). | Run `python main.py --allow-gateway` or set `ICBOT_ALLOW_GATEWAY=true` in `.env` / host environment. |
+| **`Missing DISCORD_TOKEN in environment or .env`** | Gateway opt-in enabled without `DISCORD_TOKEN`. | Set `DISCORD_TOKEN` in `.env` (`chmod 600 .env`) or host secrets. Optional keys stay valid when blank. |
+| **`DatabasePathError`** (`not writable by UID` or `Cannot create database parent directory`) | `prepare_sqlite_path()` refuses to silently fall back to `/app/ic_stock.db` when `DB_PATH` parent isn't writable (`UID 10001` in Docker, `campusbot` in systemd). | Docker: `mkdir -p data && chmod 700 data && sudo chown 10001:10001 data`. systemd: confirm `ReadWritePaths=/opt/campus-bot/data` and ownership. Railway: mount `/data` and set `DB_PATH=/data/campus.db`. |
+| **`DeprecationWarning: SQLITE_PATH`** | Legacy alias still configured. | Replace `SQLITE_PATH` with `DB_PATH` (scheduled for removal in `v1.1.0`). |
+| **`ConfigValidationError`** | Invalid int/channel/timezone/poll interval. | Check the named variable against [Configuration Reference](configuration.md). |
+| **`MigrationError`** (`user_version` newer than `7`) | Newer SQLite file opened by older code (`Schema v7` is highest supported). | Upgrade runtime code or restore a matching backup with `tools/backup_db.py --restore`. |
+| **`sqlite3.OperationalError: database is locked`** | Multiple processes sharing one DB, or DB placed on NFS/SMB. | Enforce `replicas: 1`, confirm local storage, and never copy live WAL files with `cp`. |
+
+### 10.3 Discord Permissions, Commands & AI Context
+| Symptom | Cause | Fix |
+| :--- | :--- | :--- |
+| `/ic` commands missing | Missing `applications.commands` scope or stale global cache | Re-invite with scopes `bot` + `applications.commands` (bitmask `277025507392`). For instant server updates, set `GUILD_ID` and boot once with `FORCE_GUILD_RESYNC=true`, then reset to `false`. |
+| Alert channel stays silent | Missing `Send Messages` / `Embed Links`, or channel ID is `0` | Inspect channels via `/ic admin config` or `/ic status`. |
+| `"This feature is disabled in this server"` | Disabled via `FEATURE_PROFILE` / `DISABLED_FEATURES` / guild setting | Enable the module via `/ic admin features` or `/ic admin config`. |
+| `"Only the user who ran this command can interact..."` | Actor-bound button protection | Expected guard; run your own command for a personal view. |
+| `@mention` skips channel history or raises `PrivilegedIntentsRequired` | `LLM_ENABLED=false`, `/ic admin llm_stop`, or `LLM_CHANNEL_HISTORY_ENABLED=true` without Message Content Intent in Developer Portal | Direct `@mention` replies need zero privileged intents. To enable `LLM_CHANNEL_HISTORY_ENABLED=true`, toggle Message Content Intent ON in the Portal and restart the bot. |
+
+### 10.4 Failure Taxonomy, Circuit Breakers & Emergency Stop
+All command handlers and pollers normalize failures into 12 typed families in [`icbot/errors.py`](../icbot/errors.py) (`validation`, `permission`, `setup_required`, `feature_disabled`, `missing_api_key`, `rate_limit`, `timeout`, `network`, `upstream_http`, `malformed_payload`, `storage`, `internal`). During sustained upstream outages:
+- **`ProviderOutageTracker`** logs the first failure at `WARNING`, dampens repeated errors to `DEBUG`, and logs recovery at `INFO`.
+- **`ProviderCircuitBreaker`** ([`icbot/services/http_transport.py`](../icbot/services/http_transport.py)) opens after consecutive failures for a cooldown window (`60s` default) and probes recovery in `HALF_OPEN` state.
+- **Emergency AI Pause:** Run **`/ic admin llm_stop`** in Discord at any time to immediately halt all Gemini chat and resume calls without restarting (`meta.llm_killed=1`).

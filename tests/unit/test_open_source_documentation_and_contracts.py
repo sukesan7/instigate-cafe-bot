@@ -21,19 +21,14 @@ def test_required_documentation_files_exist_and_non_empty() -> None:
         "CODE_OF_CONDUCT.md",
         "docs/README.md",
         "docs/features.md",
+        "docs/gallery.md",
         "docs/architecture.md",
         "docs/configuration.md",
         "docs/deployment.md",
         "docs/development.md",
         "docs/privacy.md",
         "docs/providers.md",
-        "docs/testing.md",
-        "docs/troubleshooting.md",
-        "docs/ui-style.md",
-        "docs/release-evidence.md",
-        "docs/release-verification.md",
-        "docs/staging-runbook.md",
-        "docs/screenshots-guide.md",
+        ".github/ISSUE_TEMPLATE/bug_report.md",
         ".github/ISSUE_TEMPLATE/feature_request.md",
         ".github/PULL_REQUEST_TEMPLATE.md",
     ]
@@ -114,14 +109,13 @@ def test_privacy_doc_contains_data_handling_invariants() -> None:
 
 
 def test_operations_doc_contains_backup_and_scheduler_invariants() -> None:
-    """Verify docs/deployment.md and docs/troubleshooting.md cover single scheduler, diagnostics, and hot backups."""
+    """Verify docs/deployment.md covers single scheduler, diagnostics, and hot backups."""
     deploy_doc = (PROJECT_ROOT / "docs/deployment.md").read_text(encoding="utf-8")
-    troubleshoot_doc = (PROJECT_ROOT / "docs/troubleshooting.md").read_text(encoding="utf-8")
 
     assert "VACUUM INTO" in deploy_doc
     assert "single" in deploy_doc.lower() and "replicas: 1" in deploy_doc.lower()
-    assert "/ic status" in troubleshoot_doc
-    assert "ProviderCircuitBreaker" in troubleshoot_doc
+    assert "/ic status" in deploy_doc
+    assert "ProviderCircuitBreaker" in deploy_doc
 
 
 def test_providers_doc_contains_contributor_protocol_and_mocking() -> None:

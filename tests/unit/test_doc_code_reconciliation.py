@@ -143,7 +143,7 @@ def test_feature_flags_process_vs_guild_scope_and_deployment_alignment() -> None
     features_doc = (REPO_ROOT / "docs" / "features.md").read_text(encoding="utf-8")
     deploy_doc = (REPO_ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
     privacy_doc = (REPO_ROOT / "docs" / "privacy.md").read_text(encoding="utf-8")
-    testing_doc = (REPO_ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
+    dev_doc = (REPO_ROOT / "docs" / "development.md").read_text(encoding="utf-8")
 
     for profile in FEATURE_PROFILE_PRESETS:
         assert f"`{profile}`" in config_doc
@@ -172,9 +172,9 @@ def test_feature_flags_process_vs_guild_scope_and_deployment_alignment() -> None
     assert list(triggers.keys()) == ["workflow_dispatch"]
     for provider in ("go_transit", "ttc_mastodon", "sports_odds", "crypto_fng"):
         assert provider in run_live_smoke.VALID_PROVIDERS
-        assert provider in testing_doc
-    assert "DISABLED" in testing_doc
-    assert "SKIPPED_UNCONFIGURED" in testing_doc or "missing credentials" in testing_doc.lower()
+        assert provider in dev_doc
+    assert "DISABLED" in dev_doc
+    assert "SKIPPED_UNCONFIGURED" in dev_doc or "missing credentials" in dev_doc.lower()
 
 
 def test_all_local_markdown_links_and_command_parity_pass() -> None:

@@ -249,8 +249,8 @@ async def test_live_smoke_bounded_http_helper_handles_429_and_oversized_payload(
 
 
 def test_testing_doc_documents_disabled_schedule_and_live_smoke_contract() -> None:
-    """docs/testing.md must document why scheduled live smoke is disabled and how provider_contract/live_smoke work."""
-    doc = (REPO_ROOT / "docs/testing.md").read_text(encoding="utf-8")
+    """docs/development.md must document why scheduled live smoke is disabled and how provider_contract/live_smoke work."""
+    doc = (REPO_ROOT / "docs/development.md").read_text(encoding="utf-8")
     assert "provider_contract" in doc
     assert "live_smoke" in doc
     assert "workflow_dispatch" in doc

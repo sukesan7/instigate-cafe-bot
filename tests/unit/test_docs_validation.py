@@ -18,7 +18,7 @@ pytestmark = pytest.mark.unit
 def test_all_tracked_repository_markdown_files_pass_offline_validation() -> None:
     """Verify every tracked/public Markdown file passes link, image, anchor, and placeholder checks."""
     tracked = list_tracked_markdown_files(PROJECT_ROOT)
-    assert len(tracked) >= 18, f"Expected at least 18 markdown files, found {len(tracked)}"
+    assert len(tracked) >= 14, f"Expected at least 14 markdown files, found {len(tracked)}"
 
     # Verify compact flat docs/ layout (zero legacy nested subdirectories)
     docs_root = PROJECT_ROOT / "docs"
@@ -29,7 +29,7 @@ def test_all_tracked_repository_markdown_files_pass_offline_validation() -> None
     assert report.ok, "Documentation validation failed:\n" + "\n".join(
         f"  {v.file}:{v.line} [{v.kind}] {v.message}" for v in report.violations
     )
-    assert report.local_links_checked >= 60
+    assert report.local_links_checked >= 45
     assert report.local_images_checked >= 1
 
 

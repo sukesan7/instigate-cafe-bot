@@ -84,9 +84,8 @@ def test_doc_and_image_validator_rejects_missing_screenshots_and_missing_docs(tm
     assert len(doc_violations) == 1, f"Expected 1 missing doc link violation, got {doc_violations}"
 
 
-def test_pr_a_through_d_release_invariants_and_verification_ledger() -> None:
-    """Verify key PR A-D deliverables and docs/release-verification.md blockers checklist are intact."""
-    # PR A & B: Core hardened runtime modules & failure taxonomy / UI contracts exist
+def test_pr_a_through_d_release_invariants() -> None:
+    """Verify key runtime invariants, clean layout, and command-doc parity remain intact."""
     from typing import get_args
 
     from icbot import config_parsers, errors, theme, ui
@@ -98,14 +97,13 @@ def test_pr_a_through_d_release_invariants_and_verification_ledger() -> None:
     assert theme.DEFAULT_THEME_NAME == "instigate_cafe"
     assert ProviderCircuitBreaker is not None
 
-    # PR D: Clean re-exports and tooling layout
     assert exams_service.parse_exams_csv is exam_codecs.parse_exams_csv
     assert config_parsers.parse_int is not None
     assert not (PROJECT_ROOT / "AGENTS.md").exists()
     assert (PROJECT_ROOT / "scripts" / "admin" / "purge_global_commands.py").is_file()
     assert (PROJECT_ROOT / "tools" / "verify_offline.py").is_file()
 
-    # PR C: Published command routes match live registry (53/53)
+    # Published command routes match live registry (53/53)
     specs = introspect_command_tree()
     cmd_report = validate_command_docs(
         specs,
@@ -115,63 +113,10 @@ def test_pr_a_through_d_release_invariants_and_verification_ledger() -> None:
     )
     assert cmd_report.ok, f"Command route divergence: {cmd_report.violations}"
 
-    # E1: Release verification ledger documents unexecuted checks and Git history sensitivity blocker
-    ledger_path = PROJECT_ROOT / "docs" / "release-verification.md"
-    assert ledger_path.is_file(), "docs/release-verification.md is missing"
-    ledger = ledger_path.read_text(encoding="utf-8")
-    for required_phrase in (
-        "Not Executed Locally",
-        "Release-Blockers Checklist",
-        "Git History Sensitivity Review",
-        "does **not** prove Git history is clean",
-        "Python 3.11 & 3.13",
-        "pip-audit",
-        "Docker",
-        "CI Run URL",
-    ):
-        assert required_phrase in ledger, f"docs/release-verification.md missing '{required_phrase}'"
-
-
-def test_staging_runbook_enforces_isolation_railway_audit_matrix_and_unfilled_signoff() -> None:
-    """Verify docs/staging-runbook.md defines safe staging isolation, 11 command families, and blank sign-off."""
-    runbook_path = PROJECT_ROOT / "docs" / "staging-runbook.md"
-    assert runbook_path.is_file(), "docs/staging-runbook.md is missing"
-    content = runbook_path.read_text(encoding="utf-8")
-
-    # Safety & Railway audit invariants
-    for phrase in (
-        "Never reuse the production `DISCORD_TOKEN`",
-        "Autodeploy: OFF",
-        "277025507392",
-        "--allow-gateway",
-        "RedactingLogFilter",
-        "tools/backup_db.py",
-        "Immediate Stop & Remediation Checklist",
-        "Owner Release Sign-Off Gate",
-        "NEVER real student resume",
-        "Do not** run stress tests",
-    ):
-        assert phrase in content, f"docs/staging-runbook.md missing required safeguard: {phrase}"
-
-    # All 11 manual acceptance command families covered
-    for family in (
-        "Help & Onboarding",
-        "Theme Presets",
-        "Manual Notes",
-        "Exams — Public, Private, Import & Export",
-        "Professor & Grades",
-        "Jobs Filters & Cached-Outage State",
-        "Resume Consent & Rejection",
-        "Virtual Economy, Casino & ICSE Settlement",
-        "Admin Setup, Status & Feature Toggles",
-        "Transit, Market & Sports Disabled / Error Handling",
-        "Pagination, Actor Guards & Restart / Reconnect",
-    ):
-        assert family in content, f"docs/staging-runbook.md missing command family: {family}"
-
-    # Must NOT fabricate an already-approved release banner
-    assert "APPROVED FOR" not in content
-    assert "CERTIFIED" not in content
+    # Pre-publication Git history hygiene warning remains documented in deployment & security policy
+    deploy_doc = (PROJECT_ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
+    assert "Clean Git history before making a repo public" in deploy_doc
+    assert "tools/scan_secrets.py --enforce-clean" in deploy_doc
 
 
 def test_discord_slash_command_payload_within_api_limits() -> None:
