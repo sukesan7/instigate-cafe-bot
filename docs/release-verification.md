@@ -10,7 +10,7 @@
 
 | Component | Version / Status |
 | :--- | :--- |
-| **Managed Python (tested locally)** | `Python 3.12.13` (`.venv/bin/python`) |
+| **Managed Python (tested locally)** | `Python 3.11.18`, `3.12.13` (`.venv`), `3.13.18` (all offline cached `uv` matrix legs executed) |
 | **Host System Python (excluded `<3.14`)** | `Python 3.14.10` (Arch/Garuda host `/usr/bin/python3` — intentionally not used) |
 | **Package Manager** | `uv 0.13.9` (`uv.lock` frozen, 93 locked packages) |
 | **Pytest / Plugins** | `pytest 9.2.0`, `pytest-asyncio 1.4.1.post1`, `pytest-cov 7.1.0` |
@@ -26,15 +26,16 @@ All commands below were executed offline with `ICBOT_ALLOW_GATEWAY=false`, blank
 | :--- | :--- | :---: | :--- | :---: |
 | **Lockfile consistency** | `uv lock --check` | PASS | 0 drift (`uv.lock` & generated `requirements.txt` / `requirements.lock`) | `0.02s` |
 | **Secret & publish-safety scan** | `uv run python tools/scan_secrets.py --enforce-clean` | PASS | 0 violations (working tree clean) | `0.23s` |
-| **Offline AST & import smoke** | `uv run python tools/smoke_offline.py` | PASS | 173+ AST-checked `.py` files, 17 modules, 53 `/ic` leaves, 0 network side effects | `1.6s` |
+| **Offline AST & import smoke** | `uv run python tools/smoke_offline.py` | PASS | 189 AST-checked `.py` files, 17 modules, 58 `/ic` nodes (53 leaf commands), 0 network side effects | `1.60s` |
 | **Offline staging & WAL migration smoke** | `uv run python tools/smoke_staging.py` | PASS | Schema v7 WAL migration, `ServiceContainer`, 8 tasks, clean shutdown | `0.2s` |
-| **Docs link, image & anchor check** | `uv run python tools/check_docs.py` | PASS | 0 broken links, images, anchors, workstation file URIs, or placeholders | `0.1s` |
-| **Command-tree docs parity** | `uv run python tools/check_command_docs.py` | PASS | 53 live `/ic` commands = 53 documented rows, exact option & theme parity | `1.3s` |
-| **Ruff lint & formatting** | `uv run ruff check . && uv run ruff format --check .` | PASS | 0 lint findings, all files formatted | `0.1s` |
-| **Mypy static typing** | `uv run mypy .` | PASS | 0 errors across tracked source files | `0.5s` |
-| **Offline pytest collection** | `uv run pytest --collect-only -q` | PASS | Deterministic offline collection (0 network side effects; `live_smoke` excluded) | `1.9s` |
-| **Full offline test suite + branch coverage** | `uv run pytest --cov=icbot --cov-report=term -q` | PASS | **0 failed, 0 xfailed, 0 skipped** (see latest run summary below; measured **80%** combined statement+branch coverage across `icbot/`) | `~26s` |
-| **Unified offline contributor gate** | `uv run python tools/verify_offline.py` | PASS | 11/11 stages green | `~22s` |
+| **Docs link, image & anchor check** | `uv run python tools/check_docs.py` | PASS | 0 broken links, images, anchors, workstation file URIs, or placeholders | `0.10s` |
+| **Command-tree docs parity** | `uv run python tools/check_command_docs.py` | PASS | 53 live `/ic` commands = 53 documented rows, exact option & theme parity | `1.40s` |
+| **Ruff lint & formatting** | `uv run ruff check . && uv run ruff format --check .` | PASS | 0 lint findings, 199 files formatted | `0.08s` |
+| **Mypy static typing** | `uv run mypy .` | PASS | 0 errors across 105 source files | `0.27s` |
+| **Offline pytest collection** | `uv run pytest --collect-only -q` | PASS | Deterministic offline collection (`4` `live_smoke` deselected) | `1.9s` |
+| **Full offline test suite + branch coverage (`3.12.13`)** | `uv run pytest --cov=icbot --cov-report=term -rsx -q` | PASS | **819 passed, 4 deselected, 0 failed, 0 xfailed, 0 skipped** (**79%** combined statement+branch coverage across `icbot/`) | `32.43s` |
+| **Python 3.11 & 3.13 local offline matrix** | `uv sync --python 3.11|3.13 --frozen --dev --offline && python tools/smoke_offline.py && python -m pytest -rsx -q` | PASS | `3.11.18`: **819 passed, 4 deselected** (`26.70s`); `3.13.18`: **819 passed, 4 deselected** (`25.55s`, 360 upstream `discord.utils` `DeprecationWarning`s) | `~52s` |
+| **Unified offline contributor gate** | `uv run python tools/verify_offline.py` | PASS | 11/11 stages green | `~28s` |
 
 ### Core Domain Gates Verified Inside Offline Pytest
 - **Legacy-to-v7 migrations, WAL integrity & backups:** `tests/unit/test_deployment_and_hosting_safety.py`, `tests/integration/test_resilient_state_and_lifecycle.py`
@@ -60,7 +61,7 @@ The following environment-dependent checks are **not executed** inside this offl
 
 | Check | Status | Why Not Executed Locally | Exact Reproducible Command / Workflow |
 | :--- | :--- | :--- | :--- |
-| **Python 3.11 & 3.13 full test matrix** | **Not Executed Locally** | Only `Python 3.12.13` venv deps are cached locally without PyPI network access. | Trigger [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (`matrix.python-version: ["3.11", "3.12", "3.13"]`) or run locally on a host with PyPI access: `uv venv --python 3.13 .venv313 && UV_PROJECT_ENVIRONMENT=.venv313 uv sync --frozen --dev && .venv313/bin/python tools/verify_offline.py` |
+| **Hosted GitHub Actions Python 3.11, 3.12 & 3.13 runners** | **Not Executed Locally** | Python `3.11.18`, `3.12.13`, and `3.13.18` offline suites passed locally via cached `uv` wheels; hosted GitHub `ubuntu-latest` CI runs remain outside local sandbox. | Trigger [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (`matrix.python-version: ["3.11", "3.12", "3.13"]`) |
 | **Dependency vulnerability audit (`pip-audit`)** | **Not Executed Locally** | Queries PyPI OSV advisory API (no network in offline sandbox). | Executed in `.github/workflows/ci.yml` (`dependency-audit` job) or locally with network: `uv run pip-audit --desc auto` (or `make audit`) |
 | **Docker image build & 2-boot `/data` persistence smoke** | **Not Executed Locally** | Docker daemon socket `/var/run/docker.sock` is unavailable in sandbox. | Run on host with Docker daemon using throwaway `/data` volume plan in [`docs/deployment.md`](deployment.md#42-setup-and-offline-container-verification-commands) |
 | **`systemd-analyze verify` daemon check** | **Not Executed Locally** | Sandbox `/run/systemd/` filesystem is read-only (`Failed to create directory '/run/systemd/'`); INI structure and `Environment=` settings pass offline unit tests. | Run on target Linux host with systemd: `systemd-analyze verify ./systemd/campus-bot.service` |
